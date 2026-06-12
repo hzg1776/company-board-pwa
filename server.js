@@ -37,9 +37,10 @@ function nowIso() {
 
 function defaultSettings() {
   return {
-    companyName: "Company Board",
+    companyName: "Palziv Board",
     boardSubtitle: "Work updates",
     logoUrl: "/assets/logo.svg",
+    updatedAt: "1970-01-01T00:00:00.000Z",
     primaryColor: "#002855",
     accentColor: "#50b2ce",
     backgroundColor: "#f4f8fb",
@@ -121,12 +122,20 @@ function cleanLogoUrl(value, fallback = "/assets/logo.svg") {
   return fallback;
 }
 
+function cleanTimestamp(value, fallback = "1970-01-01T00:00:00.000Z") {
+  const timestamp = String(value ?? "").trim();
+  if (!timestamp) return fallback;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+}
+
 function normalizeSettings(input = {}) {
   const defaults = defaultSettings();
   return {
     companyName: cleanText(input.companyName || defaults.companyName, 70) || defaults.companyName,
     boardSubtitle: cleanText(input.boardSubtitle || defaults.boardSubtitle, 90) || defaults.boardSubtitle,
     logoUrl: cleanLogoUrl(input.logoUrl, defaults.logoUrl),
+    updatedAt: cleanTimestamp(input.updatedAt, defaults.updatedAt),
     primaryColor: defaults.primaryColor,
     accentColor: defaults.accentColor,
     backgroundColor: defaults.backgroundColor,
@@ -162,7 +171,14 @@ async function ensureDataFile() {
 async function readData() {
   await ensureDataFile();
   const raw = await readFile(DATA_FILE, "utf8");
-  return normalizeDataShape(JSON.parse(raw));
+  const data = normalizeDataShape(JSON.parse(raw));
+  const normalizedRaw = `${JSON.stringify(data, null, 2)}\n`;
+
+  if (normalizedRaw !== raw) {
+    await writeData(data);
+  }
+
+  return data;
 }
 
 async function writeData(data) {
@@ -348,7 +364,10 @@ async function handleApi(req, res, url) {
 
       const body = await readJsonBody(req);
       const settings = await updateData((data) => {
-        data.settings = normalizeSettings({ ...data.settings, ...body });
+        data.settings = {
+          ...normalizeSettings({ ...data.settings, ...body }),
+          updatedAt: nowIso()
+        };
         return data.settings;
       });
 

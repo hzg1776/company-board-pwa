@@ -1,6 +1,6 @@
 {
-  "name": "Company Board",
-  "short_name": "Board",
+  "name": "Palziv Board",
+  "short_name": "Palziv",
   "description": "Read-only employee notification board with HR-managed company news, weather, and updates.",
   "start_url": "/employee",
   "scope": "/",

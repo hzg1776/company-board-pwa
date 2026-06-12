@@ -1,9 +1,9 @@
-const CACHE_NAME = "company-board-v18";
+const CACHE_NAME = "company-board-v19";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=18",
-  "/app.js?v=18",
+  "/styles.css?v=19",
+  "/app.js?v=19",
   "/manifest.webmanifest",
   "/assets/logo.svg"
 ];

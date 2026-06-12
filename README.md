@@ -8,6 +8,7 @@ An installable company communication app for HR news, weather, safety notices, s
 - HR opens a simple dashboard and publishes updates.
 - Employee mode is read-only.
 - HR can upload a company logo up to 2 MB and update board naming while the app keeps a fixed Palziv color scheme.
+- Branding is saved on the server, refreshed across admin/employee views, and cached in the browser as a recovery copy.
 - The MVP uses a small Node server and a JSON data file, so it runs without paid services.
 
 ## Run Locally
@@ -40,7 +41,7 @@ Render will provide a public HTTPS URL. Employees can open that URL on iPhone or
 
 After deploy, HR should open `/admin` to publish updates and manage branding. Employees should open `/employee` to see the read-only board.
 
-Important: this first Render setup is a demo deployment. The HR dashboard is intentionally open, and updates are stored in `data/board.json`, which is not the right storage model for production hosting. When you approve the demo, add real HR login and upgrade storage to Supabase, Cloudflare D1, or another managed database before real company use.
+Important: this first Render setup is a demo deployment. The HR dashboard is intentionally open. Updates are stored in `data/board.json` and branding has a browser-side recovery cache, but Render Free does not provide durable all-device storage through service restarts. When you approve the demo, add real HR login and upgrade storage to Supabase, Cloudflare D1, Render Disk, or another managed database before real company use.
 
 ## Phone Install Notes
 

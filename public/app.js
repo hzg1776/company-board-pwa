@@ -1,6 +1,7 @@
 const app = document.querySelector("#app");
 
 const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024;
+const SETTINGS_CACHE_KEY = "company-board-settings-v1";
 const allowedLogoTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/svg+xml"]);
 const logoTypeByExtension = new Map([
   [".png", "image/png"],
@@ -53,9 +54,10 @@ function icon(name) {
 
 function defaultSettings() {
   return {
-    companyName: "Company Board",
+    companyName: "Palziv Board",
     boardSubtitle: "Work updates",
     logoUrl: "/assets/logo.svg",
+    updatedAt: "1970-01-01T00:00:00.000Z",
     primaryColor: "#002855",
     accentColor: "#50b2ce",
     backgroundColor: "#f4f8fb",
@@ -141,7 +143,7 @@ function applySettings(settings) {
   root.dataset.logoShape = state.settings.logoShape;
   root.dataset.cardStyle = state.settings.cardStyle;
   root.dataset.backgroundPattern = state.settings.backgroundPattern;
-  document.title = state.settings.companyName || "Company Board";
+  document.title = state.settings.companyName || "Palziv Board";
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", state.settings.primaryColor);
 }
 
@@ -163,7 +165,7 @@ async function requestJson(path, options = {}) {
     ...(options.headers || {})
   };
 
-  const response = await fetch(path, { ...options, headers });
+  const response = await fetch(path, { cache: "no-store", ...options, headers });
   const body = await response.json().catch(() => ({}));
 
   if (!response.ok) {
@@ -173,13 +175,74 @@ async function requestJson(path, options = {}) {
   return body;
 }
 
+function readCachedSettings() {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberSettings(settings) {
+  try {
+    window.localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify({ ...defaultSettings(), ...(settings || {}) }));
+  } catch {
+    // Private browsing or full storage should not block the live server save.
+  }
+}
+
+function settingsTime(settings) {
+  const timestamp = Date.parse(settings?.updatedAt || "");
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function hasCustomBrand(settings) {
+  if (!settings) return false;
+  const defaults = defaultSettings();
+  return settings.companyName !== defaults.companyName || settings.boardSubtitle !== defaults.boardSubtitle || settings.logoUrl !== defaults.logoUrl;
+}
+
 async function loadSettings() {
-  const result = await requestJson("/api/settings");
-  applySettings(result.settings);
+  const cachedSettings = readCachedSettings();
+  if (cachedSettings) {
+    applySettings(cachedSettings);
+  }
+
+  try {
+    const result = await requestJson("/api/settings");
+    const serverSettings = result.settings || defaultSettings();
+
+    if (cachedSettings && hasCustomBrand(cachedSettings) && settingsTime(cachedSettings) > settingsTime(serverSettings)) {
+      applySettings(cachedSettings);
+
+      const repaired = await requestJson("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify(cachedSettings)
+      });
+      applySettings(repaired.settings);
+      rememberSettings(repaired.settings);
+      return repaired.settings;
+    }
+
+    applySettings(serverSettings);
+    rememberSettings(serverSettings);
+    return serverSettings;
+  } catch (error) {
+    if (cachedSettings) {
+      applySettings(cachedSettings);
+      return cachedSettings;
+    }
+
+    throw error;
+  }
 }
 
 async function loadBoard() {
-  const [postsResult, weatherResult] = await Promise.all([
+  const [, postsResult, weatherResult] = await Promise.all([
+    loadSettings(),
     requestJson("/api/posts"),
     requestJson("/api/weather")
   ]);
@@ -718,6 +781,7 @@ async function handleBrandingSubmit(event) {
       body: JSON.stringify(data)
     });
     applySettings(result.settings);
+    rememberSettings(result.settings);
     setMessage("Branding saved.", "success");
   } catch (error) {
     setMessage(error.message || "Could not save branding.");
@@ -841,7 +905,6 @@ if ("serviceWorker" in navigator) {
 }
 
 try {
-  await loadSettings();
   await hydrateRoute();
 } catch (error) {
   setMessage(error.message || "Could not load the app.");
