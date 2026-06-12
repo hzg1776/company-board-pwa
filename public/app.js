@@ -844,18 +844,35 @@ function render() {
 async function handleLogin(event) {
   event.preventDefault();
   const form = event.target;
-  const pin = new FormData(form).get("pin");
-  sessionStorage.setItem(ADMIN_PIN_KEY, String(pin || ""));
+  const pin = String(new FormData(form).get("pin") || "").trim();
+
+  if (!pin) {
+    setMessage("Enter the HR PIN.");
+    render();
+    return;
+  }
+
+  sessionStorage.setItem(ADMIN_PIN_KEY, pin);
 
   try {
-    await restoreAdminSession();
-    if (!state.adminAuthed) throw new Error("Invalid HR PIN.");
-    await refreshAdminData();
+    const result = await requestJson("/api/admin/check");
+    state.adminAuthed = true;
+    if (result.settings) applySettings(result.settings);
     setMessage("");
   } catch (error) {
     sessionStorage.removeItem(ADMIN_PIN_KEY);
     state.adminAuthed = false;
-    setMessage(error.message || "Invalid HR PIN.");
+    setMessage(error.message || "That HR PIN did not work.");
+    render();
+    return;
+  }
+
+  render();
+
+  try {
+    await refreshAdminData();
+  } catch (error) {
+    setMessage(error.message || "Signed in, but dashboard data could not load. Tap Refresh.");
   }
 
   render();
