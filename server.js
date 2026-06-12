@@ -13,8 +13,8 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
 const DATA_DIR = path.dirname(DATA_FILE);
-const MAX_BODY_BYTES = 1_000_000;
-const MAX_LOGO_DATA_URL_CHARS = 500_000;
+const MAX_BODY_BYTES = 3_500_000;
+const MAX_LOGO_DATA_URL_CHARS = 3_000_000;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);

@@ -7,7 +7,7 @@ An installable company communication app for HR news, weather, safety notices, s
 - Employees open the board from any modern phone browser and can install it to their home screen.
 - HR opens a simple dashboard and publishes updates.
 - Employee mode is read-only.
-- HR can upload the company logo and update board naming while the app keeps a fixed Palziv color scheme.
+- HR can upload a company logo up to 2 MB and update board naming while the app keeps a fixed Palziv color scheme.
 - The MVP uses a small Node server and a JSON data file, so it runs without paid services.
 
 ## Run Locally

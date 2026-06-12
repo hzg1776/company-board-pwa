@@ -1,7 +1,15 @@
 const app = document.querySelector("#app");
 
-const MAX_LOGO_FILE_BYTES = 350 * 1024;
-const allowedLogoTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
+const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024;
+const allowedLogoTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/svg+xml"]);
+const logoTypeByExtension = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"],
+  [".gif", "image/gif"],
+  [".svg", "image/svg+xml"]
+]);
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
 
@@ -355,10 +363,10 @@ function renderBrandingPanel() {
               <img data-logo-preview src="${escapeHtml(settings.logoUrl)}" alt="">
               <div class="logo-dropzone-copy">
                 <strong>Drop logo here</strong>
-                <small>PNG, JPG, WebP, GIF, or SVG up to 350 KB.</small>
+                <small>PNG, JPG, WebP, GIF, or SVG up to 2 MB.</small>
               </div>
-              <button class="ghost-button" type="button" data-logo-picker>${icon("upload")} Choose</button>
-              <input class="logo-file-input" data-logo-file type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+              <label class="ghost-button logo-picker-button" for="brandLogoFile" data-logo-picker>${icon("upload")} Choose</label>
+              <input id="brandLogoFile" class="logo-file-input" data-logo-file type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml">
               <input data-logo-value type="hidden" name="logoUrl" value="${escapeHtml(settings.logoUrl)}">
             </div>
           </div>
@@ -554,6 +562,15 @@ function showFormMessage(form, message, type = "") {
   messageElement.className = `message ${type}`;
 }
 
+function logoMimeType(file) {
+  const fileType = String(file?.type || "").toLowerCase();
+  if (allowedLogoTypes.has(fileType)) return fileType === "image/jpg" ? "image/jpeg" : fileType;
+
+  const fileName = String(file?.name || "").toLowerCase();
+  const extension = fileName.slice(fileName.lastIndexOf("."));
+  return logoTypeByExtension.get(extension) || "";
+}
+
 function readLogoFile(file) {
   return new Promise((resolve, reject) => {
     if (!file) {
@@ -561,18 +578,29 @@ function readLogoFile(file) {
       return;
     }
 
-    if (!allowedLogoTypes.has(file.type)) {
+    const mimeType = logoMimeType(file);
+    if (!mimeType) {
       reject(new Error("Use a PNG, JPG, WebP, GIF, or SVG logo."));
       return;
     }
 
     if (file.size > MAX_LOGO_FILE_BYTES) {
-      reject(new Error("Logo must be 350 KB or smaller."));
+      reject(new Error("Logo must be 2 MB or smaller."));
       return;
     }
 
     const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(String(reader.result || "")));
+    reader.addEventListener("load", () => {
+      const result = String(reader.result || "");
+      const base64Index = result.indexOf("base64,");
+      if (base64Index === -1) {
+        reject(new Error("Could not read that logo file."));
+        return;
+      }
+
+      const base64 = result.slice(base64Index + "base64,".length);
+      resolve(`data:${mimeType};base64,${base64}`);
+    });
     reader.addEventListener("error", () => reject(new Error("Could not read that logo file.")));
     reader.readAsDataURL(file);
   });

@@ -710,6 +710,7 @@ svg {
 }
 
 .logo-dropzone {
+  position: relative;
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr) auto;
   align-items: center;
@@ -758,7 +759,12 @@ svg {
 }
 
 .logo-file-input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .form-actions {
