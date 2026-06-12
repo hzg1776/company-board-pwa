@@ -14,10 +14,14 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
 const DATA_DIR = path.dirname(DATA_FILE);
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_LOGO_DATA_URL_CHARS = 500_000;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
 const allowedWeatherLevels = new Set(["Clear", "Watch", "Warning"]);
+const allowedLogoShapes = new Set(["rounded", "square", "circle"]);
+const allowedCardStyles = new Set(["soft", "flat", "lifted"]);
+const allowedBackgroundPatterns = new Set(["grid", "plain"]);
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -41,7 +45,12 @@ function defaultSettings() {
     logoUrl: "/assets/logo.svg",
     primaryColor: "#0f766e",
     accentColor: "#c94f3d",
-    backgroundColor: "#f6f1e8"
+    backgroundColor: "#f6f1e8",
+    surfaceColor: "#fffdf8",
+    textColor: "#17211f",
+    logoShape: "rounded",
+    cardStyle: "soft",
+    backgroundPattern: "grid"
   };
 }
 
@@ -100,10 +109,20 @@ function cleanColor(value, fallback) {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : fallback;
 }
 
+function cleanChoice(value, allowed, fallback) {
+  const choice = String(value ?? "").trim();
+  return allowed.has(choice) ? choice : fallback;
+}
+
 function cleanLogoUrl(value, fallback = "/assets/logo.svg") {
-  const logoUrl = cleanText(value, 300);
+  const logoUrl = String(value ?? "").trim();
   if (!logoUrl) return fallback;
   if (logoUrl.startsWith("/") && !logoUrl.startsWith("//")) return logoUrl;
+
+  if (logoUrl.startsWith("data:image/")) {
+    const isAllowedImage = /^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,[a-z0-9+/=]+$/i.test(logoUrl);
+    return isAllowedImage && logoUrl.length <= MAX_LOGO_DATA_URL_CHARS ? logoUrl : fallback;
+  }
 
   try {
     const parsed = new URL(logoUrl);
@@ -123,7 +142,12 @@ function normalizeSettings(input = {}) {
     logoUrl: cleanLogoUrl(input.logoUrl, defaults.logoUrl),
     primaryColor: cleanColor(input.primaryColor, defaults.primaryColor),
     accentColor: cleanColor(input.accentColor, defaults.accentColor),
-    backgroundColor: cleanColor(input.backgroundColor, defaults.backgroundColor)
+    backgroundColor: cleanColor(input.backgroundColor, defaults.backgroundColor),
+    surfaceColor: cleanColor(input.surfaceColor, defaults.surfaceColor),
+    textColor: cleanColor(input.textColor, defaults.textColor),
+    logoShape: cleanChoice(input.logoShape, allowedLogoShapes, defaults.logoShape),
+    cardStyle: cleanChoice(input.cardStyle, allowedCardStyles, defaults.cardStyle),
+    backgroundPattern: cleanChoice(input.backgroundPattern, allowedBackgroundPatterns, defaults.backgroundPattern)
   };
 }
 

@@ -1,5 +1,7 @@
 const app = document.querySelector("#app");
 
+const MAX_LOGO_FILE_BYTES = 350 * 1024;
+const allowedLogoTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
 
@@ -31,6 +33,7 @@ const icons = {
   send: '<path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
   userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/>',
   userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5"/><path d="m22 8-5 5"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
@@ -47,7 +50,12 @@ function defaultSettings() {
     logoUrl: "/assets/logo.svg",
     primaryColor: "#0f766e",
     accentColor: "#c94f3d",
-    backgroundColor: "#f6f1e8"
+    backgroundColor: "#f6f1e8",
+    surfaceColor: "#fffdf8",
+    textColor: "#17211f",
+    logoShape: "rounded",
+    cardStyle: "soft",
+    backgroundPattern: "grid"
   };
 }
 
@@ -109,14 +117,31 @@ function softColor(hex, alpha) {
   return rgb ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})` : hex;
 }
 
+function optionsMarkup(options, selectedValue) {
+  return options
+    .map(
+      (option) =>
+        `<option value="${escapeHtml(option.value)}" ${option.value === selectedValue ? "selected" : ""}>${escapeHtml(option.label)}</option>`
+    )
+    .join("");
+}
+
 function applySettings(settings) {
   state.settings = { ...defaultSettings(), ...(settings || {}) };
   const root = document.documentElement;
   root.style.setProperty("--teal", state.settings.primaryColor);
   root.style.setProperty("--teal-soft", softColor(state.settings.primaryColor, 0.14));
+  root.style.setProperty("--paper-grid", softColor(state.settings.primaryColor, 0.055));
   root.style.setProperty("--coral", state.settings.accentColor);
   root.style.setProperty("--coral-soft", softColor(state.settings.accentColor, 0.14));
   root.style.setProperty("--paper", state.settings.backgroundColor);
+  root.style.setProperty("--surface", state.settings.surfaceColor);
+  root.style.setProperty("--surface-strong", state.settings.surfaceColor);
+  root.style.setProperty("--ink", state.settings.textColor);
+  root.style.setProperty("--muted", softColor(state.settings.textColor, 0.72));
+  root.dataset.logoShape = state.settings.logoShape;
+  root.dataset.cardStyle = state.settings.cardStyle;
+  root.dataset.backgroundPattern = state.settings.backgroundPattern;
   document.title = state.settings.companyName || "Company Board";
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", state.settings.primaryColor);
 }
@@ -313,6 +338,20 @@ function renderEmployee() {
 
 function renderBrandingPanel() {
   const settings = state.settings;
+  const logoShapeOptions = [
+    { value: "rounded", label: "Rounded" },
+    { value: "square", label: "Square" },
+    { value: "circle", label: "Circle" }
+  ];
+  const cardStyleOptions = [
+    { value: "soft", label: "Soft" },
+    { value: "flat", label: "Flat" },
+    { value: "lifted", label: "Lifted" }
+  ];
+  const backgroundPatternOptions = [
+    { value: "grid", label: "Subtle grid" },
+    { value: "plain", label: "Plain" }
+  ];
 
   return `
     <section class="tool-panel">
@@ -333,10 +372,19 @@ function renderBrandingPanel() {
             <span>Board subtitle</span>
             <input name="boardSubtitle" maxlength="90" value="${escapeHtml(settings.boardSubtitle)}">
           </label>
-          <label class="field full">
-            <span>Logo URL</span>
-            <input name="logoUrl" maxlength="300" value="${escapeHtml(settings.logoUrl)}" placeholder="https://example.com/logo.png">
-          </label>
+          <div class="field full">
+            <span>Company logo</span>
+            <div class="logo-dropzone" data-logo-dropzone tabindex="0" role="button" aria-label="Upload company logo">
+              <img data-logo-preview src="${escapeHtml(settings.logoUrl)}" alt="">
+              <div class="logo-dropzone-copy">
+                <strong>Drop logo here</strong>
+                <small>PNG, JPG, WebP, GIF, or SVG up to 350 KB.</small>
+              </div>
+              <button class="ghost-button" type="button" data-logo-picker>${icon("upload")} Choose</button>
+              <input class="logo-file-input" data-logo-file type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+              <input data-logo-value type="hidden" name="logoUrl" value="${escapeHtml(settings.logoUrl)}">
+            </div>
+          </div>
           <label class="field color-field">
             <span>Main color</span>
             <input name="primaryColor" type="color" value="${escapeHtml(settings.primaryColor)}">
@@ -349,10 +397,31 @@ function renderBrandingPanel() {
             <span>Background</span>
             <input name="backgroundColor" type="color" value="${escapeHtml(settings.backgroundColor)}">
           </label>
+          <label class="field color-field">
+            <span>Panel color</span>
+            <input name="surfaceColor" type="color" value="${escapeHtml(settings.surfaceColor)}">
+          </label>
+          <label class="field color-field">
+            <span>Text color</span>
+            <input name="textColor" type="color" value="${escapeHtml(settings.textColor)}">
+          </label>
+          <label class="field">
+            <span>Logo shape</span>
+            <select name="logoShape">${optionsMarkup(logoShapeOptions, settings.logoShape)}</select>
+          </label>
+          <label class="field">
+            <span>Card style</span>
+            <select name="cardStyle">${optionsMarkup(cardStyleOptions, settings.cardStyle)}</select>
+          </label>
+          <label class="field">
+            <span>Background style</span>
+            <select name="backgroundPattern">${optionsMarkup(backgroundPatternOptions, settings.backgroundPattern)}</select>
+          </label>
         </div>
         <div class="form-actions">
           <button class="button secondary" type="submit">${icon("palette")} Save brand</button>
         </div>
+        <div class="message ${state.messageType}" data-form-message>${escapeHtml(state.message)}</div>
       </form>
     </section>
   `;
@@ -533,6 +602,56 @@ function clearMessageSoon() {
   }, 2600);
 }
 
+function showFormMessage(form, message, type = "") {
+  const messageElement = form?.querySelector("[data-form-message]");
+  if (!messageElement) return;
+  messageElement.textContent = message;
+  messageElement.className = `message ${type}`;
+}
+
+function readLogoFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error("Choose a logo file."));
+      return;
+    }
+
+    if (!allowedLogoTypes.has(file.type)) {
+      reject(new Error("Use a PNG, JPG, WebP, GIF, or SVG logo."));
+      return;
+    }
+
+    if (file.size > MAX_LOGO_FILE_BYTES) {
+      reject(new Error("Logo must be 350 KB or smaller."));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result || "")));
+    reader.addEventListener("error", () => reject(new Error("Could not read that logo file.")));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleLogoFile(file, form) {
+  if (!form) return;
+
+  try {
+    const logoUrl = await readLogoFile(file);
+    const logoInput = form.querySelector("[data-logo-value]");
+    const logoPreview = form.querySelector("[data-logo-preview]");
+    logoInput.value = logoUrl;
+    logoPreview.src = logoUrl;
+    applySettings({ ...state.settings, logoUrl });
+    document.querySelectorAll(".brand-mark").forEach((image) => {
+      image.src = logoUrl;
+    });
+    showFormMessage(form, "Logo ready. Save brand to publish.", "success");
+  } catch (error) {
+    showFormMessage(form, error.message || "Could not use that logo.");
+  }
+}
+
 async function routeTo(route) {
   const nextPath = route === "admin" ? "/admin" : "/employee";
   window.history.pushState({}, "", nextPath);
@@ -617,6 +736,7 @@ async function handleWeatherSubmit(event) {
 
 async function handleBrandingSubmit(event) {
   event.preventDefault();
+  const form = event.target;
   const data = Object.fromEntries(new FormData(event.target));
 
   try {
@@ -632,14 +752,23 @@ async function handleBrandingSubmit(event) {
 
   render();
   clearMessageSoon();
+  showFormMessage(form, state.message, state.messageType);
 }
 
 app.addEventListener("click", async (event) => {
   if (event.target.closest("input, select, textarea, label")) return;
 
+  const logoPicker = event.target.closest("[data-logo-picker]");
+  const logoDropzone = event.target.closest("[data-logo-dropzone]");
   const routeButton = event.target.closest("[data-route]");
   const filterButton = event.target.closest("[data-filter]");
   const deleteButton = event.target.closest("[data-delete-post]");
+
+  if (logoPicker || logoDropzone) {
+    const form = event.target.closest("[data-branding-form]");
+    form?.querySelector("[data-logo-file]")?.click();
+    return;
+  }
 
   if (routeButton) {
     await routeTo(routeButton.dataset.route);
@@ -669,6 +798,41 @@ app.addEventListener("click", async (event) => {
     render();
     clearMessageSoon();
   }
+});
+
+app.addEventListener("keydown", (event) => {
+  const logoDropzone = event.target.closest("[data-logo-dropzone]");
+  if (!logoDropzone || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  logoDropzone.closest("[data-branding-form]")?.querySelector("[data-logo-file]")?.click();
+});
+
+app.addEventListener("change", async (event) => {
+  if (!event.target.matches("[data-logo-file]")) return;
+  const form = event.target.closest("[data-branding-form]");
+  await handleLogoFile(event.target.files?.[0], form);
+  event.target.value = "";
+});
+
+app.addEventListener("dragover", (event) => {
+  const logoDropzone = event.target.closest("[data-logo-dropzone]");
+  if (!logoDropzone) return;
+  event.preventDefault();
+  logoDropzone.classList.add("is-dragging");
+});
+
+app.addEventListener("dragleave", (event) => {
+  const logoDropzone = event.target.closest("[data-logo-dropzone]");
+  if (!logoDropzone || logoDropzone.contains(event.relatedTarget)) return;
+  logoDropzone.classList.remove("is-dragging");
+});
+
+app.addEventListener("drop", async (event) => {
+  const logoDropzone = event.target.closest("[data-logo-dropzone]");
+  if (!logoDropzone) return;
+  event.preventDefault();
+  logoDropzone.classList.remove("is-dragging");
+  await handleLogoFile(event.dataTransfer?.files?.[0], logoDropzone.closest("[data-branding-form]"));
 });
 
 app.addEventListener("submit", async (event) => {
