@@ -340,11 +340,11 @@ function renderEmployeeAuth() {
         ${brandBlock("Employee access")}
         <h2>Employee sign in</h2>
         <form data-employee-login-form>
-          <div class="field full">
+          <div class="field full tap-field" data-focus-field>
             <label for="employee-identifier">Employee ID</label>
             <input id="employee-identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" enterkeyhint="next" required value="owner" placeholder="Example: j.smith">
           </div>
-          <div class="field full">
+          <div class="field full tap-field" data-focus-field>
             <label for="employee-pin">PIN</label>
             <input id="employee-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required placeholder="Numbers only">
           </div>
@@ -441,7 +441,7 @@ function renderAuth() {
         ${brandBlock("HR publishing")}
         <h2>HR access</h2>
         <form data-login-form>
-          <div class="field full">
+          <div class="field full tap-field" data-focus-field>
             <label for="hr-pin">PIN</label>
             <input id="hr-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required>
           </div>
@@ -1037,6 +1037,8 @@ async function employeeLogout() {
 }
 
 app.addEventListener("click", async (event) => {
+  if (event.target.closest("input, select, textarea, label")) return;
+
   const routeButton = event.target.closest("[data-route]");
   const filterButton = event.target.closest("[data-filter]");
   const deleteButton = event.target.closest("[data-delete-post]");

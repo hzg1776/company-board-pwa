@@ -639,6 +639,10 @@ svg {
   min-width: 0;
 }
 
+.tap-field {
+  cursor: text;
+}
+
 .field.full {
   grid-column: 1 / -1;
 }
