@@ -83,6 +83,15 @@ function currentRoute() {
   return "employee";
 }
 
+function filterFromLocation() {
+  const filter = new URLSearchParams(window.location.search).get("filter");
+  return filters.includes(filter) ? filter : "All";
+}
+
+function filterUrl(filter) {
+  return filter === "All" ? "/employee" : `/employee?filter=${encodeURIComponent(filter)}`;
+}
+
 function brandBlock(subtitle = APP_SUBTITLE) {
   return `
     <div class="brand">
@@ -203,11 +212,12 @@ function renderNotice(post, includeControls = false) {
       </div>
       ${
         includeControls
-          ? `<div class="post-controls">
-              <button class="ghost-button" type="button" data-delete-post="${escapeHtml(post.id)}" title="Delete post">
+          ? `<form class="post-controls" data-delete-post-form>
+              <input type="hidden" name="id" value="${escapeHtml(post.id)}">
+              <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Delete post">
                 ${icon("delete")} Delete
               </button>
-            </div>`
+            </form>`
           : ""
       }
     </article>
@@ -247,9 +257,9 @@ function renderEmployee() {
             ${filters
               .map(
                 (filter) => `
-                  <button class="segment-button" type="button" data-filter="${filter}" aria-pressed="${activeFilter === filter}">
+                  <a class="segment-button" href="${filterUrl(filter)}" data-filter="${filter}" role="button" aria-pressed="${activeFilter === filter}">
                     ${escapeHtml(filter)}
-                  </button>
+                  </a>
                 `
               )
               .join("")}
@@ -457,6 +467,7 @@ async function hydrateRoute() {
     return;
   }
 
+  activeFilter = filterFromLocation();
   await loadBoard();
 }
 
@@ -489,6 +500,18 @@ async function updateWeather(payload) {
     body: JSON.stringify(payload)
   });
   state.weather = result.weather;
+}
+
+async function handleDeleteAction(id) {
+  try {
+    await deletePost(id);
+    setMessage("Deleted.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not delete post.");
+  }
+
+  render();
+  clearMessageSoon();
 }
 
 async function handlePostSubmit(event) {
@@ -524,12 +547,19 @@ async function handleWeatherSubmit(event) {
   clearMessageSoon();
 }
 
-app.addEventListener("click", async (event) => {
-  if (event.target.closest("input, select, textarea, label")) return;
+function clickedElement(event) {
+  if (event.target instanceof Element) return event.target;
+  return event.target?.parentElement || null;
+}
 
-  const routeButton = event.target.closest("[data-route]");
-  const filterButton = event.target.closest("[data-filter]");
-  const deleteButton = event.target.closest("[data-delete-post]");
+document.addEventListener("click", async (event) => {
+  const target = clickedElement(event);
+  if (!target || !app.contains(target)) return;
+  if (target.closest("input, select, textarea, label")) return;
+
+  const routeButton = target.closest("[data-route]");
+  const filterButton = target.closest("[data-filter]");
+  const deleteButton = target.closest("[data-delete-post]");
 
   if (routeButton) {
     await routeTo(routeButton.dataset.route);
@@ -537,29 +567,27 @@ app.addEventListener("click", async (event) => {
   }
 
   if (filterButton) {
+    event.preventDefault();
     activeFilter = filterButton.dataset.filter;
+    const nextUrl = filterUrl(activeFilter);
+    if (window.location.pathname + window.location.search !== nextUrl) {
+      window.history.pushState({}, "", nextUrl);
+    }
     render();
     return;
   }
 
-  if (event.target.closest("[data-refresh]")) {
+  if (target.closest("[data-refresh]")) {
     await refreshAdminData();
     render();
     return;
   }
 
   if (deleteButton) {
-    try {
-      await deletePost(deleteButton.dataset.deletePost);
-      setMessage("Deleted.", "success");
-    } catch (error) {
-      setMessage(error.message || "Could not delete post.");
-    }
-
-    render();
-    clearMessageSoon();
+    event.preventDefault();
+    await handleDeleteAction(deleteButton.dataset.deletePost);
   }
-});
+}, true);
 
 app.addEventListener("submit", async (event) => {
   if (event.target.matches("[data-post-form]")) {
@@ -569,6 +597,13 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-weather-form]")) {
     await handleWeatherSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-delete-post-form]")) {
+    event.preventDefault();
+    const id = new FormData(event.target).get("id");
+    await handleDeleteAction(id);
   }
 });
 
