@@ -1,22 +1,22 @@
 :root {
   color-scheme: light;
-  --paper: #f6f1e8;
-  --surface: #fffdf8;
+  --paper: #f4f8fb;
+  --surface: #ffffff;
   --surface-strong: #ffffff;
-  --ink: #17211f;
-  --muted: #5d6762;
-  --line: #ded8ca;
-  --paper-grid: rgba(15, 118, 110, 0.04);
-  --teal: #0f766e;
-  --teal-soft: #d8ebe7;
-  --coral: #c94f3d;
-  --coral-soft: #f5d7cf;
-  --amber: #b7791f;
-  --amber-soft: #f2e3c5;
-  --green: #297a42;
-  --green-soft: #d9eadb;
-  --plum: #6d4a7c;
-  --plum-soft: #eadcf0;
+  --ink: #17212b;
+  --muted: #566370;
+  --line: #d9e3ea;
+  --paper-grid: rgba(80, 178, 206, 0.16);
+  --teal: #002855;
+  --teal-soft: #dbeef5;
+  --coral: #50b2ce;
+  --coral-soft: #dff3f8;
+  --amber: #0d5f86;
+  --amber-soft: #d8edf6;
+  --green: #002855;
+  --green-soft: #e6f2f7;
+  --plum: #50b2ce;
+  --plum-soft: #e2f4f8;
   --shadow: 0 16px 40px rgba(23, 33, 31, 0.08);
   --notice-shadow: 0 10px 24px rgba(23, 33, 31, 0.06);
   --logo-radius: 8px;
@@ -107,8 +107,8 @@ svg {
   min-height: 72px;
   margin: -16px -16px 18px;
   padding: max(12px, env(safe-area-inset-top)) 16px 12px;
-  background: rgba(246, 241, 232, 0.94);
-  border-bottom: 1px solid rgba(222, 216, 202, 0.86);
+  background: rgba(244, 248, 251, 0.94);
+  border-bottom: 1px solid rgba(217, 227, 234, 0.86);
   backdrop-filter: blur(16px);
 }
 
@@ -127,7 +127,7 @@ svg {
   border: 1px solid rgba(255, 255, 255, 0.42);
   border-radius: var(--logo-radius);
   background: var(--surface-strong);
-  box-shadow: 0 8px 20px rgba(15, 118, 110, 0.2);
+  box-shadow: 0 8px 20px rgba(0, 40, 85, 0.2);
 }
 
 .brand h1,
@@ -531,7 +531,7 @@ svg {
   display: grid;
   place-items: center;
   padding: 14px;
-  background: #fffdf8;
+  background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 8px;
 }
@@ -706,12 +706,7 @@ svg {
 .field select:focus,
 .field textarea:focus {
   border-color: var(--teal);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
-}
-
-.field.color-field input {
-  min-height: 48px;
-  padding: 5px;
+  box-shadow: 0 0 0 3px rgba(80, 178, 206, 0.24);
 }
 
 .logo-dropzone {
@@ -734,7 +729,7 @@ svg {
 .logo-dropzone.is-dragging {
   border-color: var(--teal);
   background: var(--teal-soft);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  box-shadow: 0 0 0 3px rgba(80, 178, 206, 0.22);
 }
 
 .logo-dropzone img {

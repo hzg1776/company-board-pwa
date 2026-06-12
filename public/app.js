@@ -48,11 +48,11 @@ function defaultSettings() {
     companyName: "Company Board",
     boardSubtitle: "Work updates",
     logoUrl: "/assets/logo.svg",
-    primaryColor: "#0f766e",
-    accentColor: "#c94f3d",
-    backgroundColor: "#f6f1e8",
-    surfaceColor: "#fffdf8",
-    textColor: "#17211f",
+    primaryColor: "#002855",
+    accentColor: "#50b2ce",
+    backgroundColor: "#f4f8fb",
+    surfaceColor: "#ffffff",
+    textColor: "#17212b",
     logoShape: "rounded",
     cardStyle: "soft",
     backgroundPattern: "grid"
@@ -115,15 +115,6 @@ function hexToRgb(hex) {
 function softColor(hex, alpha) {
   const rgb = hexToRgb(hex);
   return rgb ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})` : hex;
-}
-
-function optionsMarkup(options, selectedValue) {
-  return options
-    .map(
-      (option) =>
-        `<option value="${escapeHtml(option.value)}" ${option.value === selectedValue ? "selected" : ""}>${escapeHtml(option.label)}</option>`
-    )
-    .join("");
 }
 
 function applySettings(settings) {
@@ -246,9 +237,9 @@ function weatherScene(level) {
     <svg class="weather-scene" viewBox="0 0 360 210" role="img" aria-label="Weather status">
       <rect x="0" y="0" width="360" height="210" rx="8" fill="currentColor" opacity="0.08"></rect>
       <circle cx="88" cy="66" r="34" fill="currentColor" opacity="0.34"></circle>
-      <path d="M126 138h142c29 0 52-20 52-45s-23-45-52-45c-11 0-21 3-29 8-15-24-43-39-75-39-48 0-86 32-86 72 0 3 0 6 1 9-22 4-39 20-39 40 0 23 21 42 46 42h40Z" fill="#fffdf8" stroke="currentColor" stroke-width="8"></path>
+      <path d="M126 138h142c29 0 52-20 52-45s-23-45-52-45c-11 0-21 3-29 8-15-24-43-39-75-39-48 0-86 32-86 72 0 3 0 6 1 9-22 4-39 20-39 40 0 23 21 42 46 42h40Z" fill="#ffffff" stroke="currentColor" stroke-width="8"></path>
       ${showRain ? '<path d="M116 166v24M166 158v30M216 166v24M266 158v30" stroke="currentColor" stroke-width="9" stroke-linecap="round"></path>' : ""}
-      ${showWarning ? '<path d="M288 40 330 112h-84l42-72Z" fill="#c94f3d"></path><path d="M288 66v23M288 103h.01" stroke="#fffdf8" stroke-width="8" stroke-linecap="round"></path>' : ""}
+      ${showWarning ? '<path d="M288 40 330 112h-84l42-72Z" fill="#50b2ce"></path><path d="M288 66v23M288 103h.01" stroke="#ffffff" stroke-width="8" stroke-linecap="round"></path>' : ""}
     </svg>
   `;
 }
@@ -338,20 +329,6 @@ function renderEmployee() {
 
 function renderBrandingPanel() {
   const settings = state.settings;
-  const logoShapeOptions = [
-    { value: "rounded", label: "Rounded" },
-    { value: "square", label: "Square" },
-    { value: "circle", label: "Circle" }
-  ];
-  const cardStyleOptions = [
-    { value: "soft", label: "Soft" },
-    { value: "flat", label: "Flat" },
-    { value: "lifted", label: "Lifted" }
-  ];
-  const backgroundPatternOptions = [
-    { value: "grid", label: "Subtle grid" },
-    { value: "plain", label: "Plain" }
-  ];
 
   return `
     <section class="tool-panel">
@@ -359,7 +336,7 @@ function renderBrandingPanel() {
         <div>
           <p class="eyebrow">${icon("palette")} Brand</p>
           <h2>Company look</h2>
-          <p>Update the logo, name, and colors employees see.</p>
+          <p>Update the logo and board name. Colors stay on the Palziv scheme.</p>
         </div>
       </div>
       <form data-branding-form>
@@ -385,38 +362,6 @@ function renderBrandingPanel() {
               <input data-logo-value type="hidden" name="logoUrl" value="${escapeHtml(settings.logoUrl)}">
             </div>
           </div>
-          <label class="field color-field">
-            <span>Main color</span>
-            <input name="primaryColor" type="color" value="${escapeHtml(settings.primaryColor)}">
-          </label>
-          <label class="field color-field">
-            <span>Alert color</span>
-            <input name="accentColor" type="color" value="${escapeHtml(settings.accentColor)}">
-          </label>
-          <label class="field color-field">
-            <span>Background</span>
-            <input name="backgroundColor" type="color" value="${escapeHtml(settings.backgroundColor)}">
-          </label>
-          <label class="field color-field">
-            <span>Panel color</span>
-            <input name="surfaceColor" type="color" value="${escapeHtml(settings.surfaceColor)}">
-          </label>
-          <label class="field color-field">
-            <span>Text color</span>
-            <input name="textColor" type="color" value="${escapeHtml(settings.textColor)}">
-          </label>
-          <label class="field">
-            <span>Logo shape</span>
-            <select name="logoShape">${optionsMarkup(logoShapeOptions, settings.logoShape)}</select>
-          </label>
-          <label class="field">
-            <span>Card style</span>
-            <select name="cardStyle">${optionsMarkup(cardStyleOptions, settings.cardStyle)}</select>
-          </label>
-          <label class="field">
-            <span>Background style</span>
-            <select name="backgroundPattern">${optionsMarkup(backgroundPatternOptions, settings.backgroundPattern)}</select>
-          </label>
         </div>
         <div class="form-actions">
           <button class="button secondary" type="submit">${icon("palette")} Save brand</button>

@@ -19,9 +19,6 @@ const MAX_LOGO_DATA_URL_CHARS = 500_000;
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
 const allowedWeatherLevels = new Set(["Clear", "Watch", "Warning"]);
-const allowedLogoShapes = new Set(["rounded", "square", "circle"]);
-const allowedCardStyles = new Set(["soft", "flat", "lifted"]);
-const allowedBackgroundPatterns = new Set(["grid", "plain"]);
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -43,11 +40,11 @@ function defaultSettings() {
     companyName: "Company Board",
     boardSubtitle: "Work updates",
     logoUrl: "/assets/logo.svg",
-    primaryColor: "#0f766e",
-    accentColor: "#c94f3d",
-    backgroundColor: "#f6f1e8",
-    surfaceColor: "#fffdf8",
-    textColor: "#17211f",
+    primaryColor: "#002855",
+    accentColor: "#50b2ce",
+    backgroundColor: "#f4f8fb",
+    surfaceColor: "#ffffff",
+    textColor: "#17212b",
     logoShape: "rounded",
     cardStyle: "soft",
     backgroundPattern: "grid"
@@ -104,16 +101,6 @@ function createSeedData() {
   };
 }
 
-function cleanColor(value, fallback) {
-  const color = String(value ?? "").trim();
-  return /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : fallback;
-}
-
-function cleanChoice(value, allowed, fallback) {
-  const choice = String(value ?? "").trim();
-  return allowed.has(choice) ? choice : fallback;
-}
-
 function cleanLogoUrl(value, fallback = "/assets/logo.svg") {
   const logoUrl = String(value ?? "").trim();
   if (!logoUrl) return fallback;
@@ -140,14 +127,14 @@ function normalizeSettings(input = {}) {
     companyName: cleanText(input.companyName || defaults.companyName, 70) || defaults.companyName,
     boardSubtitle: cleanText(input.boardSubtitle || defaults.boardSubtitle, 90) || defaults.boardSubtitle,
     logoUrl: cleanLogoUrl(input.logoUrl, defaults.logoUrl),
-    primaryColor: cleanColor(input.primaryColor, defaults.primaryColor),
-    accentColor: cleanColor(input.accentColor, defaults.accentColor),
-    backgroundColor: cleanColor(input.backgroundColor, defaults.backgroundColor),
-    surfaceColor: cleanColor(input.surfaceColor, defaults.surfaceColor),
-    textColor: cleanColor(input.textColor, defaults.textColor),
-    logoShape: cleanChoice(input.logoShape, allowedLogoShapes, defaults.logoShape),
-    cardStyle: cleanChoice(input.cardStyle, allowedCardStyles, defaults.cardStyle),
-    backgroundPattern: cleanChoice(input.backgroundPattern, allowedBackgroundPatterns, defaults.backgroundPattern)
+    primaryColor: defaults.primaryColor,
+    accentColor: defaults.accentColor,
+    backgroundColor: defaults.backgroundColor,
+    surfaceColor: defaults.surfaceColor,
+    textColor: defaults.textColor,
+    logoShape: defaults.logoShape,
+    cardStyle: defaults.cardStyle,
+    backgroundPattern: defaults.backgroundPattern
   };
 }
 
@@ -232,8 +219,8 @@ async function sendEmployeeQr(req, res) {
     margin: 2,
     width: 320,
     color: {
-      dark: "#17211f",
-      light: "#fffdf8"
+      dark: "#002855",
+      light: "#ffffff"
     }
   });
 

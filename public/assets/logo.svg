@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
   <title id="title">Company Board</title>
-  <rect width="512" height="512" rx="96" fill="#0f766e"/>
-  <path d="M120 132c0-22.1 17.9-40 40-40h192c22.1 0 40 17.9 40 40v248c0 22.1-17.9 40-40 40H160c-22.1 0-40-17.9-40-40V132Z" fill="#fffdf8"/>
-  <path d="M174 170h164v38H174v-38Zm0 76h164v30H174v-30Zm0 62h104v30H174v-30Z" fill="#17211f"/>
-  <circle cx="346" cy="326" r="54" fill="#c94f3d"/>
-  <path d="M346 286v48m0 34v4" stroke="#fffdf8" stroke-width="24" stroke-linecap="round"/>
+  <rect width="512" height="512" rx="96" fill="#002855"/>
+  <path d="M120 132c0-22.1 17.9-40 40-40h192c22.1 0 40 17.9 40 40v248c0 22.1-17.9 40-40 40H160c-22.1 0-40-17.9-40-40V132Z" fill="#ffffff"/>
+  <path d="M174 170h164v38H174v-38Zm0 76h164v30H174v-30Zm0 62h104v30H174v-30Z" fill="#17212b"/>
+  <circle cx="346" cy="326" r="54" fill="#50b2ce"/>
+  <path d="M346 286v48m0 34v4" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
 </svg>
