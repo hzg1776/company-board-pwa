@@ -215,7 +215,7 @@ async function loadAdminControls() {
 }
 
 async function refreshAdminData() {
-  await Promise.all([loadBoard(), loadAdminControls()]);
+  await loadBoard();
 }
 
 async function restoreAdminSession() {
@@ -368,8 +368,6 @@ function renderEmployeeAuth() {
 }
 
 function renderEmployee() {
-  if (!state.employeeAuthed) return renderEmployeeAuth();
-
   const weather = state.weather || defaultWeather();
   const notices = visiblePosts();
   const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
@@ -379,12 +377,11 @@ function renderEmployee() {
       <header class="topbar">
         ${brandBlock(currentDayLabel())}
         <div class="top-actions">
-          <span class="employee-badge">${icon("userCheck")}${escapeHtml(state.employee?.name || "Employee")}</span>
           <button class="button install-text" type="button" data-install title="Install app">
             ${icon("install")}<span>Install</span>
           </button>
-          <button class="icon-button" type="button" data-employee-logout title="Sign out">
-            ${icon("logOut")}
+          <button class="icon-button" type="button" data-route="admin" title="HR admin">
+            ${icon("lock")}
           </button>
         </div>
       </header>
@@ -402,7 +399,7 @@ function renderEmployee() {
           <div class="quick-stats">
             <div class="quick-stat"><strong>${state.posts.filter((post) => !isExpired(post)).length}</strong><span>Active posts</span></div>
             <div class="quick-stat"><strong>${urgentCount}</strong><span>Urgent</span></div>
-            <div class="quick-stat"><strong>Live</strong><span>Status</span></div>
+            <div class="quick-stat"><strong>Read-only</strong><span>Status</span></div>
           </div>
         </aside>
 
@@ -446,7 +443,7 @@ function renderAuth() {
             <input id="hr-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required>
           </div>
           <div class="form-actions">
-            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee login</button>
+            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee board</button>
             <button class="button" type="submit">${icon("lock")} Unlock</button>
           </div>
           <div class="message ${state.messageType}">${escapeHtml(state.message)}</div>
@@ -454,8 +451,8 @@ function renderAuth() {
         <section class="qr-panel" aria-label="Employee portal QR code">
           <div>
             <p class="eyebrow">${icon("users")} Employee access</p>
-            <h2>Scan for employee login</h2>
-            <p>Employees scan this code, then use their assigned employee ID and PIN.</p>
+            <h2>Scan for the board</h2>
+            <p>Employees can scan this code to open the read-only notification board on their phone.</p>
           </div>
           <div class="qr-box">
             <img src="/employee-qr.svg" alt="QR code for employee portal">
@@ -631,8 +628,7 @@ function renderAdmin() {
 
   const weather = state.weather || defaultWeather();
   const activeCount = state.posts.filter((post) => !isExpired(post)).length;
-  const onlineEmployees = state.employees.filter((employee) => employee.online).length;
-  const activeEmployees = state.employees.filter((employee) => employee.active).length;
+  const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
   const latest = state.posts[0]?.createdAt ? formatDate(state.posts[0].createdAt) : "None";
 
   return `
@@ -641,7 +637,7 @@ function renderAdmin() {
         <aside class="admin-sidebar">
           ${brandBlock("HR dashboard")}
           <nav class="admin-nav" aria-label="Admin actions">
-            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee login</button>
+            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee board</button>
             <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
             <button class="ghost-button" type="button" data-logout>${icon("logOut")} Sign out</button>
           </nav>
@@ -650,14 +646,13 @@ function renderAdmin() {
         <section class="admin-main">
           <section class="admin-summary" aria-label="Board summary">
             <div class="metric"><strong>${activeCount}</strong><span>Active posts</span></div>
-            <div class="metric"><strong>${onlineEmployees}</strong><span>Employees online</span></div>
-            <div class="metric"><strong>${activeEmployees}</strong><span>Active employees</span></div>
+            <div class="metric"><strong>${urgentCount}</strong><span>Urgent posts</span></div>
+            <div class="metric"><strong>${escapeHtml(weather.level)}</strong><span>Weather level</span></div>
             <div class="metric"><strong>${escapeHtml(latest)}</strong><span>Latest post</span></div>
           </section>
 
           <section class="tool-grid">
             ${renderBrandingPanel()}
-            ${renderEmployeeAccessPanel()}
           </section>
 
           <section class="tool-grid">
@@ -750,8 +745,6 @@ function renderAdmin() {
             </section>
           </section>
 
-          ${renderActivityPanel()}
-
           <section class="tool-panel">
             <div class="panel-title">
               <div>
@@ -801,8 +794,7 @@ async function hydrateRoute() {
     return;
   }
 
-  await restoreEmployeeSession();
-  if (state.employeeAuthed) await loadBoard();
+  await loadBoard();
 }
 
 function syncPresenceTimer() {

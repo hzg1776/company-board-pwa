@@ -828,7 +828,6 @@ async function handleApi(req, res, url) {
 
     if (req.method === "GET" && url.pathname === "/api/posts") {
       const data = await readData();
-      if (!requireBoardAccess(req, res, data)) return;
       sendJson(res, 200, { posts: sortedPosts(data.posts) });
       return;
     }
@@ -870,7 +869,6 @@ async function handleApi(req, res, url) {
 
     if (req.method === "GET" && url.pathname === "/api/weather") {
       const data = await readData();
-      if (!requireBoardAccess(req, res, data)) return;
       sendJson(res, 200, { weather: data.weather });
       return;
     }
