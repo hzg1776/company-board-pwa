@@ -2,7 +2,7 @@
   "name": "Company Board",
   "short_name": "Board",
   "description": "Read-only employee notification board with HR-managed company news, weather, and updates.",
-  "start_url": "/#employee",
+  "start_url": "/employee",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f6f1e8",

@@ -330,7 +330,8 @@ function getPublicFilePath(urlPathname) {
 }
 
 async function serveStatic(req, res, url) {
-  const requestedPath = getPublicFilePath(url.pathname);
+  const staticPath = path.extname(url.pathname) ? url.pathname : "/";
+  const requestedPath = getPublicFilePath(staticPath);
 
   if (!requestedPath) {
     res.writeHead(403);

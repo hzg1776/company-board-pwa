@@ -138,6 +138,11 @@ function defaultPosts() {
   ];
 }
 
+function currentRoute() {
+  if (window.location.pathname === "/admin" || window.location.hash === "#admin") return "admin";
+  return "employee";
+}
+
 function readLocal(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -560,11 +565,13 @@ function clearMessageSoon() {
 }
 
 function routeTo(route) {
-  window.location.hash = route === "admin" ? "#admin" : "#employee";
+  const nextPath = route === "admin" ? "/admin" : "/employee";
+  window.history.pushState({}, "", nextPath);
+  render();
 }
 
 function render() {
-  const route = window.location.hash === "#admin" ? "admin" : "employee";
+  const route = currentRoute();
   document.body.dataset.route = route;
   app.innerHTML = state.loading ? '<main class="auth-shell"><section class="empty-state">Loading board...</section></main>' : route === "admin" ? renderAdmin() : renderEmployee();
 }
@@ -704,6 +711,7 @@ app.addEventListener("submit", async (event) => {
 });
 
 window.addEventListener("hashchange", render);
+window.addEventListener("popstate", render);
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
