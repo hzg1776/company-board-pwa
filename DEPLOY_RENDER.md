@@ -9,7 +9,6 @@ This is the first hosting path for the Company Board PWA. It is intended for a f
 - Build command: `npm install`
 - Start command: `npm start`
 - Health check: `/api/health`
-- Required secret: `HR_PIN`
 
 These settings are defined in `render.yaml`.
 
@@ -22,9 +21,8 @@ These settings are defined in `render.yaml`.
 5. Click **New > Blueprint**.
 6. Connect the GitHub repository.
 7. Confirm the service named `company-board-pwa`.
-8. Enter a secure `HR_PIN` when Render asks for secret environment variables.
-9. Click **Apply**.
-10. Wait for the deploy to finish.
+8. Click **Apply**.
+9. Wait for the deploy to finish.
 
 ## Links After Deploy
 
@@ -33,7 +31,7 @@ Replace `your-render-url` with the URL Render gives you.
 - Employee portal: `https://your-render-url.onrender.com/employee`
 - HR dashboard: `https://your-render-url.onrender.com/admin`
 
-Employees can view the board directly. HR access is only required for publishing and branding changes.
+Employees can view the board directly. HR can open the dashboard directly for publishing and branding changes during the demo.
 
 ## Phone Install
 
@@ -54,7 +52,7 @@ On Android:
 - Free Render services can sleep after inactivity.
 - Updates are stored in a local JSON file.
 - Local JSON storage can reset on redeploy or instance replacement.
-- HR access uses a PIN, not full user accounts.
+- The HR dashboard is open in this demo and must get real login before production use.
 - Push notifications are not included yet.
 
 ## Production Upgrade After Approval

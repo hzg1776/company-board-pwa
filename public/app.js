@@ -1,22 +1,12 @@
 const app = document.querySelector("#app");
 
-const ADMIN_PIN_KEY = "company-board-admin-pin";
-const EMPLOYEE_SESSION_KEY = "company-board-employee-session-v1";
-const EMPLOYEE_PROFILE_KEY = "company-board-employee-profile-v1";
-
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
-let presenceTimer = null;
 
 const state = {
   posts: [],
   weather: null,
   settings: defaultSettings(),
-  employees: [],
-  events: [],
-  adminAuthed: Boolean(sessionStorage.getItem(ADMIN_PIN_KEY)),
-  employeeAuthed: Boolean(sessionStorage.getItem(EMPLOYEE_SESSION_KEY)),
-  employee: readSessionJson(EMPLOYEE_PROFILE_KEY, null),
   message: "",
   messageType: "",
   loading: true
@@ -74,19 +64,6 @@ function escapeHtml(value) {
   });
 }
 
-function readSessionJson(key, fallback) {
-  try {
-    const raw = sessionStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeSessionJson(key, value) {
-  sessionStorage.setItem(key, JSON.stringify(value));
-}
-
 function formatDate(value) {
   if (!value) return "Never";
   const text = String(value);
@@ -115,23 +92,6 @@ function currentDayLabel() {
 function currentRoute() {
   if (window.location.pathname === "/admin" || window.location.hash === "#admin") return "admin";
   return "employee";
-}
-
-function adminPin() {
-  return sessionStorage.getItem(ADMIN_PIN_KEY) || "";
-}
-
-function employeeSession() {
-  return sessionStorage.getItem(EMPLOYEE_SESSION_KEY) || "";
-}
-
-function clearEmployeeSession() {
-  sessionStorage.removeItem(EMPLOYEE_SESSION_KEY);
-  sessionStorage.removeItem(EMPLOYEE_PROFILE_KEY);
-  state.employeeAuthed = false;
-  state.employee = null;
-  state.posts = [];
-  state.weather = null;
 }
 
 function hexToRgb(hex) {
@@ -176,8 +136,6 @@ function brandBlock(subtitle = state.settings.boardSubtitle) {
 async function requestJson(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
-    ...(adminPin() ? { "x-admin-pin": adminPin() } : {}),
-    ...(employeeSession() ? { "x-employee-session": employeeSession() } : {}),
     ...(options.headers || {})
   };
 
@@ -206,40 +164,8 @@ async function loadBoard() {
   state.weather = weatherResult.weather || defaultWeather();
 }
 
-async function loadAdminControls() {
-  const result = await requestJson("/api/admin/employees");
-  state.employees = result.employees || [];
-  state.events = result.events || [];
-}
-
 async function refreshAdminData() {
   await loadBoard();
-}
-
-async function restoreAdminSession() {
-  if (!adminPin()) return;
-
-  try {
-    const result = await requestJson("/api/admin/check");
-    state.adminAuthed = true;
-    if (result.settings) applySettings(result.settings);
-  } catch {
-    sessionStorage.removeItem(ADMIN_PIN_KEY);
-    state.adminAuthed = false;
-  }
-}
-
-async function restoreEmployeeSession() {
-  if (!employeeSession()) return;
-
-  try {
-    const result = await requestJson("/api/employee/check");
-    state.employeeAuthed = true;
-    state.employee = result.employee;
-    writeSessionJson(EMPLOYEE_PROFILE_KEY, result.employee);
-  } catch {
-    clearEmployeeSession();
-  }
 }
 
 function defaultWeather() {
@@ -331,40 +257,6 @@ function renderNotice(post, includeControls = false) {
   `;
 }
 
-function renderEmployeeAuth() {
-  return `
-    <main class="auth-shell">
-      <section class="auth-card">
-        ${brandBlock("Employee access")}
-        <h2>Employee sign in</h2>
-        <form data-employee-login-form>
-          <div class="field full tap-field" data-focus-field>
-            <label for="employee-identifier">Employee ID</label>
-            <input id="employee-identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" enterkeyhint="next" required value="owner" placeholder="Example: j.smith">
-          </div>
-          <div class="field full tap-field" data-focus-field>
-            <label for="employee-pin">PIN</label>
-            <input id="employee-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required placeholder="Numbers only">
-          </div>
-          <div class="pin-pad" aria-label="PIN keypad">
-            ${["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-              .map((digit) => `<button class="pin-key" type="button" data-pin-digit="${digit}">${digit}</button>`)
-              .join("")}
-            <button class="pin-key muted" type="button" data-pin-clear>Clear</button>
-            <button class="pin-key" type="button" data-pin-digit="0">0</button>
-            <button class="pin-key muted" type="button" data-pin-backspace>Back</button>
-          </div>
-          <div class="form-actions">
-            <button class="ghost-button" type="button" data-route="admin">${icon("lock")} HR admin</button>
-            <button class="button" type="submit">${icon("key")} View board</button>
-          </div>
-          <div class="message ${state.messageType}">${escapeHtml(state.message)}</div>
-        </form>
-      </section>
-    </main>
-  `;
-}
-
 function renderEmployee() {
   const weather = state.weather || defaultWeather();
   const notices = visiblePosts();
@@ -419,41 +311,6 @@ function renderEmployee() {
   `;
 }
 
-function renderAuth() {
-  const employeeLink = `${window.location.origin}/employee`;
-
-  return `
-    <main class="auth-shell">
-      <section class="auth-card">
-        ${brandBlock("HR publishing")}
-        <h2>HR access</h2>
-        <form data-login-form>
-          <div class="field full tap-field" data-focus-field>
-            <label for="hr-pin">PIN</label>
-            <input id="hr-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required>
-          </div>
-          <div class="form-actions">
-            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee board</button>
-            <button class="button" type="submit">${icon("lock")} Unlock</button>
-          </div>
-          <div class="message ${state.messageType}">${escapeHtml(state.message)}</div>
-        </form>
-        <section class="qr-panel" aria-label="Employee portal QR code">
-          <div>
-            <p class="eyebrow">${icon("users")} Employee access</p>
-            <h2>Scan for the board</h2>
-            <p>Employees can scan this code to open the read-only notification board on their phone.</p>
-          </div>
-          <div class="qr-box">
-            <img src="/employee-qr.svg" alt="QR code for employee portal">
-          </div>
-          <a class="employee-link" href="/employee">${escapeHtml(employeeLink)}</a>
-        </section>
-      </section>
-    </main>
-  `;
-}
-
 function renderBrandingPanel() {
   const settings = state.settings;
 
@@ -501,121 +358,29 @@ function renderBrandingPanel() {
   `;
 }
 
-function renderEmployeeAccessPanel() {
+function renderEmployeeSharePanel() {
+  const employeeLink = `${window.location.origin}/employee`;
+
   return `
     <section class="tool-panel">
       <div class="panel-title">
         <div>
-          <p class="eyebrow">${icon("key")} Access</p>
-          <h2>Employee PINs</h2>
-          <p>Create employee access and revoke it when needed.</p>
+          <p class="eyebrow">${icon("users")} Employee access</p>
+          <h2>Scan for the board</h2>
+          <p>Employees can scan this code to open the read-only notification board on their phone.</p>
         </div>
       </div>
-      <form data-employee-form>
-        <div class="form-grid compact-grid">
-          <label class="field">
-            <span>Name</span>
-            <input name="name" maxlength="80" required placeholder="Employee name">
-          </label>
-          <label class="field">
-            <span>Employee ID</span>
-            <input name="username" maxlength="32" placeholder="j.smith">
-          </label>
-          <label class="field">
-            <span>PIN</span>
-            <input name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" minlength="4" maxlength="12" required placeholder="4-12 numbers">
-          </label>
-          <label class="field">
-            <span>Department</span>
-            <input name="department" maxlength="80" placeholder="Operations">
-          </label>
+      <div class="qr-panel compact">
+        <div class="qr-box">
+          <img src="/employee-qr.svg" alt="QR code for employee portal">
         </div>
-        <div class="form-actions">
-          <button class="button" type="submit">${icon("userCheck")} Add employee</button>
-        </div>
-      </form>
-      <div class="employee-list">
-        ${
-          state.employees.length
-            ? state.employees.map((employee) => renderEmployeeRow(employee)).join("")
-            : '<div class="empty-state small">No employee access records yet.</div>'
-        }
-      </div>
-    </section>
-  `;
-}
-
-function renderEmployeeRow(employee) {
-  const status = !employee.active ? "Revoked" : employee.online ? "Online" : "Offline";
-  const statusClass = !employee.active ? "revoked" : employee.online ? "online" : "offline";
-
-  return `
-    <article class="employee-row">
-      <div>
-        <div class="employee-row-title">
-          <strong>${escapeHtml(employee.name)}</strong>
-          <span class="status-pill ${statusClass}">${escapeHtml(status)}</span>
-        </div>
-        <p>@${escapeHtml(employee.username)}${employee.department ? ` - ${escapeHtml(employee.department)}` : ""}</p>
-        <p>Last seen: ${escapeHtml(formatDate(employee.lastSeenAt))}</p>
-      </div>
-      <div class="row-actions">
-        <button class="ghost-button" type="button" data-employee-action="reset-pin" data-employee-id="${escapeHtml(employee.id)}">${icon("key")} Reset PIN</button>
-        <button class="ghost-button ${employee.active ? "danger-text" : ""}" type="button" data-employee-action="${employee.active ? "revoke" : "restore"}" data-employee-id="${escapeHtml(employee.id)}">
-          ${employee.active ? icon("userX") + " Revoke" : icon("userCheck") + " Restore"}
-        </button>
-      </div>
-    </article>
-  `;
-}
-
-function eventLabel(type) {
-  return {
-    employee_created: "Employee created",
-    employee_restored: "Access restored",
-    employee_revoked: "Access revoked",
-    login: "Employee login",
-    login_failed: "Failed login",
-    logout: "Employee logout",
-    pin_reset: "PIN reset"
-  }[type] || "Employee activity";
-}
-
-function renderActivityPanel() {
-  return `
-    <section class="tool-panel">
-      <div class="panel-title">
-        <div>
-          <p class="eyebrow">${icon("activity")} Activity</p>
-          <h2>Employee access log</h2>
-        </div>
-      </div>
-      <div class="activity-list">
-        ${
-          state.events.length
-            ? state.events
-                .map(
-                  (event) => `
-                    <div class="activity-row ${event.success ? "" : "failed"}">
-                      <div>
-                        <strong>${escapeHtml(eventLabel(event.type))}</strong>
-                        <p>${escapeHtml(event.employeeName)}${event.username ? ` (@${escapeHtml(event.username)})` : ""}</p>
-                      </div>
-                      <span>${escapeHtml(formatDate(event.createdAt))}</span>
-                    </div>
-                  `
-                )
-                .join("")
-            : '<div class="empty-state small">No employee activity yet.</div>'
-        }
+        <a class="employee-link" href="/employee">${escapeHtml(employeeLink)}</a>
       </div>
     </section>
   `;
 }
 
 function renderAdmin() {
-  if (!state.adminAuthed) return renderAuth();
-
   const weather = state.weather || defaultWeather();
   const activeCount = state.posts.filter((post) => !isExpired(post)).length;
   const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
@@ -629,7 +394,6 @@ function renderAdmin() {
           <nav class="admin-nav" aria-label="Admin actions">
             <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee board</button>
             <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
-            <button class="ghost-button" type="button" data-logout>${icon("logOut")} Sign out</button>
           </nav>
         </aside>
 
@@ -643,6 +407,7 @@ function renderAdmin() {
 
           <section class="tool-grid">
             ${renderBrandingPanel()}
+            ${renderEmployeeSharePanel()}
           </section>
 
           <section class="tool-grid">
@@ -779,37 +544,11 @@ async function hydrateRoute() {
   const route = currentRoute();
 
   if (route === "admin") {
-    await restoreAdminSession();
-    if (state.adminAuthed) await refreshAdminData();
+    await refreshAdminData();
     return;
   }
 
   await loadBoard();
-}
-
-function syncPresenceTimer() {
-  if (presenceTimer) {
-    window.clearInterval(presenceTimer);
-    presenceTimer = null;
-  }
-
-  if (!state.employeeAuthed || currentRoute() !== "employee") return;
-
-  sendPresence();
-  presenceTimer = window.setInterval(sendPresence, 60_000);
-}
-
-async function sendPresence() {
-  if (!state.employeeAuthed || !employeeSession()) return;
-
-  try {
-    const result = await requestJson("/api/employee/presence", { method: "POST" });
-    state.employee = result.employee || state.employee;
-    if (state.employee) writeSessionJson(EMPLOYEE_PROFILE_KEY, state.employee);
-  } catch {
-    clearEmployeeSession();
-    render();
-  }
 }
 
 function render() {
@@ -820,68 +559,6 @@ function render() {
     : route === "admin"
       ? renderAdmin()
       : renderEmployee();
-  syncPresenceTimer();
-}
-
-async function handleLogin(event) {
-  event.preventDefault();
-  const form = event.target;
-  const pin = String(new FormData(form).get("pin") || "").trim();
-
-  if (!pin) {
-    setMessage("Enter the HR PIN.");
-    render();
-    return;
-  }
-
-  sessionStorage.setItem(ADMIN_PIN_KEY, pin);
-
-  try {
-    const result = await requestJson("/api/admin/check");
-    state.adminAuthed = true;
-    if (result.settings) applySettings(result.settings);
-    setMessage("");
-  } catch (error) {
-    sessionStorage.removeItem(ADMIN_PIN_KEY);
-    state.adminAuthed = false;
-    setMessage(error.message || "That HR PIN did not work.");
-    render();
-    return;
-  }
-
-  render();
-
-  try {
-    await refreshAdminData();
-  } catch (error) {
-    setMessage(error.message || "Signed in, but dashboard data could not load. Tap Refresh.");
-  }
-
-  render();
-}
-
-async function handleEmployeeLogin(event) {
-  event.preventDefault();
-  const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
-
-  try {
-    const result = await requestJson("/api/employee/login", {
-      method: "POST",
-      body: JSON.stringify(data)
-    });
-    sessionStorage.setItem(EMPLOYEE_SESSION_KEY, result.sessionToken);
-    writeSessionJson(EMPLOYEE_PROFILE_KEY, result.employee);
-    state.employeeAuthed = true;
-    state.employee = result.employee;
-    await loadBoard();
-    setMessage("");
-  } catch (error) {
-    clearEmployeeSession();
-    setMessage(error.message || "Could not sign in.");
-  }
-
-  render();
 }
 
 async function createPost(payload) {
@@ -957,106 +634,12 @@ async function handleBrandingSubmit(event) {
   clearMessageSoon();
 }
 
-async function handleEmployeeSubmit(event) {
-  event.preventDefault();
-  const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
-
-  try {
-    await requestJson("/api/admin/employees", {
-      method: "POST",
-      body: JSON.stringify(data)
-    });
-    form.reset();
-    await loadAdminControls();
-    setMessage("Employee access created.", "success");
-  } catch (error) {
-    setMessage(error.message || "Could not create employee access.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
-async function updateEmployeeAccess(id, payload) {
-  await requestJson(`/api/admin/employees/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload)
-  });
-  await loadAdminControls();
-}
-
-async function handleEmployeeAction(button) {
-  const employee = state.employees.find((candidate) => candidate.id === button.dataset.employeeId);
-  if (!employee) return;
-
-  try {
-    if (button.dataset.employeeAction === "reset-pin") {
-      const pin = window.prompt(`New PIN for ${employee.name}`);
-      if (!pin) return;
-      await updateEmployeeAccess(employee.id, { pin });
-      setMessage("PIN reset.", "success");
-    }
-
-    if (button.dataset.employeeAction === "revoke") {
-      if (!window.confirm(`Revoke employee board access for ${employee.name}?`)) return;
-      await updateEmployeeAccess(employee.id, { active: false });
-      setMessage("Access revoked.", "success");
-    }
-
-    if (button.dataset.employeeAction === "restore") {
-      await updateEmployeeAccess(employee.id, { active: true });
-      setMessage("Access restored.", "success");
-    }
-  } catch (error) {
-    setMessage(error.message || "Could not update employee access.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
-async function employeeLogout() {
-  try {
-    await requestJson("/api/employee/logout", { method: "POST" });
-  } catch {
-    // The local session still needs to be cleared if the server is unavailable.
-  }
-
-  clearEmployeeSession();
-  setMessage("");
-  render();
-}
-
 app.addEventListener("click", async (event) => {
   if (event.target.closest("input, select, textarea, label")) return;
 
   const routeButton = event.target.closest("[data-route]");
   const filterButton = event.target.closest("[data-filter]");
   const deleteButton = event.target.closest("[data-delete-post]");
-  const employeeAction = event.target.closest("[data-employee-action]");
-  const pinDigitButton = event.target.closest("[data-pin-digit]");
-  const pinBackspaceButton = event.target.closest("[data-pin-backspace]");
-  const pinClearButton = event.target.closest("[data-pin-clear]");
-
-  if (pinDigitButton || pinBackspaceButton || pinClearButton) {
-    const pinInput = document.querySelector("#employee-pin");
-    if (!pinInput) return;
-
-    if (pinDigitButton && pinInput.value.length < 12) {
-      pinInput.value += pinDigitButton.dataset.pinDigit;
-    }
-
-    if (pinBackspaceButton) {
-      pinInput.value = pinInput.value.slice(0, -1);
-    }
-
-    if (pinClearButton) {
-      pinInput.value = "";
-    }
-
-    return;
-  }
 
   if (routeButton) {
     await routeTo(routeButton.dataset.route);
@@ -1075,27 +658,6 @@ app.addEventListener("click", async (event) => {
     return;
   }
 
-  if (event.target.closest("[data-logout]")) {
-    sessionStorage.removeItem(ADMIN_PIN_KEY);
-    state.adminAuthed = false;
-    state.posts = [];
-    state.employees = [];
-    state.events = [];
-    setMessage("");
-    render();
-    return;
-  }
-
-  if (event.target.closest("[data-employee-logout]")) {
-    await employeeLogout();
-    return;
-  }
-
-  if (employeeAction) {
-    await handleEmployeeAction(employeeAction);
-    return;
-  }
-
   if (deleteButton) {
     try {
       await deletePost(deleteButton.dataset.deletePost);
@@ -1110,16 +672,6 @@ app.addEventListener("click", async (event) => {
 });
 
 app.addEventListener("submit", async (event) => {
-  if (event.target.matches("[data-login-form]")) {
-    await handleLogin(event);
-    return;
-  }
-
-  if (event.target.matches("[data-employee-login-form]")) {
-    await handleEmployeeLogin(event);
-    return;
-  }
-
   if (event.target.matches("[data-post-form]")) {
     await handlePostSubmit(event);
     return;
@@ -1132,11 +684,6 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-branding-form]")) {
     await handleBrandingSubmit(event);
-    return;
-  }
-
-  if (event.target.matches("[data-employee-form]")) {
-    await handleEmployeeSubmit(event);
   }
 });
 
@@ -1148,10 +695,6 @@ window.addEventListener("hashchange", async () => {
 window.addEventListener("popstate", async () => {
   await hydrateRoute();
   render();
-});
-
-window.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") sendPresence();
 });
 
 if ("serviceWorker" in navigator) {

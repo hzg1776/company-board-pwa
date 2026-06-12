@@ -10,16 +10,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
-const isProduction = process.env.NODE_ENV === "production";
-const ADMIN_PIN = process.env.HR_PIN || (isProduction ? "" : "2468");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
 const DATA_DIR = path.dirname(DATA_FILE);
 const MAX_BODY_BYTES = 1_000_000;
-const EMPLOYEE_SESSION_DAYS = 14;
-const EMPLOYEE_ONLINE_WINDOW_MS = 5 * 60 * 1000;
-const MAX_EMPLOYEE_EVENTS = 250;
-const MAX_EMPLOYEE_SESSIONS = 1_000;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
@@ -38,12 +32,6 @@ let writeQueue = Promise.resolve();
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function daysFromNowIso(days) {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString();
 }
 
 function defaultSettings() {
@@ -103,10 +91,7 @@ function createSeedData() {
       impact: "Wet floors possible near entrances. Use mats and cones where needed.",
       level: "Watch",
       updatedAt: now
-    },
-    employees: [],
-    employeeSessions: [],
-    employeeEvents: []
+    }
   };
 }
 
@@ -149,51 +134,6 @@ function normalizeDataShape(data) {
   if (!Array.isArray(data.posts)) data.posts = [];
   if (!data.weather) data.weather = seed.weather;
   data.settings = normalizeSettings(data.settings || {});
-  if (!Array.isArray(data.employees)) data.employees = [];
-  if (!Array.isArray(data.employeeSessions)) data.employeeSessions = [];
-  if (!Array.isArray(data.employeeEvents)) data.employeeEvents = [];
-
-  data.employees = data.employees.map((employee) => ({
-    id: cleanText(employee.id, 80) || crypto.randomUUID(),
-    name: cleanText(employee.name, 80) || "Employee",
-    username: cleanUsername(employee.username || employee.id || employee.name || "employee"),
-    department: cleanText(employee.department, 80),
-    active: employee.active !== false,
-    pinHash: cleanText(employee.pinHash, 200),
-    createdAt: employee.createdAt || nowIso(),
-    updatedAt: employee.updatedAt || employee.createdAt || nowIso(),
-    revokedAt: employee.revokedAt || "",
-    lastLoginAt: employee.lastLoginAt || "",
-    lastSeenAt: employee.lastSeenAt || ""
-  }));
-
-  data.employeeSessions = data.employeeSessions
-    .filter((session) => session && typeof session === "object")
-    .map((session) => ({
-      id: cleanText(session.id, 80) || crypto.randomUUID(),
-      employeeId: cleanText(session.employeeId, 80),
-      tokenHash: cleanText(session.tokenHash, 100),
-      createdAt: session.createdAt || nowIso(),
-      expiresAt: session.expiresAt || daysFromNowIso(EMPLOYEE_SESSION_DAYS),
-      lastSeenAt: session.lastSeenAt || session.createdAt || nowIso(),
-      revokedAt: session.revokedAt || "",
-      device: cleanText(session.device, 160)
-    }))
-    .slice(0, MAX_EMPLOYEE_SESSIONS);
-
-  data.employeeEvents = data.employeeEvents
-    .filter((event) => event && typeof event === "object")
-    .map((event) => ({
-      id: cleanText(event.id, 80) || crypto.randomUUID(),
-      type: cleanText(event.type, 40) || "event",
-      success: event.success !== false,
-      employeeId: cleanText(event.employeeId, 80),
-      employeeName: cleanText(event.employeeName, 80) || "Unknown",
-      username: cleanText(event.username, 40),
-      createdAt: event.createdAt || nowIso(),
-      device: cleanText(event.device, 160)
-    }))
-    .slice(0, MAX_EMPLOYEE_EVENTS);
 
   return data;
 }
@@ -286,17 +226,11 @@ function apiError(message, statusCode = 400) {
   return error;
 }
 
-function hasAdminAccess(req) {
-  const providedPin = req.headers["x-admin-pin"];
-  return typeof providedPin === "string" && providedPin === ADMIN_PIN;
+function hasAdminAccess() {
+  return true;
 }
 
-function requireAdmin(req, res) {
-  if (!hasAdminAccess(req)) {
-    sendError(res, 401, "Invalid HR PIN.");
-    return false;
-  }
-
+function requireAdmin() {
   return true;
 }
 
@@ -313,150 +247,6 @@ function cleanLongText(value, maxLength) {
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, maxLength);
-}
-
-function cleanUsername(value) {
-  const username = String(value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, ".")
-    .replace(/^[._-]+|[._-]+$/g, "")
-    .replace(/[._-]{2,}/g, ".")
-    .slice(0, 32);
-
-  return username || "employee";
-}
-
-function uniqueUsername(baseUsername, employees, currentEmployeeId = "") {
-  const base = cleanUsername(baseUsername);
-  const used = new Set(
-    employees
-      .filter((employee) => employee.id !== currentEmployeeId)
-      .map((employee) => cleanUsername(employee.username))
-  );
-
-  if (!used.has(base)) return base;
-
-  for (let index = 2; index < 10_000; index += 1) {
-    const candidate = `${base}.${index}`.slice(0, 32);
-    if (!used.has(candidate)) return candidate;
-  }
-
-  return `${base}.${crypto.randomUUID().slice(0, 6)}`.slice(0, 32);
-}
-
-function cleanPin(value) {
-  const pin = String(value ?? "").trim();
-  if (!/^\d{4,12}$/.test(pin)) {
-    throw apiError("Employee PIN must be 4 to 12 numbers.");
-  }
-
-  return pin;
-}
-
-function createPinHash(pin) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(pin, salt, 32).toString("hex");
-  return `scrypt:${salt}:${hash}`;
-}
-
-function verifyPin(pin, pinHash) {
-  const parts = String(pinHash || "").split(":");
-  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
-
-  const [, salt, expectedHash] = parts;
-  const actualHash = crypto.scryptSync(String(pin ?? ""), salt, 32);
-  const expected = Buffer.from(expectedHash, "hex");
-
-  return expected.length === actualHash.length && crypto.timingSafeEqual(actualHash, expected);
-}
-
-function hashSessionToken(token) {
-  return crypto.createHash("sha256").update(String(token)).digest("hex");
-}
-
-function clientDevice(req) {
-  return cleanText(req.headers["user-agent"], 160) || "Unknown device";
-}
-
-function isExpiredSession(session) {
-  return Boolean(session.revokedAt) || new Date(session.expiresAt) <= new Date();
-}
-
-function isEmployeeOnline(employee) {
-  if (!employee.lastSeenAt) return false;
-  return Date.now() - new Date(employee.lastSeenAt).getTime() <= EMPLOYEE_ONLINE_WINDOW_MS;
-}
-
-function addEmployeeEvent(data, event) {
-  data.employeeEvents.unshift({
-    id: crypto.randomUUID(),
-    type: event.type,
-    success: event.success !== false,
-    employeeId: event.employeeId || "",
-    employeeName: event.employeeName || "Unknown",
-    username: event.username || "",
-    createdAt: nowIso(),
-    device: event.device || ""
-  });
-
-  data.employeeEvents = data.employeeEvents.slice(0, MAX_EMPLOYEE_EVENTS);
-}
-
-function sanitizeEmployee(employee, data) {
-  const activeSessions = data.employeeSessions.filter(
-    (session) => session.employeeId === employee.id && !isExpiredSession(session)
-  );
-
-  return {
-    id: employee.id,
-    name: employee.name,
-    username: employee.username,
-    department: employee.department,
-    active: employee.active,
-    createdAt: employee.createdAt,
-    updatedAt: employee.updatedAt,
-    revokedAt: employee.revokedAt,
-    lastLoginAt: employee.lastLoginAt,
-    lastSeenAt: employee.lastSeenAt,
-    online: employee.active && isEmployeeOnline(employee),
-    activeSessions: activeSessions.length
-  };
-}
-
-function findEmployeeByIdentifier(data, identifier) {
-  const cleanIdentifier = cleanUsername(identifier);
-  const rawIdentifier = cleanText(identifier, 80).toLowerCase();
-
-  return data.employees.find(
-    (employee) =>
-      cleanUsername(employee.username) === cleanIdentifier ||
-      String(employee.id).toLowerCase() === rawIdentifier ||
-      String(employee.name).toLowerCase() === rawIdentifier
-  );
-}
-
-function employeeSessionFromRequest(req, data) {
-  const token = req.headers["x-employee-session"];
-  if (typeof token !== "string" || !token) return null;
-
-  const tokenHash = hashSessionToken(token);
-  const session = data.employeeSessions.find((candidate) => candidate.tokenHash === tokenHash);
-  if (!session || isExpiredSession(session)) return null;
-
-  const employee = data.employees.find((candidate) => candidate.id === session.employeeId);
-  if (!employee || !employee.active) return null;
-
-  return { employee, session };
-}
-
-function requireBoardAccess(req, res, data) {
-  if (hasAdminAccess(req)) return { type: "admin" };
-
-  const session = employeeSessionFromRequest(req, data);
-  if (session) return { type: "employee", ...session };
-
-  sendError(res, 401, "Employee sign-in is required.");
-  return null;
 }
 
 async function readJsonBody(req) {
@@ -525,60 +315,6 @@ function normalizeWeather(input) {
   };
 }
 
-function normalizeEmployeeCreate(input, employees) {
-  const name = cleanText(input.name, 80);
-  const department = cleanText(input.department, 80);
-  const username = uniqueUsername(input.username || name, employees);
-  const pin = cleanPin(input.pin);
-  const now = nowIso();
-
-  if (!name) throw apiError("Employee name is required.");
-
-  return {
-    id: crypto.randomUUID(),
-    name,
-    username,
-    department,
-    active: true,
-    pinHash: createPinHash(pin),
-    createdAt: now,
-    updatedAt: now,
-    revokedAt: "",
-    lastLoginAt: "",
-    lastSeenAt: ""
-  };
-}
-
-function updateEmployeeFromInput(employee, input, employees) {
-  const now = nowIso();
-
-  if (Object.hasOwn(input, "name")) {
-    const name = cleanText(input.name, 80);
-    if (!name) throw apiError("Employee name is required.");
-    employee.name = name;
-  }
-
-  if (Object.hasOwn(input, "username")) {
-    employee.username = uniqueUsername(input.username || employee.username, employees, employee.id);
-  }
-
-  if (Object.hasOwn(input, "department")) {
-    employee.department = cleanText(input.department, 80);
-  }
-
-  if (Object.hasOwn(input, "pin") && String(input.pin ?? "").trim()) {
-    employee.pinHash = createPinHash(cleanPin(input.pin));
-  }
-
-  if (Object.hasOwn(input, "active")) {
-    employee.active = Boolean(input.active);
-    employee.revokedAt = employee.active ? "" : now;
-  }
-
-  employee.updatedAt = now;
-  return employee;
-}
-
 function sortedPosts(posts) {
   return [...posts].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
@@ -613,216 +349,6 @@ async function handleApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
       const data = await readData();
       sendJson(res, 200, { ok: true, settings: data.settings });
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/admin/employees") {
-      if (!requireAdmin(req, res)) return;
-
-      const data = await readData();
-      sendJson(res, 200, {
-        employees: data.employees
-          .map((employee) => sanitizeEmployee(employee, data))
-          .sort((a, b) => a.name.localeCompare(b.name)),
-        events: data.employeeEvents.slice(0, 60)
-      });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/admin/employees") {
-      if (!requireAdmin(req, res)) return;
-
-      const body = await readJsonBody(req);
-      const employee = await updateData((data) => {
-        const created = normalizeEmployeeCreate(body, data.employees);
-        data.employees.push(created);
-        addEmployeeEvent(data, {
-          type: "employee_created",
-          employeeId: created.id,
-          employeeName: created.name,
-          username: created.username,
-          device: clientDevice(req)
-        });
-        return sanitizeEmployee(created, data);
-      });
-
-      sendJson(res, 201, { employee });
-      return;
-    }
-
-    const employeeAdminMatch = url.pathname.match(/^\/api\/admin\/employees\/([^/]+)$/);
-    if (req.method === "PATCH" && employeeAdminMatch) {
-      if (!requireAdmin(req, res)) return;
-
-      const id = decodeURIComponent(employeeAdminMatch[1]);
-      const body = await readJsonBody(req);
-      const result = await updateData((data) => {
-        const employee = data.employees.find((candidate) => candidate.id === id);
-        if (!employee) return null;
-
-        const wasActive = employee.active;
-        const hadPinReset = Object.hasOwn(body, "pin") && String(body.pin ?? "").trim();
-        updateEmployeeFromInput(employee, body, data.employees);
-
-        if (!employee.active) {
-          for (const session of data.employeeSessions) {
-            if (session.employeeId === employee.id && !session.revokedAt) {
-              session.revokedAt = nowIso();
-            }
-          }
-        }
-
-        if (wasActive !== employee.active) {
-          addEmployeeEvent(data, {
-            type: employee.active ? "employee_restored" : "employee_revoked",
-            employeeId: employee.id,
-            employeeName: employee.name,
-            username: employee.username,
-            device: clientDevice(req)
-          });
-        } else if (hadPinReset) {
-          addEmployeeEvent(data, {
-            type: "pin_reset",
-            employeeId: employee.id,
-            employeeName: employee.name,
-            username: employee.username,
-            device: clientDevice(req)
-          });
-        }
-
-        return sanitizeEmployee(employee, data);
-      });
-
-      if (!result) {
-        sendError(res, 404, "Employee not found.");
-        return;
-      }
-
-      sendJson(res, 200, { employee: result });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/employee/login") {
-      const body = await readJsonBody(req);
-      const identifier = cleanText(body.identifier, 80);
-      const pin = String(body.pin ?? "").trim();
-
-      const result = await updateData((data) => {
-        const employee = findEmployeeByIdentifier(data, identifier);
-        const failedResult = (message, statusCode, eventEmployee = employee) => {
-          addEmployeeEvent(data, {
-            type: "login_failed",
-            success: false,
-            employeeId: eventEmployee?.id || "",
-            employeeName: eventEmployee?.name || identifier || "Unknown",
-            username: eventEmployee?.username || cleanUsername(identifier),
-            device: clientDevice(req)
-          });
-          return { error: message, statusCode };
-        };
-
-        if (!identifier || !pin || !employee || !verifyPin(pin, employee.pinHash)) {
-          return failedResult("Invalid employee ID or PIN.", 401);
-        }
-
-        if (!employee.active) {
-          return failedResult("This employee access has been revoked.", 403, employee);
-        }
-
-        const now = nowIso();
-        const sessionToken = crypto.randomBytes(32).toString("base64url");
-        const session = {
-          id: crypto.randomUUID(),
-          employeeId: employee.id,
-          tokenHash: hashSessionToken(sessionToken),
-          createdAt: now,
-          expiresAt: daysFromNowIso(EMPLOYEE_SESSION_DAYS),
-          lastSeenAt: now,
-          revokedAt: "",
-          device: clientDevice(req)
-        };
-
-        employee.lastLoginAt = now;
-        employee.lastSeenAt = now;
-        employee.updatedAt = now;
-        data.employeeSessions.unshift(session);
-        data.employeeSessions = data.employeeSessions.slice(0, MAX_EMPLOYEE_SESSIONS);
-        addEmployeeEvent(data, {
-          type: "login",
-          employeeId: employee.id,
-          employeeName: employee.name,
-          username: employee.username,
-          device: session.device
-        });
-
-        return {
-          sessionToken,
-          employee: sanitizeEmployee(employee, data)
-        };
-      });
-
-      if (result.error) {
-        sendError(res, result.statusCode, result.error);
-        return;
-      }
-
-      sendJson(res, 200, result);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/employee/check") {
-      const data = await readData();
-      const session = employeeSessionFromRequest(req, data);
-
-      if (!session) {
-        sendError(res, 401, "Employee sign-in is required.");
-        return;
-      }
-
-      sendJson(res, 200, { employee: sanitizeEmployee(session.employee, data) });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/employee/presence") {
-      const result = await updateData((data) => {
-        const auth = employeeSessionFromRequest(req, data);
-        if (!auth) return { error: "Employee sign-in is required.", statusCode: 401 };
-
-        const now = nowIso();
-        auth.session.lastSeenAt = now;
-        auth.employee.lastSeenAt = now;
-        auth.employee.updatedAt = now;
-
-        return { employee: sanitizeEmployee(auth.employee, data) };
-      });
-
-      if (result.error) {
-        sendError(res, result.statusCode, result.error);
-        return;
-      }
-
-      sendJson(res, 200, result);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/employee/logout") {
-      const result = await updateData((data) => {
-        const auth = employeeSessionFromRequest(req, data);
-        if (!auth) return { ok: true };
-
-        auth.session.revokedAt = nowIso();
-        addEmployeeEvent(data, {
-          type: "logout",
-          employeeId: auth.employee.id,
-          employeeName: auth.employee.name,
-          username: auth.employee.username,
-          device: auth.session.device || clientDevice(req)
-        });
-
-        return { ok: true };
-      });
-
-      sendJson(res, 200, result);
       return;
     }
 
@@ -960,14 +486,6 @@ const server = http.createServer(async (req, res) => {
 
 await ensureDataFile();
 
-if (!ADMIN_PIN) {
-  console.error("HR_PIN is required when NODE_ENV=production.");
-  process.exit(1);
-}
-
 server.listen(PORT, () => {
   console.log(`Company Board running at http://localhost:${PORT}`);
-  if (!isProduction) {
-    console.log("Default HR PIN is 2468. Set HR_PIN before production use.");
-  }
 });

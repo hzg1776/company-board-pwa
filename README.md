@@ -5,7 +5,7 @@ An installable company communication app for HR news, weather, safety notices, s
 ## What This Is
 
 - Employees open the board from any modern phone browser and can install it to their home screen.
-- HR signs into a simple dashboard and publishes updates.
+- HR opens a simple dashboard and publishes updates.
 - Employee mode is read-only.
 - HR can customize the company name, logo URL, and board colors from the dashboard.
 - The MVP uses a small Node server and a JSON data file, so it runs without paid services.
@@ -26,19 +26,6 @@ Clean phone-friendly routes also work:
 - Employee portal: http://localhost:3000/employee
 - HR dashboard: http://localhost:3000/admin
 
-Default local HR PIN:
-
-```text
-2468
-```
-
-Set a real PIN before any real deployment:
-
-```powershell
-$env:HR_PIN="change-this-pin"
-npm start
-```
-
 ## Free Render Demo Deployment
 
 This repo includes `render.yaml` for Render's free web service path.
@@ -47,14 +34,13 @@ This repo includes `render.yaml` for Render's free web service path.
 2. In Render, choose **New > Blueprint**.
 3. Select the GitHub repository.
 4. Render will read `render.yaml`.
-5. When prompted for `HR_PIN`, enter a private PIN for HR.
-6. Click **Apply**.
+5. Click **Apply**.
 
 Render will provide a public HTTPS URL. Employees can open that URL on iPhone or Android and add it to their home screen.
 
-After deploy, HR should open `/admin`, sign in, and have employees scan the QR code on the HR login page. Employees will go straight to the read-only board.
+After deploy, HR should open `/admin` to publish updates and manage branding. Employees should open `/employee` to see the read-only board.
 
-Important: this first Render setup is a demo deployment. It stores updates in `data/board.json`, which is not the right storage model for production hosting. When you approve the demo, upgrade storage to Supabase, Cloudflare D1, or another managed database before real company use.
+Important: this first Render setup is a demo deployment. The HR dashboard is intentionally open, and updates are stored in `data/board.json`, which is not the right storage model for production hosting. When you approve the demo, add real HR login and upgrade storage to Supabase, Cloudflare D1, or another managed database before real company use.
 
 ## Phone Install Notes
 
@@ -79,7 +65,7 @@ Recommended low-cost hosting path:
 
 ## Production Upgrade Checklist
 
-- Replace HR PIN access with real HR login.
+- Add real HR login before production company use.
 - Move `data/board.json` to a database.
 - Add push notifications for urgent alerts.
 - Add image/file attachments.
