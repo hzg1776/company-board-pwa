@@ -620,7 +620,8 @@ svg {
   grid-column: 1 / -1;
 }
 
-.field span {
+.field span,
+.field label {
   font-size: 0.82rem;
 }
 
@@ -635,6 +636,9 @@ svg {
   color: var(--ink);
   padding: 10px 12px;
   outline: 0;
+  pointer-events: auto;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .field textarea {

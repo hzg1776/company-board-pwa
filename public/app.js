@@ -340,14 +340,14 @@ function renderEmployeeAuth() {
         ${brandBlock("Employee access")}
         <h2>Employee sign in</h2>
         <form data-employee-login-form>
-          <label class="field full">
-            <span>Employee ID</span>
-            <input name="identifier" autocomplete="username" required placeholder="Example: j.smith">
-          </label>
-          <label class="field full">
-            <span>PIN</span>
-            <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" required>
-          </label>
+          <div class="field full">
+            <label for="employee-identifier">Employee ID</label>
+            <input id="employee-identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" enterkeyhint="next" required placeholder="Example: j.smith">
+          </div>
+          <div class="field full">
+            <label for="employee-pin">PIN</label>
+            <input id="employee-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required placeholder="Numbers only">
+          </div>
           <div class="form-actions">
             <button class="ghost-button" type="button" data-route="admin">${icon("lock")} HR admin</button>
             <button class="button" type="submit">${icon("key")} View board</button>
@@ -433,10 +433,10 @@ function renderAuth() {
         ${brandBlock("HR publishing")}
         <h2>HR access</h2>
         <form data-login-form>
-          <label class="field full">
-            <span>PIN</span>
-            <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" required>
-          </label>
+          <div class="field full">
+            <label for="hr-pin">PIN</label>
+            <input id="hr-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required>
+          </div>
           <div class="form-actions">
             <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee login</button>
             <button class="button" type="submit">${icon("lock")} Unlock</button>
@@ -528,7 +528,7 @@ function renderEmployeeAccessPanel() {
           </label>
           <label class="field">
             <span>PIN</span>
-            <input name="pin" type="password" inputmode="numeric" minlength="4" maxlength="12" required placeholder="4-12 numbers">
+            <input name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" minlength="4" maxlength="12" required placeholder="4-12 numbers">
           </label>
           <label class="field">
             <span>Department</span>
