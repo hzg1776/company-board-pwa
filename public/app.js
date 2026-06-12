@@ -342,11 +342,19 @@ function renderEmployeeAuth() {
         <form data-employee-login-form>
           <div class="field full">
             <label for="employee-identifier">Employee ID</label>
-            <input id="employee-identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" enterkeyhint="next" required placeholder="Example: j.smith">
+            <input id="employee-identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" enterkeyhint="next" required value="owner" placeholder="Example: j.smith">
           </div>
           <div class="field full">
             <label for="employee-pin">PIN</label>
             <input id="employee-pin" name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go" required placeholder="Numbers only">
+          </div>
+          <div class="pin-pad" aria-label="PIN keypad">
+            ${["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+              .map((digit) => `<button class="pin-key" type="button" data-pin-digit="${digit}">${digit}</button>`)
+              .join("")}
+            <button class="pin-key muted" type="button" data-pin-clear>Clear</button>
+            <button class="pin-key" type="button" data-pin-digit="0">0</button>
+            <button class="pin-key muted" type="button" data-pin-backspace>Back</button>
           </div>
           <div class="form-actions">
             <button class="ghost-button" type="button" data-route="admin">${icon("lock")} HR admin</button>
@@ -1033,6 +1041,28 @@ app.addEventListener("click", async (event) => {
   const filterButton = event.target.closest("[data-filter]");
   const deleteButton = event.target.closest("[data-delete-post]");
   const employeeAction = event.target.closest("[data-employee-action]");
+  const pinDigitButton = event.target.closest("[data-pin-digit]");
+  const pinBackspaceButton = event.target.closest("[data-pin-backspace]");
+  const pinClearButton = event.target.closest("[data-pin-clear]");
+
+  if (pinDigitButton || pinBackspaceButton || pinClearButton) {
+    const pinInput = document.querySelector("#employee-pin");
+    if (!pinInput) return;
+
+    if (pinDigitButton && pinInput.value.length < 12) {
+      pinInput.value += pinDigitButton.dataset.pinDigit;
+    }
+
+    if (pinBackspaceButton) {
+      pinInput.value = pinInput.value.slice(0, -1);
+    }
+
+    if (pinClearButton) {
+      pinInput.value = "";
+    }
+
+    return;
+  }
 
   if (routeButton) {
     await routeTo(routeButton.dataset.route);
