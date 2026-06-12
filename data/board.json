@@ -1,0 +1,44 @@
+{
+  "posts": [
+    {
+      "id": "seed-weather-1",
+      "type": "Weather",
+      "priority": "Important",
+      "title": "Rain expected during evening commute",
+      "body": "Keep walkways clear and use the south entrance if the front lot becomes congested.",
+      "audience": "All employees",
+      "author": "HR",
+      "createdAt": "2026-06-11T13:00:00.000Z",
+      "expiresAt": ""
+    },
+    {
+      "id": "seed-news-1",
+      "type": "News",
+      "priority": "Normal",
+      "title": "Open enrollment reminder",
+      "body": "Benefits selections are due Friday. HR is available from 10:00 AM to 3:00 PM for questions.",
+      "audience": "All employees",
+      "author": "HR",
+      "createdAt": "2026-06-11T13:10:00.000Z",
+      "expiresAt": ""
+    },
+    {
+      "id": "seed-safety-1",
+      "type": "Safety",
+      "priority": "Urgent",
+      "title": "Loading dock inspection today",
+      "body": "Dock 2 is closed from 1:00 PM to 4:00 PM. Use Dock 1 for scheduled deliveries.",
+      "audience": "Operations",
+      "author": "HR",
+      "createdAt": "2026-06-11T13:20:00.000Z",
+      "expiresAt": ""
+    }
+  ],
+  "weather": {
+    "condition": "Light rain",
+    "temperature": "68 F",
+    "impact": "Wet floors possible near entrances. Use mats and cones where needed.",
+    "level": "Watch",
+    "updatedAt": "2026-06-11T13:00:00.000Z"
+  }
+}
