@@ -6,7 +6,6 @@ const EMPLOYEE_PROFILE_KEY = "company-board-employee-profile-v1";
 
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
-let deferredInstallPrompt = null;
 let presenceTimer = null;
 
 const state = {
@@ -32,7 +31,6 @@ const icons = {
   delete: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/>',
   filter: '<path d="M4 5h16"/><path d="M7 12h10"/><path d="M10 19h4"/>',
   home: '<path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/>',
-  install: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
   key: '<path d="M21 2l-2 2"/><path d="m7.5 11.5 5 5"/><circle cx="7.5" cy="16.5" r="5.5"/><path d="m12 12 7-7 3 3-7 7"/>',
   lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   logOut: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
@@ -377,9 +375,6 @@ function renderEmployee() {
       <header class="topbar">
         ${brandBlock(currentDayLabel())}
         <div class="top-actions">
-          <button class="button install-text" type="button" data-install title="Install app">
-            ${icon("install")}<span>Install</span>
-          </button>
           <button class="icon-button" type="button" data-route="admin" title="HR admin">
             ${icon("lock")}
           </button>
@@ -1026,13 +1021,6 @@ async function handleEmployeeAction(button) {
   clearMessageSoon();
 }
 
-async function installApp() {
-  if (!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt = null;
-}
-
 async function employeeLogout() {
   try {
     await requestJson("/api/employee/logout", { method: "POST" });
@@ -1083,11 +1071,6 @@ app.addEventListener("click", async (event) => {
   if (filterButton) {
     activeFilter = filterButton.dataset.filter;
     render();
-    return;
-  }
-
-  if (event.target.closest("[data-install]")) {
-    await installApp();
     return;
   }
 
@@ -1174,12 +1157,6 @@ window.addEventListener("popstate", async () => {
 
 window.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") sendPresence();
-});
-
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-  render();
 });
 
 if ("serviceWorker" in navigator) {
