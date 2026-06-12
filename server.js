@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import QRCode from "qrcode";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -135,6 +136,40 @@ function sendJson(res, statusCode, body) {
 
 function sendError(res, statusCode, message) {
   sendJson(res, statusCode, { error: message });
+}
+
+function appBaseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) {
+    return process.env.PUBLIC_BASE_URL.replace(/\/+$/, "");
+  }
+
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`)
+    .split(",")[0]
+    .trim();
+  const proto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim() || (req.socket.encrypted ? "https" : "http");
+
+  return `${proto}://${host}`;
+}
+
+async function sendEmployeeQr(req, res) {
+  const employeeUrl = `${appBaseUrl(req)}/employee`;
+  const svg = await QRCode.toString(employeeUrl, {
+    type: "svg",
+    margin: 2,
+    width: 320,
+    color: {
+      dark: "#17211f",
+      light: "#fffdf8"
+    }
+  });
+
+  res.writeHead(200, {
+    "Content-Type": "image/svg+xml",
+    "Cache-Control": "no-store"
+  });
+  res.end(svg);
 }
 
 function requireAdmin(req, res) {
@@ -364,6 +399,11 @@ async function serveStatic(req, res, url) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  if (req.method === "GET" && url.pathname === "/employee-qr.svg") {
+    await sendEmployeeQr(req, res);
+    return;
+  }
 
   if (url.pathname.startsWith("/api/")) {
     await handleApi(req, res, url);

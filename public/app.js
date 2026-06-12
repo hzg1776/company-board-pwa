@@ -380,6 +380,8 @@ function renderEmployee() {
 }
 
 function renderAuth() {
+  const employeeLink = `${window.location.origin}/employee`;
+
   return `
     <main class="auth-shell">
       <section class="auth-card">
@@ -402,6 +404,17 @@ function renderAuth() {
           </div>
           <div class="message">${escapeHtml(state.message)}</div>
         </form>
+        <section class="qr-panel" aria-label="Employee portal QR code">
+          <div>
+            <p class="eyebrow">${icon("users")} Employee access</p>
+            <h2>Scan for the board</h2>
+            <p>Employees can scan this code to open the read-only notification board on their phone.</p>
+          </div>
+          <div class="qr-box">
+            <img src="/employee-qr.svg" alt="QR code for employee portal">
+          </div>
+          <a class="employee-link" href="/employee">${escapeHtml(employeeLink)}</a>
+        </section>
       </section>
     </main>
   `;

@@ -440,6 +440,41 @@ svg {
   margin-bottom: 18px;
 }
 
+.qr-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.qr-panel p:not(.eyebrow) {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.qr-box {
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: #fffdf8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.qr-box img {
+  width: min(240px, 100%);
+  height: auto;
+}
+
+.employee-link {
+  color: var(--teal);
+  font-size: 0.86rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .admin-shell {
   width: min(1240px, 100%);
   margin: 0 auto;
