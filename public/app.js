@@ -374,11 +374,6 @@ function renderEmployee() {
     <main class="shell">
       <header class="topbar">
         ${brandBlock(currentDayLabel())}
-        <div class="top-actions">
-          <button class="icon-button" type="button" data-route="admin" title="HR admin">
-            ${icon("lock")}
-          </button>
-        </div>
       </header>
 
       <section class="employee-grid" aria-label="Employee notification board">
