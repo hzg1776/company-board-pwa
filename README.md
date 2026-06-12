@@ -7,8 +7,7 @@ An installable company communication app for HR news, weather, safety notices, s
 - Employees open the board from any modern phone browser and can install it to their home screen.
 - HR opens a simple dashboard and publishes updates.
 - Employee mode is read-only.
-- HR can upload a company logo up to 2 MB and update board naming while the app keeps a fixed Palziv color scheme.
-- Branding is saved on the server, refreshed across admin/employee views, and cached in the browser as a recovery copy.
+- The app uses a fixed board header and Palziv color scheme.
 - The MVP uses a small Node server and a JSON data file, so it runs without paid services.
 
 ## Run Locally
@@ -39,9 +38,9 @@ This repo includes `render.yaml` for Render's free web service path.
 
 Render will provide a public HTTPS URL. Employees can open that URL on iPhone or Android and add it to their home screen.
 
-After deploy, HR should open `/admin` to publish updates and manage branding. Employees should open `/employee` to see the read-only board.
+After deploy, HR should open `/admin` to publish updates. Employees should open `/employee` to see the read-only board.
 
-Important: this first Render setup is a demo deployment. The HR dashboard is intentionally open. Updates are stored in `data/board.json` and branding has a browser-side recovery cache, but Render Free does not provide durable all-device storage through service restarts. When you approve the demo, add real HR login and upgrade storage to Supabase, Cloudflare D1, Render Disk, or another managed database before real company use.
+Important: this first Render setup is a demo deployment. The HR dashboard is intentionally open, and updates are stored in `data/board.json`, which is not durable production storage on Render Free. When you approve the demo, add real HR login and upgrade storage to Supabase, Cloudflare D1, Render Disk, or another managed database before real company use.
 
 ## Phone Install Notes
 
@@ -56,7 +55,7 @@ Recommended low-cost hosting path:
 ## Files
 
 - `server.js`: no-dependency Node server and JSON API.
-- `data/board.json`: current posts, weather status, and branding.
+- `data/board.json`: current posts and weather status.
 - `public/index.html`: PWA entry point.
 - `public/app.js`: employee board and HR dashboard logic.
 - `public/styles.css`: mobile-first UI.

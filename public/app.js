@@ -1,23 +1,13 @@
 const app = document.querySelector("#app");
 
-const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024;
-const SETTINGS_CACHE_KEY = "company-board-settings-v1";
-const allowedLogoTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/svg+xml"]);
-const logoTypeByExtension = new Map([
-  [".png", "image/png"],
-  [".jpg", "image/jpeg"],
-  [".jpeg", "image/jpeg"],
-  [".webp", "image/webp"],
-  [".gif", "image/gif"],
-  [".svg", "image/svg+xml"]
-]);
+const APP_TITLE = "Employee Board";
+const APP_SUBTITLE = "Work updates";
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
 
 const state = {
   posts: [],
   weather: null,
-  settings: defaultSettings(),
   message: "",
   messageType: "",
   loading: true
@@ -37,12 +27,10 @@ const icons = {
   logOut: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
   megaphone: '<path d="m3 11 18-5v12L3 13v-2Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   news: '<path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13Z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/>',
-  palette: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2a10 10 0 0 0 0 20h1.5a2.5 2.5 0 0 0 0-5H12a2 2 0 0 1 0-4h2a8 8 0 0 0 0-16Z"/>',
   refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18 5.3L21 8"/><path d="M21 3v5h-5"/>',
   send: '<path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
-  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
   userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/>',
   userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5"/><path d="m22 8-5 5"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
@@ -50,23 +38,6 @@ const icons = {
 
 function icon(name) {
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.board}</svg>`;
-}
-
-function defaultSettings() {
-  return {
-    companyName: "Palziv Board",
-    boardSubtitle: "Work updates",
-    logoUrl: "/assets/logo.svg",
-    updatedAt: "1970-01-01T00:00:00.000Z",
-    primaryColor: "#002855",
-    accentColor: "#50b2ce",
-    backgroundColor: "#f4f8fb",
-    surfaceColor: "#ffffff",
-    textColor: "#17212b",
-    logoShape: "rounded",
-    cardStyle: "soft",
-    backgroundPattern: "grid"
-  };
 }
 
 function escapeHtml(value) {
@@ -112,47 +83,12 @@ function currentRoute() {
   return "employee";
 }
 
-function hexToRgb(hex) {
-  const clean = String(hex || "").replace("#", "");
-  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
-  return {
-    r: parseInt(clean.slice(0, 2), 16),
-    g: parseInt(clean.slice(2, 4), 16),
-    b: parseInt(clean.slice(4, 6), 16)
-  };
-}
-
-function softColor(hex, alpha) {
-  const rgb = hexToRgb(hex);
-  return rgb ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})` : hex;
-}
-
-function applySettings(settings) {
-  state.settings = { ...defaultSettings(), ...(settings || {}) };
-  const root = document.documentElement;
-  root.style.setProperty("--teal", state.settings.primaryColor);
-  root.style.setProperty("--teal-soft", softColor(state.settings.primaryColor, 0.14));
-  root.style.setProperty("--paper-grid", softColor(state.settings.primaryColor, 0.055));
-  root.style.setProperty("--coral", state.settings.accentColor);
-  root.style.setProperty("--coral-soft", softColor(state.settings.accentColor, 0.14));
-  root.style.setProperty("--paper", state.settings.backgroundColor);
-  root.style.setProperty("--surface", state.settings.surfaceColor);
-  root.style.setProperty("--surface-strong", state.settings.surfaceColor);
-  root.style.setProperty("--ink", state.settings.textColor);
-  root.style.setProperty("--muted", softColor(state.settings.textColor, 0.72));
-  root.dataset.logoShape = state.settings.logoShape;
-  root.dataset.cardStyle = state.settings.cardStyle;
-  root.dataset.backgroundPattern = state.settings.backgroundPattern;
-  document.title = state.settings.companyName || "Palziv Board";
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", state.settings.primaryColor);
-}
-
-function brandBlock(subtitle = state.settings.boardSubtitle) {
+function brandBlock(subtitle = APP_SUBTITLE) {
   return `
     <div class="brand">
-      <img class="brand-mark" src="${escapeHtml(state.settings.logoUrl)}" alt="">
+      <div class="brand-symbol">${icon("board")}</div>
       <div>
-        <h1>${escapeHtml(state.settings.companyName)}</h1>
+        <h1>${escapeHtml(APP_TITLE)}</h1>
         <p>${escapeHtml(subtitle)}</p>
       </div>
     </div>
@@ -175,74 +111,8 @@ async function requestJson(path, options = {}) {
   return body;
 }
 
-function readCachedSettings() {
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function rememberSettings(settings) {
-  try {
-    window.localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify({ ...defaultSettings(), ...(settings || {}) }));
-  } catch {
-    // Private browsing or full storage should not block the live server save.
-  }
-}
-
-function settingsTime(settings) {
-  const timestamp = Date.parse(settings?.updatedAt || "");
-  return Number.isNaN(timestamp) ? 0 : timestamp;
-}
-
-function hasCustomBrand(settings) {
-  if (!settings) return false;
-  const defaults = defaultSettings();
-  return settings.companyName !== defaults.companyName || settings.boardSubtitle !== defaults.boardSubtitle || settings.logoUrl !== defaults.logoUrl;
-}
-
-async function loadSettings() {
-  const cachedSettings = readCachedSettings();
-  if (cachedSettings) {
-    applySettings(cachedSettings);
-  }
-
-  try {
-    const result = await requestJson("/api/settings");
-    const serverSettings = result.settings || defaultSettings();
-
-    if (cachedSettings && hasCustomBrand(cachedSettings) && settingsTime(cachedSettings) > settingsTime(serverSettings)) {
-      applySettings(cachedSettings);
-
-      const repaired = await requestJson("/api/settings", {
-        method: "PUT",
-        body: JSON.stringify(cachedSettings)
-      });
-      applySettings(repaired.settings);
-      rememberSettings(repaired.settings);
-      return repaired.settings;
-    }
-
-    applySettings(serverSettings);
-    rememberSettings(serverSettings);
-    return serverSettings;
-  } catch (error) {
-    if (cachedSettings) {
-      applySettings(cachedSettings);
-      return cachedSettings;
-    }
-
-    throw error;
-  }
-}
-
 async function loadBoard() {
-  const [, postsResult, weatherResult] = await Promise.all([
-    loadSettings(),
+  const [postsResult, weatherResult] = await Promise.all([
     requestJson("/api/posts"),
     requestJson("/api/weather")
   ]);
@@ -398,51 +268,6 @@ function renderEmployee() {
   `;
 }
 
-function renderBrandingPanel() {
-  const settings = state.settings;
-
-  return `
-    <section class="tool-panel">
-      <div class="panel-title">
-        <div>
-          <p class="eyebrow">${icon("palette")} Brand</p>
-          <h2>Company look</h2>
-          <p>Update the logo and board name. Colors stay on the Palziv scheme.</p>
-        </div>
-      </div>
-      <form data-branding-form>
-        <div class="form-grid">
-          <label class="field">
-            <span>Company name</span>
-            <input name="companyName" maxlength="70" value="${escapeHtml(settings.companyName)}" required>
-          </label>
-          <label class="field">
-            <span>Board subtitle</span>
-            <input name="boardSubtitle" maxlength="90" value="${escapeHtml(settings.boardSubtitle)}">
-          </label>
-          <div class="field full">
-            <span>Company logo</span>
-            <div class="logo-dropzone" data-logo-dropzone tabindex="0" role="button" aria-label="Upload company logo">
-              <img data-logo-preview src="${escapeHtml(settings.logoUrl)}" alt="">
-              <div class="logo-dropzone-copy">
-                <strong>Drop logo here</strong>
-                <small>PNG, JPG, WebP, GIF, or SVG up to 2 MB.</small>
-              </div>
-              <label class="ghost-button logo-picker-button" for="brandLogoFile" data-logo-picker>${icon("upload")} Choose</label>
-              <input id="brandLogoFile" class="logo-file-input" data-logo-file type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml">
-              <input data-logo-value type="hidden" name="logoUrl" value="${escapeHtml(settings.logoUrl)}">
-            </div>
-          </div>
-        </div>
-        <div class="form-actions">
-          <button class="button secondary" type="submit">${icon("palette")} Save brand</button>
-        </div>
-        <div class="message ${state.messageType}" data-form-message>${escapeHtml(state.message)}</div>
-      </form>
-    </section>
-  `;
-}
-
 function renderEmployeeSharePanel() {
   const employeeLink = `${window.location.origin}/employee`;
 
@@ -491,7 +316,6 @@ function renderAdmin() {
           </section>
 
           <section class="tool-grid">
-            ${renderBrandingPanel()}
             ${renderEmployeeSharePanel()}
           </section>
 
@@ -618,76 +442,6 @@ function clearMessageSoon() {
   }, 2600);
 }
 
-function showFormMessage(form, message, type = "") {
-  const messageElement = form?.querySelector("[data-form-message]");
-  if (!messageElement) return;
-  messageElement.textContent = message;
-  messageElement.className = `message ${type}`;
-}
-
-function logoMimeType(file) {
-  const fileType = String(file?.type || "").toLowerCase();
-  if (allowedLogoTypes.has(fileType)) return fileType === "image/jpg" ? "image/jpeg" : fileType;
-
-  const fileName = String(file?.name || "").toLowerCase();
-  const extension = fileName.slice(fileName.lastIndexOf("."));
-  return logoTypeByExtension.get(extension) || "";
-}
-
-function readLogoFile(file) {
-  return new Promise((resolve, reject) => {
-    if (!file) {
-      reject(new Error("Choose a logo file."));
-      return;
-    }
-
-    const mimeType = logoMimeType(file);
-    if (!mimeType) {
-      reject(new Error("Use a PNG, JPG, WebP, GIF, or SVG logo."));
-      return;
-    }
-
-    if (file.size > MAX_LOGO_FILE_BYTES) {
-      reject(new Error("Logo must be 2 MB or smaller."));
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const result = String(reader.result || "");
-      const base64Index = result.indexOf("base64,");
-      if (base64Index === -1) {
-        reject(new Error("Could not read that logo file."));
-        return;
-      }
-
-      const base64 = result.slice(base64Index + "base64,".length);
-      resolve(`data:${mimeType};base64,${base64}`);
-    });
-    reader.addEventListener("error", () => reject(new Error("Could not read that logo file.")));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function handleLogoFile(file, form) {
-  if (!form) return;
-
-  try {
-    const logoUrl = await readLogoFile(file);
-    const logoInput = form.querySelector("[data-logo-value]");
-    const logoPreview = form.querySelector("[data-logo-preview]");
-    logoInput.value = logoUrl;
-    logoPreview.src = logoUrl;
-    applySettings({ ...state.settings, logoUrl });
-    document.querySelectorAll(".brand-mark").forEach((image) => {
-      image.src = logoUrl;
-    });
-    showFormMessage(form, "Logo ready. Save brand to publish.", "success");
-  } catch (error) {
-    showFormMessage(form, error.message || "Could not use that logo.");
-  }
-}
-
 async function routeTo(route) {
   const nextPath = route === "admin" ? "/admin" : "/employee";
   window.history.pushState({}, "", nextPath);
@@ -770,42 +524,12 @@ async function handleWeatherSubmit(event) {
   clearMessageSoon();
 }
 
-async function handleBrandingSubmit(event) {
-  event.preventDefault();
-  const form = event.target;
-  const data = Object.fromEntries(new FormData(event.target));
-
-  try {
-    const result = await requestJson("/api/settings", {
-      method: "PUT",
-      body: JSON.stringify(data)
-    });
-    applySettings(result.settings);
-    rememberSettings(result.settings);
-    setMessage("Branding saved.", "success");
-  } catch (error) {
-    setMessage(error.message || "Could not save branding.");
-  }
-
-  render();
-  clearMessageSoon();
-  showFormMessage(form, state.message, state.messageType);
-}
-
 app.addEventListener("click", async (event) => {
   if (event.target.closest("input, select, textarea, label")) return;
 
-  const logoPicker = event.target.closest("[data-logo-picker]");
-  const logoDropzone = event.target.closest("[data-logo-dropzone]");
   const routeButton = event.target.closest("[data-route]");
   const filterButton = event.target.closest("[data-filter]");
   const deleteButton = event.target.closest("[data-delete-post]");
-
-  if (logoPicker || logoDropzone) {
-    const form = event.target.closest("[data-branding-form]");
-    form?.querySelector("[data-logo-file]")?.click();
-    return;
-  }
 
   if (routeButton) {
     await routeTo(routeButton.dataset.route);
@@ -837,41 +561,6 @@ app.addEventListener("click", async (event) => {
   }
 });
 
-app.addEventListener("keydown", (event) => {
-  const logoDropzone = event.target.closest("[data-logo-dropzone]");
-  if (!logoDropzone || (event.key !== "Enter" && event.key !== " ")) return;
-  event.preventDefault();
-  logoDropzone.closest("[data-branding-form]")?.querySelector("[data-logo-file]")?.click();
-});
-
-app.addEventListener("change", async (event) => {
-  if (!event.target.matches("[data-logo-file]")) return;
-  const form = event.target.closest("[data-branding-form]");
-  await handleLogoFile(event.target.files?.[0], form);
-  event.target.value = "";
-});
-
-app.addEventListener("dragover", (event) => {
-  const logoDropzone = event.target.closest("[data-logo-dropzone]");
-  if (!logoDropzone) return;
-  event.preventDefault();
-  logoDropzone.classList.add("is-dragging");
-});
-
-app.addEventListener("dragleave", (event) => {
-  const logoDropzone = event.target.closest("[data-logo-dropzone]");
-  if (!logoDropzone || logoDropzone.contains(event.relatedTarget)) return;
-  logoDropzone.classList.remove("is-dragging");
-});
-
-app.addEventListener("drop", async (event) => {
-  const logoDropzone = event.target.closest("[data-logo-dropzone]");
-  if (!logoDropzone) return;
-  event.preventDefault();
-  logoDropzone.classList.remove("is-dragging");
-  await handleLogoFile(event.dataTransfer?.files?.[0], logoDropzone.closest("[data-branding-form]"));
-});
-
 app.addEventListener("submit", async (event) => {
   if (event.target.matches("[data-post-form]")) {
     await handlePostSubmit(event);
@@ -880,11 +569,6 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-weather-form]")) {
     await handleWeatherSubmit(event);
-    return;
-  }
-
-  if (event.target.matches("[data-branding-form]")) {
-    await handleBrandingSubmit(event);
   }
 });
 

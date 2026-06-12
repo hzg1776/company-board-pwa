@@ -13,8 +13,7 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
 const DATA_DIR = path.dirname(DATA_FILE);
-const MAX_BODY_BYTES = 3_500_000;
-const MAX_LOGO_DATA_URL_CHARS = 3_000_000;
+const MAX_BODY_BYTES = 1_000_000;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
@@ -35,28 +34,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function defaultSettings() {
-  return {
-    companyName: "Palziv Board",
-    boardSubtitle: "Work updates",
-    logoUrl: "/assets/logo.svg",
-    updatedAt: "1970-01-01T00:00:00.000Z",
-    primaryColor: "#002855",
-    accentColor: "#50b2ce",
-    backgroundColor: "#f4f8fb",
-    surfaceColor: "#ffffff",
-    textColor: "#17212b",
-    logoShape: "rounded",
-    cardStyle: "soft",
-    backgroundPattern: "grid"
-  };
-}
-
 function createSeedData() {
   const now = nowIso();
 
   return {
-    settings: defaultSettings(),
     posts: [
       {
         id: "seed-weather-1",
@@ -102,58 +83,13 @@ function createSeedData() {
   };
 }
 
-function cleanLogoUrl(value, fallback = "/assets/logo.svg") {
-  const logoUrl = String(value ?? "").trim();
-  if (!logoUrl) return fallback;
-  if (logoUrl.startsWith("/") && !logoUrl.startsWith("//")) return logoUrl;
-
-  if (logoUrl.startsWith("data:image/")) {
-    const isAllowedImage = /^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,[a-z0-9+/=]+$/i.test(logoUrl);
-    return isAllowedImage && logoUrl.length <= MAX_LOGO_DATA_URL_CHARS ? logoUrl : fallback;
-  }
-
-  try {
-    const parsed = new URL(logoUrl);
-    if (parsed.protocol === "https:" || parsed.protocol === "http:") return logoUrl;
-  } catch {
-    return fallback;
-  }
-
-  return fallback;
-}
-
-function cleanTimestamp(value, fallback = "1970-01-01T00:00:00.000Z") {
-  const timestamp = String(value ?? "").trim();
-  if (!timestamp) return fallback;
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
-}
-
-function normalizeSettings(input = {}) {
-  const defaults = defaultSettings();
-  return {
-    companyName: cleanText(input.companyName || defaults.companyName, 70) || defaults.companyName,
-    boardSubtitle: cleanText(input.boardSubtitle || defaults.boardSubtitle, 90) || defaults.boardSubtitle,
-    logoUrl: cleanLogoUrl(input.logoUrl, defaults.logoUrl),
-    updatedAt: cleanTimestamp(input.updatedAt, defaults.updatedAt),
-    primaryColor: defaults.primaryColor,
-    accentColor: defaults.accentColor,
-    backgroundColor: defaults.backgroundColor,
-    surfaceColor: defaults.surfaceColor,
-    textColor: defaults.textColor,
-    logoShape: defaults.logoShape,
-    cardStyle: defaults.cardStyle,
-    backgroundPattern: defaults.backgroundPattern
-  };
-}
-
 function normalizeDataShape(data) {
   const seed = createSeedData();
 
   if (!data || typeof data !== "object") return seed;
   if (!Array.isArray(data.posts)) data.posts = [];
   if (!data.weather) data.weather = seed.weather;
-  data.settings = normalizeSettings(data.settings || {});
+  delete data.settings;
 
   return data;
 }
@@ -353,32 +289,9 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/settings") {
-      const data = await readData();
-      sendJson(res, 200, { settings: data.settings });
-      return;
-    }
-
-    if (req.method === "PUT" && url.pathname === "/api/settings") {
-      if (!requireAdmin(req, res)) return;
-
-      const body = await readJsonBody(req);
-      const settings = await updateData((data) => {
-        data.settings = {
-          ...normalizeSettings({ ...data.settings, ...body }),
-          updatedAt: nowIso()
-        };
-        return data.settings;
-      });
-
-      sendJson(res, 200, { settings });
-      return;
-    }
-
     if (req.method === "GET" && url.pathname === "/api/admin/check") {
       if (!requireAdmin(req, res)) return;
-      const data = await readData();
-      sendJson(res, 200, { ok: true, settings: data.settings });
+      sendJson(res, 200, { ok: true });
       return;
     }
 
