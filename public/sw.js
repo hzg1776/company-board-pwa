@@ -1,9 +1,9 @@
-const CACHE_NAME = "company-board-v3";
+const CACHE_NAME = "company-board-v5";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=3",
-  "/app.js?v=3",
+  "/styles.css?v=5",
+  "/app.js?v=5",
   "/manifest.webmanifest",
   "/assets/logo.svg"
 ];
@@ -31,17 +31,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
   if (url.pathname.startsWith("/api/")) {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => caches.match(event.request))
-    );
+    event.respondWith(fetch(event.request));
     return;
   }
 

@@ -4,9 +4,11 @@ An installable company communication app for HR news, weather, safety notices, s
 
 ## What This Is
 
-- Employees open the board from any modern phone browser and can install it to their home screen.
+- Employees open the portal from any modern phone browser, sign in with their assigned employee ID and PIN, and can install it to their home screen.
 - HR signs into a simple dashboard and publishes updates.
 - Employee mode is read-only.
+- HR can create employee PINs, reset PINs, revoke employee access, and see recent employee login/page presence.
+- HR can customize the company name, logo URL, and board colors from the dashboard.
 - The MVP uses a small Node server and a JSON data file, so it runs without paid services.
 
 ## Run Locally
@@ -19,6 +21,11 @@ Open:
 
 - Employee board: http://localhost:3000/#employee
 - HR dashboard: http://localhost:3000/#admin
+
+Clean phone-friendly routes also work:
+
+- Employee portal: http://localhost:3000/employee
+- HR dashboard: http://localhost:3000/admin
 
 Default local HR PIN:
 
@@ -46,6 +53,8 @@ This repo includes `render.yaml` for Render's free web service path.
 
 Render will provide a public HTTPS URL. Employees can open that URL on iPhone or Android and add it to their home screen.
 
+After deploy, HR should open `/admin`, sign in, create employee access records, and have employees scan the QR code on the HR login page. Employees must use the employee ID and PIN HR assigns.
+
 Important: this first Render setup is a demo deployment. It stores updates in `data/board.json`, which is not the right storage model for production hosting. When you approve the demo, upgrade storage to Supabase, Cloudflare D1, or another managed database before real company use.
 
 ## Phone Install Notes
@@ -61,7 +70,7 @@ Recommended low-cost hosting path:
 ## Files
 
 - `server.js`: no-dependency Node server and JSON API.
-- `data/board.json`: current posts and weather status.
+- `data/board.json`: current posts, weather status, branding, employee access records, and employee login activity.
 - `public/index.html`: PWA entry point.
 - `public/app.js`: employee board and HR dashboard logic.
 - `public/styles.css`: mobile-first UI.
@@ -71,11 +80,10 @@ Recommended low-cost hosting path:
 
 ## Production Upgrade Checklist
 
-- Replace PIN access with real HR login.
+- Replace HR PIN access with real HR login.
 - Move `data/board.json` to a database.
+- Move employee sessions and audit logs to a database.
 - Add push notifications for urgent alerts.
-- Add company branding per customer.
 - Add image/file attachments.
-- Add audit log for compliance.
 - Add role-based access for HR, safety, managers, and admins.
 - Add weather API integration by location.

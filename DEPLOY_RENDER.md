@@ -30,8 +30,10 @@ These settings are defined in `render.yaml`.
 
 Replace `your-render-url` with the URL Render gives you.
 
-- Employee board: `https://your-render-url.onrender.com/#employee`
-- HR dashboard: `https://your-render-url.onrender.com/#admin`
+- Employee portal: `https://your-render-url.onrender.com/employee`
+- HR dashboard: `https://your-render-url.onrender.com/admin`
+
+HR should create employee access records from the dashboard before employees can view the board.
 
 ## Phone Install
 
@@ -53,6 +55,7 @@ On Android:
 - Updates are stored in a local JSON file.
 - Local JSON storage can reset on redeploy or instance replacement.
 - HR access uses a PIN, not full user accounts.
+- Employee access now uses employee IDs and hashed PINs, but it still needs database storage before real production rollout.
 - Push notifications are not included yet.
 
 ## Production Upgrade After Approval
@@ -61,6 +64,7 @@ Move to:
 
 - Real HR login
 - Database-backed posts
+- Database-backed employees, sessions, and audit logs
 - Audit log
 - Custom company domain
 - Push notifications for urgent alerts

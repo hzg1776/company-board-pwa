@@ -124,6 +124,24 @@ svg {
   gap: 8px;
 }
 
+.employee-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  max-width: 220px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .button,
 .icon-button,
 .ghost-button {
@@ -166,6 +184,10 @@ svg {
   border-color: var(--line);
   color: var(--ink);
   font-weight: 700;
+}
+
+.danger-text {
+  color: var(--coral);
 }
 
 .icon-button {
@@ -582,6 +604,10 @@ svg {
   gap: 12px;
 }
 
+.form-grid.compact-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .field {
   display: grid;
   gap: 7px;
@@ -624,6 +650,11 @@ svg {
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
 }
 
+.field.color-field input {
+  min-height: 48px;
+  padding: 5px;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -634,6 +665,97 @@ svg {
 .post-list {
   display: grid;
   gap: 10px;
+}
+
+.employee-list,
+.activity-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.employee-row,
+.activity-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.employee-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.employee-row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.employee-row strong,
+.activity-row strong {
+  color: var(--ink);
+}
+
+.employee-row p,
+.activity-row p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.status-pill.online {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.status-pill.offline {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.status-pill.revoked {
+  background: var(--coral-soft);
+  color: var(--coral);
+}
+
+.activity-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.activity-row.failed {
+  border-left: 5px solid var(--coral);
+}
+
+.activity-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .post-row {
@@ -675,6 +797,11 @@ svg {
   padding: 24px;
   color: var(--muted);
   text-align: center;
+}
+
+.empty-state.small {
+  min-height: 88px;
+  box-shadow: none;
 }
 
 @media (max-width: 920px) {
@@ -723,6 +850,23 @@ svg {
   .admin-summary,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .employee-row,
+  .activity-row {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-badge {
+    max-width: 140px;
+  }
+
+  .row-actions {
+    justify-content: stretch;
+  }
+
+  .row-actions .ghost-button {
+    width: 100%;
   }
 
   .quick-stat,

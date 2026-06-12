@@ -1,25 +1,30 @@
 const app = document.querySelector("#app");
 
-const LOCAL_POSTS_KEY = "company-board-posts-v1";
-const LOCAL_WEATHER_KEY = "company-board-weather-v1";
 const ADMIN_PIN_KEY = "company-board-admin-pin";
-const LOCAL_DEMO_PIN = "2468";
+const EMPLOYEE_SESSION_KEY = "company-board-employee-session-v1";
+const EMPLOYEE_PROFILE_KEY = "company-board-employee-profile-v1";
 
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
 let deferredInstallPrompt = null;
+let presenceTimer = null;
 
 const state = {
-  mode: "server",
   posts: [],
   weather: null,
+  settings: defaultSettings(),
+  employees: [],
+  events: [],
   adminAuthed: Boolean(sessionStorage.getItem(ADMIN_PIN_KEY)),
+  employeeAuthed: Boolean(sessionStorage.getItem(EMPLOYEE_SESSION_KEY)),
+  employee: readSessionJson(EMPLOYEE_PROFILE_KEY, null),
   message: "",
   messageType: "",
   loading: true
 };
 
 const icons = {
+  activity: '<path d="M22 12h-4l-3 8L9 4l-3 8H2"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   bell: '<path d="M10 21h4"/><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   board: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/>',
@@ -28,19 +33,34 @@ const icons = {
   filter: '<path d="M4 5h16"/><path d="M7 12h10"/><path d="M10 19h4"/>',
   home: '<path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/>',
   install: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
+  key: '<path d="M21 2l-2 2"/><path d="m7.5 11.5 5 5"/><circle cx="7.5" cy="16.5" r="5.5"/><path d="m12 12 7-7 3 3-7 7"/>',
   lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   logOut: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
   megaphone: '<path d="m3 11 18-5v12L3 13v-2Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   news: '<path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13Z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/>',
+  palette: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2a10 10 0 0 0 0 20h1.5a2.5 2.5 0 0 0 0-5H12a2 2 0 0 1 0-4h2a8 8 0 0 0 0-16Z"/>',
   refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18 5.3L21 8"/><path d="M21 3v5h-5"/>',
   send: '<path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/>',
+  userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5"/><path d="m22 8-5 5"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
 };
 
 function icon(name) {
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.board}</svg>`;
+}
+
+function defaultSettings() {
+  return {
+    companyName: "Company Board",
+    boardSubtitle: "Work updates",
+    logoUrl: "/assets/logo.svg",
+    primaryColor: "#0f766e",
+    accentColor: "#c94f3d",
+    backgroundColor: "#f6f1e8"
+  };
 }
 
 function escapeHtml(value) {
@@ -56,19 +76,33 @@ function escapeHtml(value) {
   });
 }
 
+function readSessionJson(key, fallback) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeSessionJson(key, value) {
+  sessionStorage.setItem(key, JSON.stringify(value));
+}
+
 function formatDate(value) {
-  if (!value) return "No expiration";
-  const dateOnlyMatch = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!value) return "Never";
+  const text = String(value);
+  const dateOnlyMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const date = dateOnlyMatch
     ? new Date(Number(dateOnlyMatch[1]), Number(dateOnlyMatch[2]) - 1, Number(dateOnlyMatch[3]))
-    : new Date(value);
-  if (Number.isNaN(date.getTime())) return "No expiration";
+    : new Date(text);
+  if (Number.isNaN(date.getTime())) return "Never";
 
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
-    hour: value.includes("T") ? "numeric" : undefined,
-    minute: value.includes("T") ? "2-digit" : undefined
+    hour: text.includes("T") ? "numeric" : undefined,
+    minute: text.includes("T") ? "2-digit" : undefined
   }).format(date);
 }
 
@@ -78,6 +112,146 @@ function currentDayLabel() {
     month: "short",
     day: "numeric"
   }).format(new Date());
+}
+
+function currentRoute() {
+  if (window.location.pathname === "/admin" || window.location.hash === "#admin") return "admin";
+  return "employee";
+}
+
+function adminPin() {
+  return sessionStorage.getItem(ADMIN_PIN_KEY) || "";
+}
+
+function employeeSession() {
+  return sessionStorage.getItem(EMPLOYEE_SESSION_KEY) || "";
+}
+
+function clearEmployeeSession() {
+  sessionStorage.removeItem(EMPLOYEE_SESSION_KEY);
+  sessionStorage.removeItem(EMPLOYEE_PROFILE_KEY);
+  state.employeeAuthed = false;
+  state.employee = null;
+  state.posts = [];
+  state.weather = null;
+}
+
+function hexToRgb(hex) {
+  const clean = String(hex || "").replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16)
+  };
+}
+
+function softColor(hex, alpha) {
+  const rgb = hexToRgb(hex);
+  return rgb ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})` : hex;
+}
+
+function applySettings(settings) {
+  state.settings = { ...defaultSettings(), ...(settings || {}) };
+  const root = document.documentElement;
+  root.style.setProperty("--teal", state.settings.primaryColor);
+  root.style.setProperty("--teal-soft", softColor(state.settings.primaryColor, 0.14));
+  root.style.setProperty("--coral", state.settings.accentColor);
+  root.style.setProperty("--coral-soft", softColor(state.settings.accentColor, 0.14));
+  root.style.setProperty("--paper", state.settings.backgroundColor);
+  document.title = state.settings.companyName || "Company Board";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", state.settings.primaryColor);
+}
+
+function brandBlock(subtitle = state.settings.boardSubtitle) {
+  return `
+    <div class="brand">
+      <img class="brand-mark" src="${escapeHtml(state.settings.logoUrl)}" alt="">
+      <div>
+        <h1>${escapeHtml(state.settings.companyName)}</h1>
+        <p>${escapeHtml(subtitle)}</p>
+      </div>
+    </div>
+  `;
+}
+
+async function requestJson(path, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(adminPin() ? { "x-admin-pin": adminPin() } : {}),
+    ...(employeeSession() ? { "x-employee-session": employeeSession() } : {}),
+    ...(options.headers || {})
+  };
+
+  const response = await fetch(path, { ...options, headers });
+  const body = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(body.error || "Request failed.");
+  }
+
+  return body;
+}
+
+async function loadSettings() {
+  const result = await requestJson("/api/settings");
+  applySettings(result.settings);
+}
+
+async function loadBoard() {
+  const [postsResult, weatherResult] = await Promise.all([
+    requestJson("/api/posts"),
+    requestJson("/api/weather")
+  ]);
+
+  state.posts = postsResult.posts || [];
+  state.weather = weatherResult.weather || defaultWeather();
+}
+
+async function loadAdminControls() {
+  const result = await requestJson("/api/admin/employees");
+  state.employees = result.employees || [];
+  state.events = result.events || [];
+}
+
+async function refreshAdminData() {
+  await Promise.all([loadBoard(), loadAdminControls()]);
+}
+
+async function restoreAdminSession() {
+  if (!adminPin()) return;
+
+  try {
+    const result = await requestJson("/api/admin/check");
+    state.adminAuthed = true;
+    if (result.settings) applySettings(result.settings);
+  } catch {
+    sessionStorage.removeItem(ADMIN_PIN_KEY);
+    state.adminAuthed = false;
+  }
+}
+
+async function restoreEmployeeSession() {
+  if (!employeeSession()) return;
+
+  try {
+    const result = await requestJson("/api/employee/check");
+    state.employeeAuthed = true;
+    state.employee = result.employee;
+    writeSessionJson(EMPLOYEE_PROFILE_KEY, result.employee);
+  } catch {
+    clearEmployeeSession();
+  }
+}
+
+function defaultWeather() {
+  return {
+    condition: "Clear",
+    temperature: "72 F",
+    impact: "Normal operations.",
+    level: "Clear",
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function isExpired(post) {
@@ -98,158 +272,6 @@ function typeIcon(type) {
     Shift: "board",
     Weather: "cloud"
   }[type] || "bell";
-}
-
-function defaultWeather() {
-  return {
-    condition: "Clear",
-    temperature: "72 F",
-    impact: "Normal operations.",
-    level: "Clear",
-    updatedAt: new Date().toISOString()
-  };
-}
-
-function defaultPosts() {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: "local-weather",
-      type: "Weather",
-      priority: "Important",
-      title: "Rain expected during evening commute",
-      body: "Keep walkways clear and use the south entrance if the front lot becomes congested.",
-      audience: "All employees",
-      author: "HR",
-      createdAt: now,
-      expiresAt: ""
-    },
-    {
-      id: "local-news",
-      type: "News",
-      priority: "Normal",
-      title: "Open enrollment reminder",
-      body: "Benefits selections are due Friday. HR is available from 10:00 AM to 3:00 PM for questions.",
-      audience: "All employees",
-      author: "HR",
-      createdAt: now,
-      expiresAt: ""
-    }
-  ];
-}
-
-function currentRoute() {
-  if (window.location.pathname === "/admin" || window.location.hash === "#admin") return "admin";
-  return "employee";
-}
-
-function readLocal(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeLocal(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
-
-function adminPin() {
-  return sessionStorage.getItem(ADMIN_PIN_KEY) || "";
-}
-
-async function requestJson(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(adminPin() ? { "x-admin-pin": adminPin() } : {}),
-      ...(options.headers || {})
-    }
-  });
-
-  const body = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(body.error || "Request failed.");
-  }
-
-  return body;
-}
-
-async function loadBoard() {
-  state.loading = true;
-
-  try {
-    const [postsResult, weatherResult] = await Promise.all([
-      requestJson("/api/posts"),
-      requestJson("/api/weather")
-    ]);
-
-    state.posts = postsResult.posts || [];
-    state.weather = weatherResult.weather || defaultWeather();
-    state.mode = "server";
-  } catch {
-    state.posts = readLocal(LOCAL_POSTS_KEY, defaultPosts());
-    state.weather = readLocal(LOCAL_WEATHER_KEY, defaultWeather());
-    state.mode = "local";
-  } finally {
-    state.loading = false;
-  }
-}
-
-async function createPost(payload) {
-  if (state.mode === "server") {
-    const result = await requestJson("/api/posts", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    state.posts.unshift(result.post);
-    return;
-  }
-
-  if (adminPin() !== LOCAL_DEMO_PIN) throw new Error("Invalid HR PIN.");
-
-  const post = {
-    ...payload,
-    id: crypto.randomUUID(),
-    author: "HR",
-    createdAt: new Date().toISOString()
-  };
-  state.posts.unshift(post);
-  writeLocal(LOCAL_POSTS_KEY, state.posts);
-}
-
-async function deletePost(id) {
-  if (state.mode === "server") {
-    await requestJson(`/api/posts/${encodeURIComponent(id)}`, { method: "DELETE" });
-  } else {
-    if (adminPin() !== LOCAL_DEMO_PIN) throw new Error("Invalid HR PIN.");
-  }
-
-  state.posts = state.posts.filter((post) => post.id !== id);
-  writeLocal(LOCAL_POSTS_KEY, state.posts);
-}
-
-async function updateWeather(payload) {
-  if (state.mode === "server") {
-    const result = await requestJson("/api/weather", {
-      method: "PUT",
-      body: JSON.stringify(payload)
-    });
-    state.weather = result.weather;
-    return;
-  }
-
-  if (adminPin() !== LOCAL_DEMO_PIN) throw new Error("Invalid HR PIN.");
-
-  state.weather = {
-    ...payload,
-    updatedAt: new Date().toISOString()
-  };
-  writeLocal(LOCAL_WEATHER_KEY, state.weather);
 }
 
 function visiblePosts() {
@@ -311,7 +333,35 @@ function renderNotice(post, includeControls = false) {
   `;
 }
 
+function renderEmployeeAuth() {
+  return `
+    <main class="auth-shell">
+      <section class="auth-card">
+        ${brandBlock("Employee access")}
+        <h2>Employee sign in</h2>
+        <form data-employee-login-form>
+          <label class="field full">
+            <span>Employee ID</span>
+            <input name="identifier" autocomplete="username" required placeholder="Example: j.smith">
+          </label>
+          <label class="field full">
+            <span>PIN</span>
+            <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" required>
+          </label>
+          <div class="form-actions">
+            <button class="ghost-button" type="button" data-route="admin">${icon("lock")} HR admin</button>
+            <button class="button" type="submit">${icon("key")} View board</button>
+          </div>
+          <div class="message ${state.messageType}">${escapeHtml(state.message)}</div>
+        </form>
+      </section>
+    </main>
+  `;
+}
+
 function renderEmployee() {
+  if (!state.employeeAuthed) return renderEmployeeAuth();
+
   const weather = state.weather || defaultWeather();
   const notices = visiblePosts();
   const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
@@ -319,19 +369,14 @@ function renderEmployee() {
   return `
     <main class="shell">
       <header class="topbar">
-        <div class="brand">
-          <img class="brand-mark" src="/assets/logo.svg" alt="">
-          <div>
-            <h1>Company Board</h1>
-            <p>${escapeHtml(currentDayLabel())}</p>
-          </div>
-        </div>
+        ${brandBlock(currentDayLabel())}
         <div class="top-actions">
+          <span class="employee-badge">${icon("userCheck")}${escapeHtml(state.employee?.name || "Employee")}</span>
           <button class="button install-text" type="button" data-install title="Install app">
             ${icon("install")}<span>Install</span>
           </button>
-          <button class="icon-button" type="button" data-route="admin" title="HR admin">
-            ${icon("lock")}
+          <button class="icon-button" type="button" data-employee-logout title="Sign out">
+            ${icon("logOut")}
           </button>
         </div>
       </header>
@@ -343,13 +388,13 @@ function renderEmployee() {
           </div>
           <div class="weather-copy">
             <p class="eyebrow">${icon("cloud")} Weather</p>
-            <h2>${escapeHtml(weather.condition)} · ${escapeHtml(weather.temperature)}</h2>
+            <h2>${escapeHtml(weather.condition)} - ${escapeHtml(weather.temperature)}</h2>
             <p>${escapeHtml(weather.impact)}</p>
           </div>
           <div class="quick-stats">
             <div class="quick-stat"><strong>${state.posts.filter((post) => !isExpired(post)).length}</strong><span>Active posts</span></div>
             <div class="quick-stat"><strong>${urgentCount}</strong><span>Urgent</span></div>
-            <div class="quick-stat"><strong>${escapeHtml(state.mode === "server" ? "Live" : "Local")}</strong><span>Status</span></div>
+            <div class="quick-stat"><strong>Live</strong><span>Status</span></div>
           </div>
         </aside>
 
@@ -385,13 +430,7 @@ function renderAuth() {
   return `
     <main class="auth-shell">
       <section class="auth-card">
-        <div class="brand">
-          <img class="brand-mark" src="/assets/logo.svg" alt="">
-          <div>
-            <h1>Company Board</h1>
-            <p>HR publishing</p>
-          </div>
-        </div>
+        ${brandBlock("HR publishing")}
         <h2>HR access</h2>
         <form data-login-form>
           <label class="field full">
@@ -399,16 +438,16 @@ function renderAuth() {
             <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" required>
           </label>
           <div class="form-actions">
-            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Board</button>
+            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee login</button>
             <button class="button" type="submit">${icon("lock")} Unlock</button>
           </div>
-          <div class="message">${escapeHtml(state.message)}</div>
+          <div class="message ${state.messageType}">${escapeHtml(state.message)}</div>
         </form>
         <section class="qr-panel" aria-label="Employee portal QR code">
           <div>
             <p class="eyebrow">${icon("users")} Employee access</p>
-            <h2>Scan for the board</h2>
-            <p>Employees can scan this code to open the read-only notification board on their phone.</p>
+            <h2>Scan for employee login</h2>
+            <p>Employees scan this code, then use their assigned employee ID and PIN.</p>
           </div>
           <div class="qr-box">
             <img src="/employee-qr.svg" alt="QR code for employee portal">
@@ -420,27 +459,181 @@ function renderAuth() {
   `;
 }
 
+function renderBrandingPanel() {
+  const settings = state.settings;
+
+  return `
+    <section class="tool-panel">
+      <div class="panel-title">
+        <div>
+          <p class="eyebrow">${icon("palette")} Brand</p>
+          <h2>Company look</h2>
+          <p>Update the logo, name, and colors employees see.</p>
+        </div>
+      </div>
+      <form data-branding-form>
+        <div class="form-grid">
+          <label class="field">
+            <span>Company name</span>
+            <input name="companyName" maxlength="70" value="${escapeHtml(settings.companyName)}" required>
+          </label>
+          <label class="field">
+            <span>Board subtitle</span>
+            <input name="boardSubtitle" maxlength="90" value="${escapeHtml(settings.boardSubtitle)}">
+          </label>
+          <label class="field full">
+            <span>Logo URL</span>
+            <input name="logoUrl" maxlength="300" value="${escapeHtml(settings.logoUrl)}" placeholder="https://example.com/logo.png">
+          </label>
+          <label class="field color-field">
+            <span>Main color</span>
+            <input name="primaryColor" type="color" value="${escapeHtml(settings.primaryColor)}">
+          </label>
+          <label class="field color-field">
+            <span>Alert color</span>
+            <input name="accentColor" type="color" value="${escapeHtml(settings.accentColor)}">
+          </label>
+          <label class="field color-field">
+            <span>Background</span>
+            <input name="backgroundColor" type="color" value="${escapeHtml(settings.backgroundColor)}">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button class="button secondary" type="submit">${icon("palette")} Save brand</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function renderEmployeeAccessPanel() {
+  return `
+    <section class="tool-panel">
+      <div class="panel-title">
+        <div>
+          <p class="eyebrow">${icon("key")} Access</p>
+          <h2>Employee PINs</h2>
+          <p>Create employee access and revoke it when needed.</p>
+        </div>
+      </div>
+      <form data-employee-form>
+        <div class="form-grid compact-grid">
+          <label class="field">
+            <span>Name</span>
+            <input name="name" maxlength="80" required placeholder="Employee name">
+          </label>
+          <label class="field">
+            <span>Employee ID</span>
+            <input name="username" maxlength="32" placeholder="j.smith">
+          </label>
+          <label class="field">
+            <span>PIN</span>
+            <input name="pin" type="password" inputmode="numeric" minlength="4" maxlength="12" required placeholder="4-12 numbers">
+          </label>
+          <label class="field">
+            <span>Department</span>
+            <input name="department" maxlength="80" placeholder="Operations">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button class="button" type="submit">${icon("userCheck")} Add employee</button>
+        </div>
+      </form>
+      <div class="employee-list">
+        ${
+          state.employees.length
+            ? state.employees.map((employee) => renderEmployeeRow(employee)).join("")
+            : '<div class="empty-state small">No employee access records yet.</div>'
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderEmployeeRow(employee) {
+  const status = !employee.active ? "Revoked" : employee.online ? "Online" : "Offline";
+  const statusClass = !employee.active ? "revoked" : employee.online ? "online" : "offline";
+
+  return `
+    <article class="employee-row">
+      <div>
+        <div class="employee-row-title">
+          <strong>${escapeHtml(employee.name)}</strong>
+          <span class="status-pill ${statusClass}">${escapeHtml(status)}</span>
+        </div>
+        <p>@${escapeHtml(employee.username)}${employee.department ? ` - ${escapeHtml(employee.department)}` : ""}</p>
+        <p>Last seen: ${escapeHtml(formatDate(employee.lastSeenAt))}</p>
+      </div>
+      <div class="row-actions">
+        <button class="ghost-button" type="button" data-employee-action="reset-pin" data-employee-id="${escapeHtml(employee.id)}">${icon("key")} Reset PIN</button>
+        <button class="ghost-button ${employee.active ? "danger-text" : ""}" type="button" data-employee-action="${employee.active ? "revoke" : "restore"}" data-employee-id="${escapeHtml(employee.id)}">
+          ${employee.active ? icon("userX") + " Revoke" : icon("userCheck") + " Restore"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function eventLabel(type) {
+  return {
+    employee_created: "Employee created",
+    employee_restored: "Access restored",
+    employee_revoked: "Access revoked",
+    login: "Employee login",
+    login_failed: "Failed login",
+    logout: "Employee logout",
+    pin_reset: "PIN reset"
+  }[type] || "Employee activity";
+}
+
+function renderActivityPanel() {
+  return `
+    <section class="tool-panel">
+      <div class="panel-title">
+        <div>
+          <p class="eyebrow">${icon("activity")} Activity</p>
+          <h2>Employee access log</h2>
+        </div>
+      </div>
+      <div class="activity-list">
+        ${
+          state.events.length
+            ? state.events
+                .map(
+                  (event) => `
+                    <div class="activity-row ${event.success ? "" : "failed"}">
+                      <div>
+                        <strong>${escapeHtml(eventLabel(event.type))}</strong>
+                        <p>${escapeHtml(event.employeeName)}${event.username ? ` (@${escapeHtml(event.username)})` : ""}</p>
+                      </div>
+                      <span>${escapeHtml(formatDate(event.createdAt))}</span>
+                    </div>
+                  `
+                )
+                .join("")
+            : '<div class="empty-state small">No employee activity yet.</div>'
+        }
+      </div>
+    </section>
+  `;
+}
+
 function renderAdmin() {
   if (!state.adminAuthed) return renderAuth();
 
   const weather = state.weather || defaultWeather();
   const activeCount = state.posts.filter((post) => !isExpired(post)).length;
-  const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
+  const onlineEmployees = state.employees.filter((employee) => employee.online).length;
+  const activeEmployees = state.employees.filter((employee) => employee.active).length;
   const latest = state.posts[0]?.createdAt ? formatDate(state.posts[0].createdAt) : "None";
 
   return `
     <main class="admin-shell">
       <section class="admin-layout">
         <aside class="admin-sidebar">
-          <div class="brand">
-            <img class="brand-mark" src="/assets/logo.svg" alt="">
-            <div>
-              <h1>Company Board</h1>
-              <p>HR dashboard</p>
-            </div>
-          </div>
+          ${brandBlock("HR dashboard")}
           <nav class="admin-nav" aria-label="Admin actions">
-            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee board</button>
+            <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee login</button>
             <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
             <button class="ghost-button" type="button" data-logout>${icon("logOut")} Sign out</button>
           </nav>
@@ -449,9 +642,14 @@ function renderAdmin() {
         <section class="admin-main">
           <section class="admin-summary" aria-label="Board summary">
             <div class="metric"><strong>${activeCount}</strong><span>Active posts</span></div>
-            <div class="metric"><strong>${urgentCount}</strong><span>Urgent posts</span></div>
-            <div class="metric"><strong>${escapeHtml(weather.level)}</strong><span>Weather level</span></div>
+            <div class="metric"><strong>${onlineEmployees}</strong><span>Employees online</span></div>
+            <div class="metric"><strong>${activeEmployees}</strong><span>Active employees</span></div>
             <div class="metric"><strong>${escapeHtml(latest)}</strong><span>Latest post</span></div>
+          </section>
+
+          <section class="tool-grid">
+            ${renderBrandingPanel()}
+            ${renderEmployeeAccessPanel()}
           </section>
 
           <section class="tool-grid">
@@ -461,7 +659,7 @@ function renderAdmin() {
                   <p class="eyebrow">${icon("megaphone")} Publish</p>
                   <h2>New update</h2>
                 </div>
-                <span class="sync-pill">${escapeHtml(state.mode === "server" ? "Live server" : "Local demo")}</span>
+                <span class="sync-pill">Live server</span>
               </div>
               <form data-post-form>
                 <div class="form-grid">
@@ -544,6 +742,8 @@ function renderAdmin() {
             </section>
           </section>
 
+          ${renderActivityPanel()}
+
           <section class="tool-panel">
             <div class="panel-title">
               <div>
@@ -577,16 +777,60 @@ function clearMessageSoon() {
   }, 2600);
 }
 
-function routeTo(route) {
+async function routeTo(route) {
   const nextPath = route === "admin" ? "/admin" : "/employee";
   window.history.pushState({}, "", nextPath);
+  await hydrateRoute();
   render();
+}
+
+async function hydrateRoute() {
+  const route = currentRoute();
+
+  if (route === "admin") {
+    await restoreAdminSession();
+    if (state.adminAuthed) await refreshAdminData();
+    return;
+  }
+
+  await restoreEmployeeSession();
+  if (state.employeeAuthed) await loadBoard();
+}
+
+function syncPresenceTimer() {
+  if (presenceTimer) {
+    window.clearInterval(presenceTimer);
+    presenceTimer = null;
+  }
+
+  if (!state.employeeAuthed || currentRoute() !== "employee") return;
+
+  sendPresence();
+  presenceTimer = window.setInterval(sendPresence, 60_000);
+}
+
+async function sendPresence() {
+  if (!state.employeeAuthed || !employeeSession()) return;
+
+  try {
+    const result = await requestJson("/api/employee/presence", { method: "POST" });
+    state.employee = result.employee || state.employee;
+    if (state.employee) writeSessionJson(EMPLOYEE_PROFILE_KEY, state.employee);
+  } catch {
+    clearEmployeeSession();
+    render();
+  }
 }
 
 function render() {
   const route = currentRoute();
   document.body.dataset.route = route;
-  app.innerHTML = state.loading ? '<main class="auth-shell"><section class="empty-state">Loading board...</section></main>' : route === "admin" ? renderAdmin() : renderEmployee();
+  app.innerHTML = state.loading
+    ? '<main class="auth-shell"><section class="empty-state">Loading board...</section></main>'
+    : route === "admin"
+      ? renderAdmin()
+      : renderEmployee();
+  syncPresenceTimer();
 }
 
 async function handleLogin(event) {
@@ -595,28 +839,63 @@ async function handleLogin(event) {
   const pin = new FormData(form).get("pin");
   sessionStorage.setItem(ADMIN_PIN_KEY, String(pin || ""));
 
-  if (state.mode === "local" && pin !== LOCAL_DEMO_PIN) {
-    sessionStorage.removeItem(ADMIN_PIN_KEY);
-    state.adminAuthed = false;
-    setMessage("Invalid HR PIN.");
-    render();
-    return;
-  }
-
   try {
-    if (state.mode === "server") {
-      await requestJson("/api/admin/check");
-    }
-
-    state.adminAuthed = true;
+    await restoreAdminSession();
+    if (!state.adminAuthed) throw new Error("Invalid HR PIN.");
+    await refreshAdminData();
     setMessage("");
-  } catch {
+  } catch (error) {
     sessionStorage.removeItem(ADMIN_PIN_KEY);
     state.adminAuthed = false;
-    setMessage("Invalid HR PIN.");
+    setMessage(error.message || "Invalid HR PIN.");
   }
 
   render();
+}
+
+async function handleEmployeeLogin(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  try {
+    const result = await requestJson("/api/employee/login", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+    sessionStorage.setItem(EMPLOYEE_SESSION_KEY, result.sessionToken);
+    writeSessionJson(EMPLOYEE_PROFILE_KEY, result.employee);
+    state.employeeAuthed = true;
+    state.employee = result.employee;
+    await loadBoard();
+    setMessage("");
+  } catch (error) {
+    clearEmployeeSession();
+    setMessage(error.message || "Could not sign in.");
+  }
+
+  render();
+}
+
+async function createPost(payload) {
+  const result = await requestJson("/api/posts", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  state.posts.unshift(result.post);
+}
+
+async function deletePost(id) {
+  await requestJson(`/api/posts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  state.posts = state.posts.filter((post) => post.id !== id);
+}
+
+async function updateWeather(payload) {
+  const result = await requestJson("/api/weather", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+  state.weather = result.weather;
 }
 
 async function handlePostSubmit(event) {
@@ -652,6 +931,84 @@ async function handleWeatherSubmit(event) {
   clearMessageSoon();
 }
 
+async function handleBrandingSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+
+  try {
+    const result = await requestJson("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(data)
+    });
+    applySettings(result.settings);
+    setMessage("Branding saved.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not save branding.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleEmployeeSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  try {
+    await requestJson("/api/admin/employees", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+    form.reset();
+    await loadAdminControls();
+    setMessage("Employee access created.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not create employee access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function updateEmployeeAccess(id, payload) {
+  await requestJson(`/api/admin/employees/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+  await loadAdminControls();
+}
+
+async function handleEmployeeAction(button) {
+  const employee = state.employees.find((candidate) => candidate.id === button.dataset.employeeId);
+  if (!employee) return;
+
+  try {
+    if (button.dataset.employeeAction === "reset-pin") {
+      const pin = window.prompt(`New PIN for ${employee.name}`);
+      if (!pin) return;
+      await updateEmployeeAccess(employee.id, { pin });
+      setMessage("PIN reset.", "success");
+    }
+
+    if (button.dataset.employeeAction === "revoke") {
+      if (!window.confirm(`Revoke employee board access for ${employee.name}?`)) return;
+      await updateEmployeeAccess(employee.id, { active: false });
+      setMessage("Access revoked.", "success");
+    }
+
+    if (button.dataset.employeeAction === "restore") {
+      await updateEmployeeAccess(employee.id, { active: true });
+      setMessage("Access restored.", "success");
+    }
+  } catch (error) {
+    setMessage(error.message || "Could not update employee access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function installApp() {
   if (!deferredInstallPrompt) return;
   deferredInstallPrompt.prompt();
@@ -659,13 +1016,26 @@ async function installApp() {
   deferredInstallPrompt = null;
 }
 
+async function employeeLogout() {
+  try {
+    await requestJson("/api/employee/logout", { method: "POST" });
+  } catch {
+    // The local session still needs to be cleared if the server is unavailable.
+  }
+
+  clearEmployeeSession();
+  setMessage("");
+  render();
+}
+
 app.addEventListener("click", async (event) => {
   const routeButton = event.target.closest("[data-route]");
   const filterButton = event.target.closest("[data-filter]");
   const deleteButton = event.target.closest("[data-delete-post]");
+  const employeeAction = event.target.closest("[data-employee-action]");
 
   if (routeButton) {
-    routeTo(routeButton.dataset.route);
+    await routeTo(routeButton.dataset.route);
     return;
   }
 
@@ -681,7 +1051,7 @@ app.addEventListener("click", async (event) => {
   }
 
   if (event.target.closest("[data-refresh]")) {
-    await loadBoard();
+    await refreshAdminData();
     render();
     return;
   }
@@ -689,8 +1059,21 @@ app.addEventListener("click", async (event) => {
   if (event.target.closest("[data-logout]")) {
     sessionStorage.removeItem(ADMIN_PIN_KEY);
     state.adminAuthed = false;
+    state.posts = [];
+    state.employees = [];
+    state.events = [];
     setMessage("");
     render();
+    return;
+  }
+
+  if (event.target.closest("[data-employee-logout]")) {
+    await employeeLogout();
+    return;
+  }
+
+  if (employeeAction) {
+    await handleEmployeeAction(employeeAction);
     return;
   }
 
@@ -713,6 +1096,11 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.matches("[data-employee-login-form]")) {
+    await handleEmployeeLogin(event);
+    return;
+  }
+
   if (event.target.matches("[data-post-form]")) {
     await handlePostSubmit(event);
     return;
@@ -720,11 +1108,32 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-weather-form]")) {
     await handleWeatherSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-branding-form]")) {
+    await handleBrandingSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-employee-form]")) {
+    await handleEmployeeSubmit(event);
   }
 });
 
-window.addEventListener("hashchange", render);
-window.addEventListener("popstate", render);
+window.addEventListener("hashchange", async () => {
+  await hydrateRoute();
+  render();
+});
+
+window.addEventListener("popstate", async () => {
+  await hydrateRoute();
+  render();
+});
+
+window.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") sendPresence();
+});
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -738,5 +1147,12 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-await loadBoard();
-render();
+try {
+  await loadSettings();
+  await hydrateRoute();
+} catch (error) {
+  setMessage(error.message || "Could not load the app.");
+} finally {
+  state.loading = false;
+  render();
+}
