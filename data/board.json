@@ -35,12 +35,12 @@
     }
   ],
   "weather": {
-    "location": "",
-    "resolvedName": "",
-    "condition": "Weather not configured",
-    "temperature": "--",
-    "impact": "Enter a location in Admin to fetch live weather.",
-    "level": "Clear",
-    "updatedAt": ""
+    "location": "27549",
+    "resolvedName": "Louisburg, North Carolina, United States",
+    "condition": "Light drizzle",
+    "temperature": "88°F",
+    "impact": "Wet floors possible near entrances.",
+    "level": "Watch",
+    "updatedAt": "2026-06-13T01:35:05.779Z"
   }
 }
