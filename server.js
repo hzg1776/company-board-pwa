@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
+import { createDefaultWeather, normalizeStoredWeather, resolveLiveWeather } from "./weather.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +18,6 @@ const MAX_BODY_BYTES = 1_000_000;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
-const allowedWeatherLevels = new Set(["Clear", "Watch", "Warning"]);
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -74,11 +74,7 @@ function createSeedData() {
       }
     ],
     weather: {
-      condition: "Light rain",
-      temperature: "68 F",
-      impact: "Wet floors possible near entrances. Use mats and cones where needed.",
-      level: "Watch",
-      updatedAt: now
+      ...createDefaultWeather()
     }
   };
 }
@@ -88,7 +84,7 @@ function normalizeDataShape(data) {
 
   if (!data || typeof data !== "object") return seed;
   if (!Array.isArray(data.posts)) data.posts = [];
-  if (!data.weather) data.weather = seed.weather;
+  data.weather = normalizeStoredWeather(data.weather);
   delete data.settings;
 
   return data;
@@ -189,10 +185,6 @@ function apiError(message, statusCode = 400) {
   return error;
 }
 
-function hasAdminAccess() {
-  return true;
-}
-
 function requireAdmin() {
   return true;
 }
@@ -230,10 +222,6 @@ async function readJsonBody(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function isValidExpiry(value) {
-  return value === "" || /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
 function normalizePost(input) {
   const type = allowedTypes.has(input.type) ? input.type : "News";
   const priority = allowedPriorities.has(input.priority) ? input.priority : "Normal";
@@ -256,25 +244,6 @@ function normalizePost(input) {
     author: "HR",
     createdAt: nowIso(),
     expiresAt
-  };
-}
-
-function normalizeWeather(input) {
-  const level = allowedWeatherLevels.has(input.level) ? input.level : "Clear";
-  const condition = cleanText(input.condition, 80);
-  const temperature = cleanText(input.temperature, 20);
-  const impact = cleanLongText(input.impact, 300);
-
-  if (!condition) throw new Error("Weather condition is required.");
-  if (!temperature) throw new Error("Temperature is required.");
-  if (!impact) throw new Error("Weather impact is required.");
-
-  return {
-    condition,
-    temperature,
-    impact,
-    level,
-    updatedAt: nowIso()
   };
 }
 
@@ -346,7 +315,7 @@ async function handleApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
 
       const body = await readJsonBody(req);
-      const weather = normalizeWeather(body);
+      const weather = await resolveLiveWeather(body.location);
 
       await updateData((data) => {
         data.weather = weather;

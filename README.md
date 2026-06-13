@@ -8,6 +8,7 @@ An installable company communication app for HR news, weather, safety notices, s
 - HR opens a simple dashboard and publishes updates.
 - Employee mode is read-only.
 - The app uses a fixed board header and Palziv color scheme.
+- HR can enter a location to pull live weather from Open-Meteo and save the result to the board.
 - The MVP uses a small Node server and a JSON data file, so it runs without paid services.
 
 ## Run Locally
@@ -70,4 +71,4 @@ Recommended low-cost hosting path:
 - Add push notifications for urgent alerts.
 - Add image/file attachments.
 - Add role-based access for HR, safety, managers, and admins.
-- Add weather API integration by location.
+- Add richer weather alerts or multi-location weather boards if needed.

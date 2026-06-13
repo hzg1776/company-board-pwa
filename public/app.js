@@ -1,7 +1,7 @@
 const app = document.querySelector("#app");
 
-const APP_TITLE = "Employee Board";
-const APP_SUBTITLE = "Work updates";
+const APP_TITLE = "Plant Bulletin";
+const APP_SUBTITLE = "Industrial notice board";
 const filters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeFilter = "All";
 
@@ -70,6 +70,11 @@ function formatDate(value) {
   }).format(date);
 }
 
+function formatWeatherUpdatedAt(value) {
+  if (!value) return "Not yet fetched";
+  return formatDate(value);
+}
+
 function currentDayLabel() {
   return new Intl.DateTimeFormat(undefined, {
     weekday: "long",
@@ -136,12 +141,40 @@ async function refreshAdminData() {
 
 function defaultWeather() {
   return {
-    condition: "Clear",
-    temperature: "72 F",
-    impact: "Normal operations.",
+    location: "",
+    resolvedName: "",
+    condition: "Weather not configured",
+    temperature: "--",
+    impact: "Enter a location in Admin to fetch live weather.",
     level: "Clear",
-    updatedAt: new Date().toISOString()
+    updatedAt: ""
   };
+}
+
+function hasLegacyWeatherSnapshot(weather) {
+  return Boolean(
+    weather &&
+      !weather.location &&
+      !weather.resolvedName &&
+      (weather.condition !== "Weather not configured" ||
+        weather.temperature !== "--" ||
+        weather.impact !== "Enter a location in Admin to fetch live weather.")
+  );
+}
+
+function weatherDisplayName(weather) {
+  if (weather.resolvedName || weather.location) {
+    return weather.resolvedName || weather.location;
+  }
+
+  return hasLegacyWeatherSnapshot(weather) ? "Stored weather snapshot" : "Weather not configured";
+}
+
+function weatherHeadline(weather) {
+  const condition = String(weather?.condition || "Weather not configured").trim();
+  const temperature = String(weather?.temperature || "").trim();
+  if (!temperature || temperature === "--") return condition;
+  return `${condition} - ${temperature}`;
 }
 
 function isExpired(post) {
@@ -186,8 +219,11 @@ function weatherScene(level) {
   return `
     <svg class="weather-scene" viewBox="0 0 360 210" role="img" aria-label="Weather status">
       <rect x="0" y="0" width="360" height="210" rx="8" fill="currentColor" opacity="0.08"></rect>
-      <circle cx="88" cy="66" r="34" fill="currentColor" opacity="0.34"></circle>
+      <rect x="20" y="24" width="320" height="22" rx="2" fill="currentColor" opacity="0.12"></rect>
+      <circle cx="90" cy="68" r="34" fill="currentColor" opacity="0.32"></circle>
       <path d="M126 138h142c29 0 52-20 52-45s-23-45-52-45c-11 0-21 3-29 8-15-24-43-39-75-39-48 0-86 32-86 72 0 3 0 6 1 9-22 4-39 20-39 40 0 23 21 42 46 42h40Z" fill="#ffffff" stroke="currentColor" stroke-width="8"></path>
+      <path d="M38 170h286" stroke="currentColor" stroke-width="8" stroke-linecap="square" opacity="0.3"></path>
+      <path d="M48 186h120" stroke="currentColor" stroke-width="8" stroke-linecap="square" opacity="0.16"></path>
       ${showRain ? '<path d="M116 166v24M166 158v30M216 166v24M266 158v30" stroke="currentColor" stroke-width="9" stroke-linecap="round"></path>' : ""}
       ${showWarning ? '<path d="M288 40 330 112h-84l42-72Z" fill="#50b2ce"></path><path d="M288 66v23M288 103h.01" stroke="#ffffff" stroke-width="8" stroke-linecap="round"></path>' : ""}
     </svg>
@@ -228,6 +264,8 @@ function renderEmployee() {
   const weather = state.weather || defaultWeather();
   const notices = visiblePosts();
   const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
+  const weatherLocation = weatherDisplayName(weather);
+  const activeCount = state.posts.filter((post) => !isExpired(post)).length;
 
   return `
     <main class="shell">
@@ -235,24 +273,45 @@ function renderEmployee() {
         ${brandBlock(currentDayLabel())}
       </header>
 
-      <section class="employee-grid" aria-label="Employee notification board">
-        <aside class="status-panel">
-          <div class="weather-visual ${escapeHtml(String(weather.level || "Clear").toLowerCase())}">
-            ${weatherScene(weather.level)}
+      <section class="employee-dashboard" aria-label="Employee notification board">
+        <section class="command-strip">
+          <div class="command-card primary">
+            <p class="eyebrow">${icon("alert")} Board status</p>
+            <h2>${escapeHtml(activeCount)} active notices</h2>
+            <p>${urgentCount} urgent item${urgentCount === 1 ? "" : "s"} require attention.</p>
           </div>
-          <div class="weather-copy">
-            <p class="eyebrow">${icon("cloud")} Weather</p>
-            <h2>${escapeHtml(weather.condition)} - ${escapeHtml(weather.temperature)}</h2>
-            <p>${escapeHtml(weather.impact)}</p>
+          <div class="command-card">
+            <p class="eyebrow">${icon("cloud")} Site weather</p>
+            <h2>${escapeHtml(weatherHeadline(weather))}</h2>
+            <p>${escapeHtml(weatherLocation)}</p>
           </div>
-          <div class="quick-stats">
-            <div class="quick-stat"><strong>${state.posts.filter((post) => !isExpired(post)).length}</strong><span>Active posts</span></div>
-            <div class="quick-stat"><strong>${urgentCount}</strong><span>Urgent</span></div>
-            <div class="quick-stat"><strong>Read-only</strong><span>Status</span></div>
+          <div class="command-card">
+            <p class="eyebrow">${icon("shield")} Access</p>
+            <h2>Read-only</h2>
+            <p>Employees can view updates, not edit them.</p>
           </div>
-        </aside>
+        </section>
 
-        <section class="board-column">
+        <section class="employee-grid" aria-label="Employee notifications">
+          <aside class="status-panel">
+            <div class="weather-visual ${escapeHtml(String(weather.level || "Clear").toLowerCase())}">
+              ${weatherScene(weather.level)}
+            </div>
+            <div class="weather-copy">
+              <p class="eyebrow">${icon("cloud")} Plant weather</p>
+              <h2>${escapeHtml(weatherHeadline(weather))}</h2>
+              <p class="weather-location">${escapeHtml(weatherLocation)}</p>
+              <p>${escapeHtml(weather.impact)}</p>
+              <p class="weather-updated">Updated ${escapeHtml(formatWeatherUpdatedAt(weather.updatedAt))}</p>
+            </div>
+            <div class="quick-stats">
+              <div class="quick-stat"><strong>${activeCount}</strong><span>Active posts</span></div>
+              <div class="quick-stat"><strong>${urgentCount}</strong><span>Urgent</span></div>
+              <div class="quick-stat"><strong>Read-only</strong><span>Status</span></div>
+            </div>
+          </aside>
+
+          <section class="board-column">
           <nav class="segment-bar" aria-label="Post filters">
             ${filters
               .map(
@@ -273,6 +332,7 @@ function renderEmployee() {
             }
           </div>
         </section>
+        </section>
       </section>
     </main>
   `;
@@ -286,8 +346,8 @@ function renderEmployeeSharePanel() {
       <div class="panel-title">
         <div>
           <p class="eyebrow">${icon("users")} Employee access</p>
-          <h2>Scan for the board</h2>
-          <p>Employees can scan this code to open the read-only notification board on their phone.</p>
+          <h2>Scan to open the board</h2>
+          <p>Workers can scan this code to open the read-only plant bulletin on their phone.</p>
         </div>
       </div>
       <div class="qr-panel compact">
@@ -305,16 +365,18 @@ function renderAdmin() {
   const activeCount = state.posts.filter((post) => !isExpired(post)).length;
   const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
   const latest = state.posts[0]?.createdAt ? formatDate(state.posts[0].createdAt) : "None";
+  const weatherLocation = weatherDisplayName(weather);
 
   return `
     <main class="admin-shell">
       <section class="admin-layout">
         <aside class="admin-sidebar">
-          ${brandBlock("HR dashboard")}
+          ${brandBlock("Operations dashboard")}
           <nav class="admin-nav" aria-label="Admin actions">
             <button class="ghost-button" type="button" data-route="employee">${icon("home")} Employee board</button>
             <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
           </nav>
+          ${renderEmployeeSharePanel()}
         </aside>
 
         <section class="admin-main">
@@ -325,21 +387,28 @@ function renderAdmin() {
             <div class="metric"><strong>${escapeHtml(latest)}</strong><span>Latest post</span></div>
           </section>
 
-          <section class="tool-grid">
-            ${renderEmployeeSharePanel()}
-          </section>
+          ${state.message ? `<div class="admin-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
-          <section class="tool-grid">
-            <section class="tool-panel">
+          <section class="admin-workspace">
+            <section class="tool-panel composer-panel">
               <div class="panel-title">
                 <div>
                   <p class="eyebrow">${icon("megaphone")} Publish</p>
                   <h2>New update</h2>
+                  <p>Use this first. It is the most common job on the page.</p>
                 </div>
                 <span class="sync-pill">Live server</span>
               </div>
               <form data-post-form>
-                <div class="form-grid">
+                <div class="composer-grid">
+                  <label class="field field-span-2">
+                    <span>Title</span>
+                    <input name="title" maxlength="90" required placeholder="Short headline">
+                  </label>
+                  <label class="field field-span-2">
+                    <span>Message</span>
+                    <textarea name="body" maxlength="700" required placeholder="What employees need to know"></textarea>
+                  </label>
                   <label class="field">
                     <span>Category</span>
                     <select name="type">
@@ -358,14 +427,6 @@ function renderAdmin() {
                       <option>Urgent</option>
                     </select>
                   </label>
-                  <label class="field full">
-                    <span>Title</span>
-                    <input name="title" maxlength="90" required placeholder="Short headline">
-                  </label>
-                  <label class="field full">
-                    <span>Message</span>
-                    <textarea name="body" maxlength="700" required placeholder="What employees need to know"></textarea>
-                  </label>
                   <label class="field">
                     <span>Audience</span>
                     <input name="audience" maxlength="80" value="All employees">
@@ -378,48 +439,60 @@ function renderAdmin() {
                 <div class="form-actions">
                   <button class="button" type="submit">${icon("send")} Publish</button>
                 </div>
-                <div class="message ${state.messageType}">${escapeHtml(state.message)}</div>
               </form>
             </section>
 
-            <section class="tool-panel">
-              <div class="panel-title">
-                <div>
-                  <p class="eyebrow">${icon("cloud")} Weather</p>
-                  <h2>Current status</h2>
+            <aside class="admin-rail">
+              <section class="tool-panel">
+                <div class="panel-title">
+                  <div>
+                    <p class="eyebrow">${icon("cloud")} Weather</p>
+                    <h2>Live site weather</h2>
+                    <p>This sits lower because it is support data, not the main publish action.</p>
+                  </div>
                 </div>
-              </div>
-              <form data-weather-form>
-                <div class="form-grid">
-                  <label class="field">
-                    <span>Level</span>
-                    <select name="level">
-                      ${["Clear", "Watch", "Warning"]
-                        .map((level) => `<option ${weather.level === level ? "selected" : ""}>${level}</option>`)
-                        .join("")}
-                    </select>
-                  </label>
-                  <label class="field">
-                    <span>Temperature</span>
-                    <input name="temperature" maxlength="20" value="${escapeHtml(weather.temperature)}" required>
-                  </label>
-                  <label class="field full">
-                    <span>Condition</span>
-                    <input name="condition" maxlength="80" value="${escapeHtml(weather.condition)}" required>
-                  </label>
-                  <label class="field full">
-                    <span>Impact</span>
-                    <textarea name="impact" maxlength="300" required>${escapeHtml(weather.impact)}</textarea>
-                  </label>
+                <form data-weather-form>
+                  <div class="form-grid">
+                    <label class="field full">
+                      <span>Location</span>
+                      <input name="location" maxlength="120" value="${escapeHtml(weather.location || weather.resolvedName || "")}" required placeholder="City, state, ZIP, or address">
+                    </label>
+                  </div>
+                  <div class="form-actions">
+                    <button class="button secondary" type="submit">${icon("refresh")} Refresh weather</button>
+                  </div>
+                </form>
+                <div class="weather-preview" aria-label="Live weather preview">
+                  <div class="weather-preview-head">
+                    <div>
+                      <p class="eyebrow">${icon("cloud")} Live result</p>
+                      <h3>${escapeHtml(weatherLocation)}</h3>
+                    </div>
+                    <span class="weather-level ${escapeHtml(String(weather.level || "Clear").toLowerCase())}">${escapeHtml(weather.level || "Clear")}</span>
+                  </div>
+                  <div class="weather-preview-grid">
+                    <div class="weather-preview-item">
+                      <span>Condition</span>
+                      <strong>${escapeHtml(weather.condition)}</strong>
+                    </div>
+                    <div class="weather-preview-item">
+                      <span>Temperature</span>
+                      <strong>${escapeHtml(weather.temperature)}</strong>
+                    </div>
+                    <div class="weather-preview-item full">
+                      <span>Impact</span>
+                      <strong>${escapeHtml(weather.impact)}</strong>
+                    </div>
+                    <div class="weather-preview-item">
+                      <span>Updated</span>
+                      <strong>${escapeHtml(formatWeatherUpdatedAt(weather.updatedAt))}</strong>
+                    </div>
+                  </div>
                 </div>
-                <div class="form-actions">
-                  <button class="button secondary" type="submit">${icon("cloud")} Update</button>
-                </div>
-              </form>
-            </section>
-          </section>
+              </section>
+            </aside>
 
-          <section class="tool-panel">
+            <section class="tool-panel board-panel">
             <div class="panel-title">
               <div>
                 <p class="eyebrow">${icon("board")} Board</p>
@@ -433,6 +506,7 @@ function renderAdmin() {
                   : '<div class="empty-state">No posts yet.</div>'
               }
             </div>
+          </section>
           </section>
         </section>
       </section>
@@ -538,7 +612,7 @@ async function handleWeatherSubmit(event) {
 
   try {
     await updateWeather(data);
-    setMessage("Weather updated.", "success");
+    setMessage("Weather refreshed.", "success");
   } catch (error) {
     setMessage(error.message || "Could not update weather.");
   }

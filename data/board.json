@@ -35,10 +35,12 @@
     }
   ],
   "weather": {
-    "condition": "Light rain",
-    "temperature": "68 F",
-    "impact": "Wet floors possible near entrances. Use mats and cones where needed.",
-    "level": "Watch",
-    "updatedAt": "2026-06-11T13:00:00.000Z"
+    "location": "",
+    "resolvedName": "",
+    "condition": "Weather not configured",
+    "temperature": "--",
+    "impact": "Enter a location in Admin to fetch live weather.",
+    "level": "Clear",
+    "updatedAt": ""
   }
 }
