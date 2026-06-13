@@ -9,7 +9,8 @@ An installable company communication app for HR news, weather, safety notices, s
 - Employee mode is read-only.
 - The app uses a fixed board header and Palziv color scheme.
 - HR can enter a location to pull live weather from Open-Meteo and save the result to the board.
-- The MVP uses a small Node server and a JSON data file, so it runs without paid services.
+- Production uses managed PostgreSQL through `DATABASE_URL`.
+- Local development still falls back to the JSON file if no database is configured.
 
 ## Run Locally
 
@@ -27,21 +28,22 @@ Clean phone-friendly routes also work:
 - Employee portal: http://localhost:3000/employee
 - HR dashboard: http://localhost:3000/admin
 
-## Free Render Demo Deployment
+## Render Blueprint Deployment
 
-This repo includes `render.yaml` for Render's free web service path.
+This repo includes `render.yaml` for Render Blueprint deployment with a managed PostgreSQL database.
 
 1. Push this project to GitHub.
 2. In Render, choose **New > Blueprint**.
 3. Select the GitHub repository.
 4. Render will read `render.yaml`.
-5. Click **Apply**.
+5. Review the service and database settings.
+6. Click **Apply**.
 
-Render will provide a public HTTPS URL. Employees can open that URL on iPhone or Android and add it to their home screen.
+Render will provide a public HTTPS URL and a PostgreSQL database. Employees can open that URL on iPhone or Android and add it to their home screen.
 
 After deploy, HR should open `/admin` to publish updates. Employees should open `/employee` to see the read-only board.
 
-Important: this first Render setup is a demo deployment. The HR dashboard is intentionally open, and updates are stored in `data/board.json`, which is not durable production storage on Render Free. When you approve the demo, add real HR login and upgrade storage to Supabase, Cloudflare D1, Render Disk, or another managed database before real company use.
+Important: the HR dashboard is still open. The storage layer is now durable and production-grade, but the dashboard still needs real authentication before company-wide use.
 
 ## Phone Install Notes
 
@@ -50,13 +52,14 @@ For production phone installs, deploy the app on HTTPS. Modern iPhone and Androi
 Recommended low-cost hosting path:
 
 - App server: Render, Railway, Fly.io, Azure App Service, or a small VPS.
-- Data upgrade: Supabase Postgres, Firebase, or managed Postgres when multiple locations and audit history matter.
+- Data layer: managed PostgreSQL for durable posts and weather snapshots.
 - Domain: board.yourcompany.com.
 
 ## Files
 
-- `server.js`: no-dependency Node server and JSON API.
-- `data/board.json`: current posts and weather status.
+- `server.js`: Node server and API layer.
+- `storage.js`: file fallback plus PostgreSQL persistence.
+- `data/board.json`: local fallback seed and dev storage when no database is configured.
 - `public/index.html`: PWA entry point.
 - `public/app.js`: employee board and HR dashboard logic.
 - `public/styles.css`: mobile-first UI.
@@ -67,7 +70,6 @@ Recommended low-cost hosting path:
 ## Production Upgrade Checklist
 
 - Add real HR login before production company use.
-- Move `data/board.json` to a database.
 - Add push notifications for urgent alerts.
 - Add image/file attachments.
 - Add role-based access for HR, safety, managers, and admins.

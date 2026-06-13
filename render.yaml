@@ -1,3 +1,7 @@
+databases:
+  - name: company-board-pwa-db
+    plan: basic-256mb
+
 services:
   - type: web
     name: company-board-pwa
@@ -9,3 +13,7 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: company-board-pwa-db
+          property: connectionString

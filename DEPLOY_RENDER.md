@@ -1,11 +1,12 @@
-# Render Free Deployment Checklist
+# Render Deployment Checklist
 
-This is the first hosting path for the Company Board PWA. It is intended for a free public demo, not final production.
+This deployment path provisions the web service and a managed PostgreSQL database.
 
 ## What Render Will Run
 
 - Runtime: Node
-- Plan: Free
+- Web service plan: existing blueprint setting
+- Database plan: `basic-256mb`
 - Build command: `npm install`
 - Start command: `npm start`
 - Health check: `/api/health`
@@ -21,12 +22,13 @@ These settings are defined in `render.yaml`.
 5. Click **New > Blueprint**.
 6. Connect the GitHub repository.
 7. Confirm the service named `company-board-pwa`.
-8. Click **Apply**.
-9. Wait for the deploy to finish.
+8. Review the database named `company-board-pwa-db`.
+9. Click **Apply**.
+10. Wait for the deploy to finish.
 
 ## Links After Deploy
 
-Replace `your-render-url` with the URL Render gives you.
+Use the URL Render gives you.
 
 - Employee portal: `https://your-render-url.onrender.com/employee`
 - HR dashboard: `https://your-render-url.onrender.com/admin`
@@ -50,8 +52,7 @@ On Android:
 ## Demo Limitations
 
 - Free Render services can sleep after inactivity.
-- Updates are stored in a local JSON file.
-- Local JSON storage can reset on redeploy or instance replacement.
+- The app still needs real HR authentication.
 - The HR dashboard is open in this demo and must get real login before production use.
 - Push notifications are not included yet.
 
@@ -60,7 +61,6 @@ On Android:
 Move to:
 
 - Real HR login
-- Database-backed posts
 - Audit log
 - Custom company domain
 - Push notifications for urgent alerts

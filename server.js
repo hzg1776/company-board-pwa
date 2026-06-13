@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { createDefaultWeather, normalizeStoredWeather, resolveLiveWeather } from "./weather.js";
+import { createBoardStore } from "./storage.js";
+import { resolveLiveWeather } from "./weather.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,7 +14,6 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
-const DATA_DIR = path.dirname(DATA_FILE);
 const MAX_BODY_BYTES = 1_000_000;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
@@ -28,108 +28,13 @@ const mimeTypes = new Map([
   [".webmanifest", "application/manifest+json; charset=utf-8"]
 ]);
 
-let writeQueue = Promise.resolve();
+const boardStore = createBoardStore({
+  dataFile: DATA_FILE,
+  databaseUrl: process.env.DATABASE_URL
+});
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function createSeedData() {
-  const now = nowIso();
-
-  return {
-    posts: [
-      {
-        id: "seed-weather-1",
-        type: "Weather",
-        priority: "Important",
-        title: "Rain expected during evening commute",
-        body: "Keep walkways clear and use the south entrance if the front lot becomes congested.",
-        audience: "All employees",
-        author: "HR",
-        createdAt: now,
-        expiresAt: ""
-      },
-      {
-        id: "seed-news-1",
-        type: "News",
-        priority: "Normal",
-        title: "Open enrollment reminder",
-        body: "Benefits selections are due Friday. HR is available from 10:00 AM to 3:00 PM for questions.",
-        audience: "All employees",
-        author: "HR",
-        createdAt: now,
-        expiresAt: ""
-      },
-      {
-        id: "seed-safety-1",
-        type: "Safety",
-        priority: "Urgent",
-        title: "Loading dock inspection today",
-        body: "Dock 2 is closed from 1:00 PM to 4:00 PM. Use Dock 1 for scheduled deliveries.",
-        audience: "Operations",
-        author: "HR",
-        createdAt: now,
-        expiresAt: ""
-      }
-    ],
-    weather: {
-      ...createDefaultWeather()
-    }
-  };
-}
-
-function normalizeDataShape(data) {
-  const seed = createSeedData();
-
-  if (!data || typeof data !== "object") return seed;
-  if (!Array.isArray(data.posts)) data.posts = [];
-  data.weather = normalizeStoredWeather(data.weather);
-  delete data.settings;
-
-  return data;
-}
-
-async function ensureDataFile() {
-  await mkdir(DATA_DIR, { recursive: true });
-
-  try {
-    await stat(DATA_FILE);
-  } catch {
-    await writeFile(DATA_FILE, `${JSON.stringify(createSeedData(), null, 2)}\n`, "utf8");
-  }
-}
-
-async function readData() {
-  await ensureDataFile();
-  const raw = await readFile(DATA_FILE, "utf8");
-  const data = normalizeDataShape(JSON.parse(raw));
-  const normalizedRaw = `${JSON.stringify(data, null, 2)}\n`;
-
-  if (normalizedRaw !== raw) {
-    await writeData(data);
-  }
-
-  return data;
-}
-
-async function writeData(data) {
-  await mkdir(DATA_DIR, { recursive: true });
-  const tempFile = `${DATA_FILE}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  await rename(tempFile, DATA_FILE);
-}
-
-async function updateData(mutator) {
-  const next = writeQueue.then(async () => {
-    const data = await readData();
-    const result = await mutator(data);
-    await writeData(data);
-    return result;
-  });
-
-  writeQueue = next.catch(() => {});
-  return next;
 }
 
 function sendJson(res, statusCode, body) {
@@ -179,12 +84,6 @@ async function sendEmployeeQr(req, res) {
   res.end(svg);
 }
 
-function apiError(message, statusCode = 400) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  return error;
-}
-
 function requireAdmin() {
   return true;
 }
@@ -202,6 +101,14 @@ function cleanLongText(value, maxLength) {
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, maxLength);
+}
+
+function isValidExpiry(value) {
+  if (value === "") return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 async function readJsonBody(req) {
@@ -265,7 +172,7 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/posts") {
-      const data = await readData();
+      const data = await boardStore.readData();
       sendJson(res, 200, { posts: sortedPosts(data.posts) });
       return;
     }
@@ -276,7 +183,7 @@ async function handleApi(req, res, url) {
       const body = await readJsonBody(req);
       const post = normalizePost(body);
 
-      await updateData((data) => {
+      await boardStore.updateData((data) => {
         data.posts.unshift(post);
         return post;
       });
@@ -290,7 +197,7 @@ async function handleApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
 
       const id = decodeURIComponent(deleteMatch[1]);
-      const deleted = await updateData((data) => {
+      const deleted = await boardStore.updateData((data) => {
         const originalLength = data.posts.length;
         data.posts = data.posts.filter((post) => post.id !== id);
         return data.posts.length !== originalLength;
@@ -306,7 +213,7 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/weather") {
-      const data = await readData();
+      const data = await boardStore.readData();
       sendJson(res, 200, { weather: data.weather });
       return;
     }
@@ -317,7 +224,7 @@ async function handleApi(req, res, url) {
       const body = await readJsonBody(req);
       const weather = await resolveLiveWeather(body.location);
 
-      await updateData((data) => {
+      await boardStore.updateData((data) => {
         data.weather = weather;
         return weather;
       });
@@ -396,8 +303,8 @@ const server = http.createServer(async (req, res) => {
   await serveStatic(req, res, url);
 });
 
-await ensureDataFile();
+await boardStore.init();
 
 server.listen(PORT, () => {
-  console.log(`Company Board running at http://localhost:${PORT}`);
+  console.log(`Company Board running at http://localhost:${PORT} (${boardStore.backend} storage)`);
 });
