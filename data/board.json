@@ -35,12 +35,12 @@
     }
   ],
   "weather": {
-    "location": "27549",
-    "resolvedName": "Louisburg, North Carolina, United States",
-    "condition": "Light drizzle",
-    "temperature": "88°F",
-    "impact": "Wet floors possible near entrances.",
+    "location": "Austin, TX",
+    "resolvedName": "Austin, Texas, United States",
+    "condition": "Partly cloudy",
+    "temperature": "83°F",
+    "impact": "Changing conditions may affect outdoor work.",
     "level": "Watch",
-    "updatedAt": "2026-06-13T01:35:05.779Z"
+    "updatedAt": "2026-06-13T03:21:18.784Z"
   }
 }

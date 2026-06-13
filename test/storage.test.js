@@ -14,6 +14,20 @@ test("createSeedData returns a full board snapshot", () => {
   assert.equal(seed.weather.level, "Clear");
 });
 
+test("createBoardStore defaults to local file storage", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-default-"));
+  const dataFile = path.join(tempDir, "board.json");
+  const store = createBoardStore({ dataFile });
+
+  try {
+    await store.init();
+    assert.equal(store.backend, "file");
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("normalizeDataShape repairs legacy board data", () => {
   const normalized = normalizeDataShape({
     posts: [

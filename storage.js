@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { Pool } from "pg";
 import { createDefaultWeather, normalizeStoredWeather } from "./weather.js";
-
-const BOARD_STATE_ID = 1;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
@@ -156,146 +153,14 @@ async function readSeedSnapshot(dataFile) {
   }
 }
 
-function isLocalDatabaseUrl(connectionString) {
-  try {
-    const url = new URL(connectionString);
-    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  } catch {
-    return /localhost|127\.0\.0\.1|::1/.test(connectionString);
-  }
-}
-
-function createDatabasePool(connectionString) {
-  const options = {
-    connectionString,
-    max: 5,
-    idleTimeoutMillis: 30_000
-  };
-
-  if (!isLocalDatabaseUrl(connectionString)) {
-    options.ssl = { rejectUnauthorized: false };
-  }
-
-  return new Pool(options);
-}
-
-async function ensureDatabaseSchema(pool) {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS board_state (
-      id integer PRIMARY KEY CHECK (id = 1),
-      data jsonb NOT NULL,
-      updated_at timestamptz NOT NULL DEFAULT NOW()
-    )
-  `);
-}
-
-async function ensureDatabaseSeed(pool, dataFile) {
-  await ensureDatabaseSchema(pool);
-
-  const { rows } = await pool.query("SELECT data FROM board_state WHERE id = $1", [BOARD_STATE_ID]);
-  if (rows.length > 0) {
-    return normalizeDataShape(rows[0].data);
-  }
-
-  const seed = await readSeedSnapshot(dataFile);
-  await pool.query(
-    `
-      INSERT INTO board_state (id, data, updated_at)
-      VALUES ($1, $2::jsonb, NOW())
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [BOARD_STATE_ID, JSON.stringify(seed)]
-  );
-
-  return seed;
-}
-
-async function readDatabaseSnapshot(pool, dataFile) {
-  return ensureDatabaseSeed(pool, dataFile);
-}
-
-async function writeDatabaseSnapshot(pool, dataFile, data) {
-  await ensureDatabaseSchema(pool);
-  const normalized = normalizeDataShape(data);
-
-  await pool.query(
-    `
-      INSERT INTO board_state (id, data, updated_at)
-      VALUES ($1, $2::jsonb, NOW())
-      ON CONFLICT (id)
-      DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
-    `,
-    [BOARD_STATE_ID, JSON.stringify(normalized)]
-  );
-
-  return normalized;
-}
-
-async function updateDatabaseSnapshot(pool, dataFile, mutator) {
-  await ensureDatabaseSchema(pool);
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-    const { rows } = await client.query("SELECT data FROM board_state WHERE id = $1 FOR UPDATE", [BOARD_STATE_ID]);
-    let data;
-
-    if (rows.length > 0) {
-      data = normalizeDataShape(rows[0].data);
-    } else {
-      const seed = await readSeedSnapshot(dataFile);
-      await client.query(
-        `
-          INSERT INTO board_state (id, data, updated_at)
-          VALUES ($1, $2::jsonb, NOW())
-          ON CONFLICT (id) DO NOTHING
-        `,
-        [BOARD_STATE_ID, JSON.stringify(seed)]
-      );
-
-      const seeded = await client.query("SELECT data FROM board_state WHERE id = $1 FOR UPDATE", [BOARD_STATE_ID]);
-      data = seeded.rows.length > 0 ? normalizeDataShape(seeded.rows[0].data) : seed;
-    }
-
-    const result = await mutator(data);
-
-    await client.query(
-      `
-        UPDATE board_state
-        SET data = $2::jsonb,
-            updated_at = NOW()
-        WHERE id = $1
-      `,
-      [BOARD_STATE_ID, JSON.stringify(data)]
-    );
-
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export function createBoardStore({ dataFile, databaseUrl } = {}) {
-  const hasDatabase = Boolean(databaseUrl);
-  const pool = hasDatabase ? createDatabasePool(databaseUrl) : null;
-  const backend = hasDatabase ? "postgres" : "file";
+export function createBoardStore({ dataFile } = {}) {
+  const backend = "file";
   let initPromise = null;
   let writeQueue = Promise.resolve();
 
   async function init() {
     if (!initPromise) {
-      initPromise = (async () => {
-        if (pool) {
-          await ensureDatabaseSeed(pool, dataFile);
-          return;
-        }
-
-        await readFileSnapshot(dataFile);
-      })();
+      initPromise = readFileSnapshot(dataFile);
     }
 
     return initPromise;
@@ -303,17 +168,13 @@ export function createBoardStore({ dataFile, databaseUrl } = {}) {
 
   async function readData() {
     await init();
-    return pool ? readDatabaseSnapshot(pool, dataFile) : readFileSnapshot(dataFile);
+    return readFileSnapshot(dataFile);
   }
 
   async function writeData(data) {
     await init();
 
     const next = writeQueue.then(async () => {
-      if (pool) {
-        return writeDatabaseSnapshot(pool, dataFile, data);
-      }
-
       const normalized = normalizeDataShape(data);
       await writeFileAtomic(dataFile, normalized);
       return normalized;
@@ -327,10 +188,6 @@ export function createBoardStore({ dataFile, databaseUrl } = {}) {
     await init();
 
     const next = writeQueue.then(async () => {
-      if (pool) {
-        return updateDatabaseSnapshot(pool, dataFile, mutator);
-      }
-
       const data = await readFileSnapshot(dataFile);
       const result = await mutator(data);
       await writeFileAtomic(dataFile, data);
@@ -342,9 +199,7 @@ export function createBoardStore({ dataFile, databaseUrl } = {}) {
   }
 
   async function close() {
-    if (pool) {
-      await pool.end();
-    }
+    return undefined;
   }
 
   return {

@@ -1,46 +1,31 @@
-# Docker + Cloudflare Tunnel Deployment
+# Local Hardware + Cloudflare Tunnel Deployment
 
-Domain: `itotexpress.com`
+This repo is meant to run on your own Windows machine and be published through Cloudflare Tunnel.
 
-## 1. Install Docker Desktop
+## 1. Prepare The Host Machine
 
-Run PowerShell as Administrator:
+- Install Node.js 22 or newer.
+- Make sure the repo is on the Windows machine that will host the app.
+- Use the existing project folder: `C:\Users\admin\Documents\Codex\Project-A`
 
-```powershell
-winget install -e --id Docker.DockerDesktop
-```
-
-Restart Windows if Docker asks for it, then open Docker Desktop once.
-
-Verify:
-
-```powershell
-docker --version
-docker info
-```
-
-## 2. Stop Anything Already Using Port 3000
-
-Run PowerShell as Administrator:
-
-```powershell
-Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue |
-  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
-```
-
-## 3. Build And Run The App Container
-
-From this project folder:
+## 2. Install Dependencies
 
 ```powershell
 cd "C:\Users\admin\Documents\Codex\Project-A"
-docker rm -f company-board-pwa 2>$null
-docker volume create company-board-data
-docker build -t company-board-pwa:latest .
-docker run -d --name company-board-pwa --restart unless-stopped -p 3000:3000 -v company-board-data:/app/data -e NODE_ENV=production -e PORT=3000 -e DATA_FILE=/app/data/board.json company-board-pwa:latest
+npm install
 ```
 
-Verify locally:
+## 3. Start The App Locally
+
+Manual launches use `PORT` and default to `3000`.
+The boot script below uses `3116` so the tunnel can stay fixed to the current host port.
+
+```powershell
+$env:PORT = "3000"
+npm start
+```
+
+Verify the local app:
 
 ```powershell
 Invoke-WebRequest -Uri "http://localhost:3000/api/health" -UseBasicParsing
@@ -57,27 +42,27 @@ cloudflared --version
 
 ## 5. Create The Cloudflare Tunnel
 
-1. Open Cloudflare Dashboard.
+1. Open the Cloudflare Dashboard.
 2. Go to `Zero Trust` -> `Networks` -> `Tunnels`.
 3. Select `Create a tunnel`.
 4. Choose `Cloudflared`.
 5. Name it `company-board-pwa`.
 6. Select `Save tunnel`.
 7. Choose `Windows`.
-8. Copy the exact Windows service command Cloudflare shows and run it in Administrator PowerShell.
+8. Copy the exact Windows service command Cloudflare shows and run it in Administrator PowerShell on the host machine.
 
 ## 6. Configure The Public Hostname
 
-In the same tunnel:
+In the same tunnel, set:
 
 ```text
-Subdomain: leave blank
+Subdomain: leave blank or use www
 Domain: itotexpress.com
 Type: HTTP
-URL: localhost:3000
+URL: localhost:3116
 ```
 
-Save the public hostname.
+If you use the boot script below, it starts the app on port 3116 so the tunnel can stay pointed here.
 
 ## 7. Verify Public Access
 
@@ -92,25 +77,34 @@ https://itotexpress.com/employee
 https://itotexpress.com/admin
 ```
 
-## 8. Useful Operations
+## 8. Windows Startup Script
 
-View app logs:
-
-```powershell
-docker logs -f company-board-pwa
-```
-
-Restart app:
+Use the combined startup script to bring the host back after a reboot:
 
 ```powershell
-docker restart company-board-pwa
+powershell -ExecutionPolicy Bypass -File "C:\Users\admin\Documents\Codex\Project-A\scripts\windows-startup.ps1"
 ```
 
-Update after code changes:
+To create the actual boot task, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\admin\Documents\Codex\Project-A\scripts\install-startup-task.ps1"
+```
+
+Run that from an elevated PowerShell window. A non-elevated shell will get `Access is denied` when Windows tries to register the task.
+
+If elevation is available, the task runs at startup as `SYSTEM`. Otherwise, the installer cannot complete the registration from this session.
+
+## 9. Update Workflow
+
+When you change code:
 
 ```powershell
 cd "C:\Users\admin\Documents\Codex\Project-A"
-docker build -t company-board-pwa:latest .
-docker rm -f company-board-pwa
-docker run -d --name company-board-pwa --restart unless-stopped -p 3000:3000 -v company-board-data:/app/data -e NODE_ENV=production -e PORT=3000 -e DATA_FILE=/app/data/board.json company-board-pwa:latest
+git pull
+npm install
+$env:PORT = "3000"
+npm start
 ```
+
+The tunnel can stay pointed at the same local port.

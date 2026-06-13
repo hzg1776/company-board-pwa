@@ -29,8 +29,7 @@ const mimeTypes = new Map([
 ]);
 
 const boardStore = createBoardStore({
-  dataFile: DATA_FILE,
-  databaseUrl: process.env.DATABASE_URL
+  dataFile: DATA_FILE
 });
 
 function nowIso() {

@@ -9,8 +9,7 @@ An installable company communication app for HR news, weather, safety notices, s
 - Employee mode is read-only.
 - The app uses a fixed board header and Palziv color scheme.
 - HR can enter a location to pull live weather from Open-Meteo and save the result to the board.
-- Production uses managed PostgreSQL through `DATABASE_URL`.
-- Local development still falls back to the JSON file if no database is configured.
+- Local hardware storage is the only storage path.
 
 ## Run Locally
 
@@ -28,44 +27,32 @@ Clean phone-friendly routes also work:
 - Employee portal: http://localhost:3000/employee
 - HR dashboard: http://localhost:3000/admin
 
-## Render Blueprint Deployment
+## Free Online Path
 
-This repo includes `render.yaml` for Render Blueprint deployment with free Render web hosting and a free Render Postgres database.
+Run the app on your own Windows hardware and publish it with Cloudflare Tunnel.
 
-1. Push this project to GitHub.
-2. In Render, choose **New > Blueprint**.
-3. Select the GitHub repository.
-4. Render will read `render.yaml`.
-5. Review the service and database settings.
-6. Click **Apply**.
+- Start the app locally with `npm start`, or use `scripts/windows-startup.ps1` to boot the app and tunnel together on port `3116`.
+- Install `cloudflared` on the same machine.
+- Point the tunnel at `localhost:3116`.
+- Use `https://itotexpress.com/employee` and `https://itotexpress.com/admin`.
 
-Render will provide a public HTTPS URL and a PostgreSQL database. Employees can open that URL on iPhone or Android and add it to their home screen.
-
-After deploy, HR should open `/admin` to publish updates. Employees should open `/employee` to see the read-only board.
-
-Important: the HR dashboard is still open. The storage layer is now durable and production-grade, but the dashboard still needs real authentication before company-wide use.
-
-## Phone Install Notes
-
-For production phone installs, deploy the app on HTTPS. Modern iPhone and Android browsers require HTTPS for reliable home-screen installation and offline caching.
-
-Recommended low-cost hosting path:
-
-- App server: Render, Railway, Fly.io, Azure App Service, or a small VPS.
-- Data layer: managed PostgreSQL for durable posts and weather snapshots.
-- Domain: board.yourcompany.com.
+This keeps the hosting path free on your side and still gives the app HTTPS for phone installs and home-screen access.
 
 ## Files
 
 - `server.js`: Node server and API layer.
-- `storage.js`: file fallback plus PostgreSQL persistence.
-- `data/board.json`: local fallback seed and dev storage when no database is configured.
+- `storage.js`: file-backed persistence.
+- `data/board.json`: local seed and dev storage.
 - `public/index.html`: PWA entry point.
 - `public/app.js`: employee board and HR dashboard logic.
 - `public/styles.css`: mobile-first UI.
 - `public/manifest.webmanifest`: installable app metadata.
 - `public/sw.js`: offline shell and API cache.
 - `public/assets/logo.svg`: app icon.
+- `DEPLOY_CLOUDFLARE.md`: local hardware + Cloudflare Tunnel runbook.
+- `scripts/windows-phase1-cleanup.ps1`: safe Windows cleanup and reinstall helper.
+- `scripts/windows-startup.ps1`: boot script for the app and cloudflared service.
+- `scripts/install-startup-task.ps1`: registers the Windows startup task.
 
 ## Production Upgrade Checklist
 
