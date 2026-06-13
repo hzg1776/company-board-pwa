@@ -1,5 +1,6 @@
 const OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
+const WTTR_URL = "https://wttr.in";
 const WEATHER_LEVELS = new Set(["Clear", "Watch", "Warning"]);
 
 const WEATHER_LOOKUP = new Map([
@@ -105,6 +106,73 @@ function weatherDetailsForCode(code) {
   };
 }
 
+function weatherDetailsFromDescription(description) {
+  const condition = cleanText(description, 80) || "Current conditions";
+  const normalized = condition.toLowerCase();
+
+  if (/(thunder|storm|hail)/.test(normalized)) {
+    return {
+      condition,
+      level: "Warning",
+      impact: "Outdoor work should pause during lightning."
+    };
+  }
+
+  if (/(snow|sleet|ice|freezing)/.test(normalized)) {
+    return {
+      condition,
+      level: "Warning",
+      impact: "Slippery surfaces likely."
+    };
+  }
+
+  if (/(heavy rain|torrential|downpour|violent rain)/.test(normalized)) {
+    return {
+      condition,
+      level: "Warning",
+      impact: "Outdoor work and travel may be disrupted."
+    };
+  }
+
+  if (/(drizzle|rain|shower)/.test(normalized)) {
+    return {
+      condition,
+      level: "Watch",
+      impact: "Wet floors possible near entrances."
+    };
+  }
+
+  if (/(fog|mist|haze)/.test(normalized)) {
+    return {
+      condition,
+      level: "Watch",
+      impact: "Reduced visibility near roads and entrances."
+    };
+  }
+
+  if (/(cloud|overcast|partly)/.test(normalized)) {
+    return {
+      condition,
+      level: "Watch",
+      impact: "Changing conditions may affect outdoor work."
+    };
+  }
+
+  if (/(clear|sunny|sun)/.test(normalized)) {
+    return {
+      condition,
+      level: "Clear",
+      impact: "Normal operations."
+    };
+  }
+
+  return {
+    condition,
+    level: "Watch",
+    impact: "Review local travel and outdoor work conditions."
+  };
+}
+
 function formatTemperature(value) {
   const number = Number(value);
 
@@ -115,8 +183,7 @@ function formatTemperature(value) {
   return `${Math.round(number)}°F`;
 }
 
-function buildImpact(code, windSpeed) {
-  const details = weatherDetailsForCode(code);
+function buildImpactFromDetails(details, windSpeed) {
   const parts = [details.impact];
 
   const windValue = Number(windSpeed);
@@ -125,6 +192,10 @@ function buildImpact(code, windSpeed) {
   }
 
   return parts.join(" ");
+}
+
+function buildImpact(code, windSpeed) {
+  return buildImpactFromDetails(weatherDetailsForCode(code), windSpeed);
 }
 
 async function fetchJson(fetchImpl, url, timeoutMs = 10000) {
@@ -159,17 +230,7 @@ async function fetchJson(fetchImpl, url, timeoutMs = 10000) {
   }
 }
 
-async function resolveLiveWeather(locationInput, fetchImpl = globalThis.fetch) {
-  const location = cleanText(locationInput, 120);
-
-  if (!location) {
-    throw new Error("Location is required.");
-  }
-
-  if (typeof fetchImpl !== "function") {
-    throw new Error("Weather lookup is not available in this runtime.");
-  }
-
+async function resolveOpenMeteoWeather(location, fetchImpl) {
   let match = null;
 
   for (const searchTerm of buildLocationSearchTerms(location)) {
@@ -217,10 +278,88 @@ async function resolveLiveWeather(locationInput, fetchImpl = globalThis.fetch) {
     resolvedName: formatResolvedName(match),
     condition: details.condition,
     temperature: formatTemperature(current.temperature),
-    impact: buildImpact(current.weathercode, current.windspeed),
+    impact: buildImpactFromDetails(details, current.windspeed),
     level: details.level,
     updatedAt: nowIso()
   };
+}
+
+async function resolveWttrWeather(location, fetchImpl) {
+  const wttrUrl = new URL(`${WTTR_URL}/${encodeURIComponent(location)}`);
+  wttrUrl.search = new URLSearchParams({
+    format: "j1",
+    lang: "en"
+  }).toString();
+
+  const weather = await fetchJson(fetchImpl, wttrUrl);
+  const current = weather.current_condition?.[0];
+  const nearest = weather.nearest_area?.[0];
+
+  if (!current) {
+    throw new Error(`WTTR did not return current weather for "${location}".`);
+  }
+
+  const details = weatherDetailsFromDescription(current.weatherDesc?.[0]?.value);
+
+  return {
+    location,
+    resolvedName: formatResolvedName({
+      name: nearest?.areaName?.[0]?.value || location,
+      admin1: nearest?.region?.[0]?.value,
+      country: nearest?.country?.[0]?.value
+    }),
+    condition: details.condition,
+    temperature: formatTemperature(current.temp_F),
+    impact: buildImpactFromDetails(details, current.windspeedMiles),
+    level: details.level,
+    updatedAt: nowIso()
+  };
+}
+
+function shouldFallbackToWttr(error) {
+  const message = cleanText(error?.message || error, 200).toLowerCase();
+
+  if (!message) {
+    return false;
+  }
+
+  if (message.startsWith("no weather location found")) {
+    return false;
+  }
+
+  return (
+    message.includes("daily api request limit exceeded") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("service unavailable") ||
+    message.includes("failed to fetch") ||
+    message.includes("fetch failed") ||
+    message.includes("network error") ||
+    message.includes("timeout") ||
+    message.includes("did not return current weather")
+  );
+}
+
+async function resolveLiveWeather(locationInput, fetchImpl = globalThis.fetch) {
+  const location = cleanText(locationInput, 120);
+
+  if (!location) {
+    throw new Error("Location is required.");
+  }
+
+  if (typeof fetchImpl !== "function") {
+    throw new Error("Weather lookup is not available in this runtime.");
+  }
+
+  try {
+    return await resolveOpenMeteoWeather(location, fetchImpl);
+  } catch (error) {
+    if (!shouldFallbackToWttr(error)) {
+      throw error;
+    }
+
+    return await resolveWttrWeather(location, fetchImpl);
+  }
 }
 
 export {
@@ -230,5 +369,6 @@ export {
   formatTemperature,
   normalizeStoredWeather,
   resolveLiveWeather,
-  weatherDetailsForCode
+  weatherDetailsForCode,
+  weatherDetailsFromDescription
 };

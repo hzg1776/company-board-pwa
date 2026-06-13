@@ -145,6 +145,73 @@ test("resolveLiveWeather retries simplified location terms", async () => {
   assert.equal(weather.condition, "Overcast");
 });
 
+test("resolveLiveWeather falls back to wttr when Open-Meteo is rate limited", async () => {
+  const calls = [];
+
+  const fetchMock = async (input) => {
+    const url = new URL(String(input));
+    calls.push(url);
+
+    if (url.hostname === "geocoding-api.open-meteo.com") {
+      return jsonResponse({
+        results: [
+          {
+            name: "Austin",
+            admin1: "Texas",
+            country: "United States",
+            latitude: 30.2672,
+            longitude: -97.7431
+          }
+        ]
+      });
+    }
+
+    if (url.hostname === "api.open-meteo.com") {
+      return jsonResponse(
+        { error: "Daily API request limit exceeded. Please try again tomorrow." },
+        429,
+        "Too Many Requests"
+      );
+    }
+
+    if (url.hostname === "wttr.in") {
+      return jsonResponse({
+        nearest_area: [
+          {
+            areaName: [{ value: "Austin" }],
+            region: [{ value: "Texas" }],
+            country: [{ value: "United States of America" }]
+          }
+        ],
+        current_condition: [
+          {
+            weatherDesc: [{ value: "Clear" }],
+            temp_F: "89",
+            weatherCode: "113",
+            windspeedMiles: "9"
+          }
+        ]
+      });
+    }
+
+    throw new Error(`Unexpected request for ${url.href}`);
+  };
+
+  const weather = await resolveLiveWeather("Austin, TX", fetchMock);
+
+  assert.deepEqual(calls.map((call) => call.hostname), [
+    "geocoding-api.open-meteo.com",
+    "api.open-meteo.com",
+    "wttr.in"
+  ]);
+  assert.equal(weather.location, "Austin, TX");
+  assert.equal(weather.resolvedName, "Austin, Texas, United States of America");
+  assert.equal(weather.condition, "Clear");
+  assert.equal(weather.temperature, "89°F");
+  assert.equal(weather.level, "Clear");
+  assert.equal(weather.impact, "Normal operations.");
+});
+
 test("resolveLiveWeather fails when the location cannot be found", async () => {
   const fetchMock = async (input) => {
     const url = new URL(String(input));
