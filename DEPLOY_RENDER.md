@@ -1,12 +1,12 @@
 # Render Deployment Checklist
 
-This deployment path provisions the web service and a managed PostgreSQL database.
+This deployment path provisions the free web service and the free PostgreSQL database.
 
 ## What Render Will Run
 
 - Runtime: Node
-- Web service plan: existing blueprint setting
-- Database plan: `basic-256mb`
+- Web service plan: free
+- Database plan: free
 - Build command: `npm install`
 - Start command: `npm start`
 - Health check: `/api/health`

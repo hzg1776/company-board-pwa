@@ -30,7 +30,7 @@ Clean phone-friendly routes also work:
 
 ## Render Blueprint Deployment
 
-This repo includes `render.yaml` for Render Blueprint deployment with a managed PostgreSQL database.
+This repo includes `render.yaml` for Render Blueprint deployment with free Render web hosting and a free Render Postgres database.
 
 1. Push this project to GitHub.
 2. In Render, choose **New > Blueprint**.

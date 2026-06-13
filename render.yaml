@@ -1,6 +1,6 @@
 databases:
   - name: company-board-pwa-db
-    plan: basic-256mb
+    plan: free
 
 services:
   - type: web
