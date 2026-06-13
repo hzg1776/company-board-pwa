@@ -204,25 +204,6 @@ function visiblePosts() {
     });
 }
 
-function weatherScene(level) {
-  const normalizedLevel = String(level || "Clear").toLowerCase();
-  const showRain = normalizedLevel !== "clear";
-  const showWarning = normalizedLevel === "warning";
-
-  return `
-    <svg class="weather-scene" viewBox="0 0 360 210" role="img" aria-label="Weather status">
-      <rect x="0" y="0" width="360" height="210" rx="8" fill="currentColor" opacity="0.08"></rect>
-      <rect x="20" y="24" width="320" height="22" rx="2" fill="currentColor" opacity="0.12"></rect>
-      <circle cx="90" cy="68" r="34" fill="currentColor" opacity="0.32"></circle>
-      <path d="M126 138h142c29 0 52-20 52-45s-23-45-52-45c-11 0-21 3-29 8-15-24-43-39-75-39-48 0-86 32-86 72 0 3 0 6 1 9-22 4-39 20-39 40 0 23 21 42 46 42h40Z" fill="#ffffff" stroke="currentColor" stroke-width="8"></path>
-      <path d="M38 170h286" stroke="currentColor" stroke-width="8" stroke-linecap="square" opacity="0.3"></path>
-      <path d="M48 186h120" stroke="currentColor" stroke-width="8" stroke-linecap="square" opacity="0.16"></path>
-      ${showRain ? '<path d="M116 166v24M166 158v30M216 166v24M266 158v30" stroke="currentColor" stroke-width="9" stroke-linecap="round"></path>' : ""}
-      ${showWarning ? '<path d="M288 40 330 112h-84l42-72Z" fill="#50b2ce"></path><path d="M288 66v23M288 103h.01" stroke="#ffffff" stroke-width="8" stroke-linecap="round"></path>' : ""}
-    </svg>
-  `;
-}
-
 function renderNotice(post, includeControls = false) {
   const safePriority = priorityClass(post.priority);
 
@@ -287,9 +268,6 @@ function renderEmployee() {
 
         <section class="employee-grid" aria-label="Employee notifications">
           <aside class="status-panel">
-            <div class="weather-visual ${escapeHtml(String(weather.level || "Clear").toLowerCase())}">
-              ${weatherScene(weather.level)}
-            </div>
             <div class="weather-copy">
               <p class="eyebrow">${icon("cloud")} Plant weather</p>
               <h2>${escapeHtml(weatherHeadline(weather))}</h2>

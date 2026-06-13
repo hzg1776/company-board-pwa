@@ -276,37 +276,6 @@ svg {
   overflow: hidden;
 }
 
-.weather-visual {
-  min-height: 190px;
-  padding: 18px;
-  color: var(--steel);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(220, 226, 230, 0.88)),
-    repeating-linear-gradient(135deg, rgba(36, 49, 58, 0.06) 0 10px, rgba(36, 49, 58, 0.02) 10px 20px);
-  border-bottom: 1px solid var(--line);
-}
-
-.weather-visual.warning {
-  color: var(--danger);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(240, 221, 216, 0.92)),
-    repeating-linear-gradient(135deg, rgba(160, 62, 44, 0.06) 0 10px, rgba(160, 62, 44, 0.02) 10px 20px);
-}
-
-.weather-visual.watch {
-  color: var(--safety);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(242, 225, 189, 0.92)),
-    repeating-linear-gradient(135deg, rgba(140, 90, 18, 0.06) 0 10px, rgba(140, 90, 18, 0.02) 10px 20px);
-}
-
-.weather-scene {
-  width: 100%;
-  max-width: 360px;
-  height: auto;
-  margin: 0 auto;
-}
-
 .weather-copy {
   padding: 16px;
 }
