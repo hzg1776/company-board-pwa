@@ -12,6 +12,7 @@ test("createSeedData returns a full board snapshot", () => {
   assert.equal(seed.posts.length, 3);
   assert.equal(seed.weather.condition, "Weather not configured");
   assert.equal(seed.weather.level, "Clear");
+  assert.equal(seed.posts[0].notifyEmployees, true);
 });
 
 test("createBoardStore defaults to local file storage", async () => {
@@ -51,6 +52,7 @@ test("normalizeDataShape repairs legacy board data", () => {
   assert.equal(normalized.posts.length, 1);
   assert.equal(normalized.posts[0].title, "Legacy message");
   assert.equal(normalized.posts[0].body, "First line\n\nSecond line");
+  assert.equal(normalized.posts[0].notifyEmployees, false);
   assert.equal(normalized.weather.condition, "Light rain");
   assert.equal(normalized.settings, undefined);
 });
@@ -71,6 +73,7 @@ test("file-backed store persists updates between reads", async () => {
         id: "test-post",
         type: "News",
         priority: "Normal",
+        notifyEmployees: true,
         title: "Database-backed board",
         body: "This post should persist across reads.",
         audience: "All employees",
@@ -84,6 +87,7 @@ test("file-backed store persists updates between reads", async () => {
     const secondRead = await store.readData();
     assert.equal(secondRead.posts[0].title, "Database-backed board");
     assert.equal(secondRead.posts[0].body, "This post should persist across reads.");
+    assert.equal(secondRead.posts[0].notifyEmployees, true);
   } finally {
     await store.close();
     await rm(tempDir, { recursive: true, force: true });

@@ -10,6 +10,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function parseBooleanish(value) {
+  return value === true || value === "true" || value === "on" || value === 1 || value === "1";
+}
+
 function cleanText(value, maxLength) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -46,6 +50,7 @@ export function createSeedData() {
         id: "seed-weather-1",
         type: "Weather",
         priority: "Important",
+        notifyEmployees: true,
         title: "Rain expected during evening commute",
         body: "Keep walkways clear and use the south entrance if the front lot becomes congested.",
         audience: "All employees",
@@ -57,6 +62,7 @@ export function createSeedData() {
         id: "seed-news-1",
         type: "News",
         priority: "Normal",
+        notifyEmployees: false,
         title: "Open enrollment reminder",
         body: "Benefits selections are due Friday. HR is available from 10:00 AM to 3:00 PM for questions.",
         audience: "All employees",
@@ -68,6 +74,7 @@ export function createSeedData() {
         id: "seed-safety-1",
         type: "Safety",
         priority: "Urgent",
+        notifyEmployees: true,
         title: "Loading dock inspection today",
         body: "Dock 2 is closed from 1:00 PM to 4:00 PM. Use Dock 1 for scheduled deliveries.",
         audience: "Operations",
@@ -91,6 +98,10 @@ function normalizeStoredPost(post = {}) {
     id: cleanText(post.id, 128) || crypto.randomUUID(),
     type: allowedTypes.has(post.type) ? post.type : "News",
     priority: allowedPriorities.has(post.priority) ? post.priority : "Normal",
+    notifyEmployees:
+      parseBooleanish(post.notifyEmployees) ||
+      post.priority === "Important" ||
+      post.priority === "Urgent",
     title: title || "Untitled post",
     body,
     audience: cleanText(post.audience || "All employees", 80),

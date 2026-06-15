@@ -2,3 +2,6 @@ node_modules/
 .env
 *.log
 artifacts/
+data/push.json
+data/analytics.json
+data/*.tmp

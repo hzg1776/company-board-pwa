@@ -87,5 +87,5 @@ npm test
 
 Write-Step "Next manual checks"
 Write-Host "1. Start the app with: `$env:PORT = '$Port'; npm start"
-Write-Host "2. Confirm http://localhost:$Port/employee loads."
+Write-Host "2. Confirm http://localhost:$Port/palzivalerts loads."
 Write-Host "3. If you changed static assets, purge Cloudflare cache manually in the dashboard."

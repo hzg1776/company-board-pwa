@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
+import { createAnalyticsStore } from "./analytics.js";
+import { createNotificationHub } from "./notifications.js";
 import { createBoardStore } from "./storage.js";
+import { createSecurityStore } from "./security.js";
 import { resolveLiveWeather } from "./weather.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,8 +17,59 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
+const INDEX_HTML_TEMPLATE_PATH = path.join(PUBLIC_DIR, "index.html");
+const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
+const APP_BASE_PATH = "/palzivalerts";
+const CONFIGURED_ASSET_VERSION = String(process.env.ASSET_VERSION || "")
+  .replace(/[^a-zA-Z0-9._-]/g, "")
+  .slice(0, 40);
 const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
+const PUSH_DATA_FILE = process.env.PUSH_DATA_FILE ? path.resolve(process.env.PUSH_DATA_FILE) : path.join(__dirname, "data", "push.json");
+const ANALYTICS_DATA_FILE = process.env.ANALYTICS_DATA_FILE ? path.resolve(process.env.ANALYTICS_DATA_FILE) : path.join(__dirname, "data", "analytics.json");
+const SECURITY_DATA_FILE = process.env.SECURITY_DATA_FILE ? path.resolve(process.env.SECURITY_DATA_FILE) : path.join(__dirname, "data", "security.json");
 const MAX_BODY_BYTES = 1_000_000;
+const DEFAULT_SITE_CONFIG = Object.freeze({
+  name: "Palziv",
+  nameSuffix: "",
+  shortName: "Palziv",
+  subtitle: "Updates & Alerts Portal",
+  description: "Updates and alerts portal for Palziv with HR-managed company news, weather, and push notifications.",
+  themeColor: "#1b2329",
+  backgroundColor: "#f4f8fb"
+});
+
+function readSiteConfig() {
+  const name = cleanText(process.env.SITE_NAME, 80) || DEFAULT_SITE_CONFIG.name;
+  const nameSuffix = cleanText(process.env.SITE_NAME_SUFFIX, 16) || DEFAULT_SITE_CONFIG.nameSuffix;
+  const shortName = cleanText(process.env.SITE_SHORT_NAME, 24) || DEFAULT_SITE_CONFIG.shortName;
+  const subtitle = cleanText(process.env.SITE_SUBTITLE, 120) || DEFAULT_SITE_CONFIG.subtitle;
+  const description = cleanText(process.env.SITE_DESCRIPTION, 180) || DEFAULT_SITE_CONFIG.description;
+  const themeColor = cleanText(process.env.SITE_THEME_COLOR, 20) || DEFAULT_SITE_CONFIG.themeColor;
+  const backgroundColor = cleanText(process.env.SITE_BACKGROUND_COLOR, 20) || DEFAULT_SITE_CONFIG.backgroundColor;
+
+  return {
+    name,
+    nameSuffix,
+    shortName,
+    subtitle,
+    description,
+    themeColor,
+    backgroundColor
+  };
+}
+
+const siteConfig = readSiteConfig();
+const indexHtmlTemplate = await readFile(INDEX_HTML_TEMPLATE_PATH, "utf8");
+const serviceWorkerTemplate = await readFile(SERVICE_WORKER_TEMPLATE_PATH, "utf8");
+const assetVersionSeed = await Promise.all([
+  stat(path.join(PUBLIC_DIR, "app.js")),
+  stat(path.join(PUBLIC_DIR, "styles.css")),
+  stat(INDEX_HTML_TEMPLATE_PATH),
+  stat(SERVICE_WORKER_TEMPLATE_PATH)
+])
+  .then((stats) => Math.round(Math.max(...stats.map((fileStat) => fileStat.mtimeMs))).toString(36))
+  .catch(() => "dev");
+const ASSET_VERSION = CONFIGURED_ASSET_VERSION || assetVersionSeed;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
@@ -31,22 +86,429 @@ const mimeTypes = new Map([
 const boardStore = createBoardStore({
   dataFile: DATA_FILE
 });
+const notificationHub = createNotificationHub({
+  dataFile: PUSH_DATA_FILE
+});
+const analyticsStore = createAnalyticsStore({
+  dataFile: ANALYTICS_DATA_FILE
+});
+const securityStore = createSecurityStore({
+  dataFile: SECURITY_DATA_FILE
+});
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function sendJson(res, statusCode, body) {
+function sendJson(res, statusCode, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
+    "Cache-Control": "no-store",
+    ...extraHeaders
   });
   res.end(payload);
 }
 
 function sendError(res, statusCode, message) {
   sendJson(res, statusCode, { error: message });
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;"
+    };
+    return entities[character];
+  });
+}
+
+function serializeForScript(value) {
+  return JSON.stringify(value).replace(/[<>&]/g, (character) => {
+    const replacements = {
+      "<": "\\u003c",
+      ">": "\\u003e",
+      "&": "\\u0026"
+    };
+    return replacements[character] || character;
+  });
+}
+
+function appPath(...segments) {
+  const parts = [APP_BASE_PATH];
+
+  for (const segment of segments) {
+    const cleanSegment = String(segment ?? "").replace(/^\/+|\/+$/g, "");
+
+    if (cleanSegment) {
+      parts.push(cleanSegment);
+    }
+  }
+
+  return parts.join("/").replace(/\/+/g, "/") || APP_BASE_PATH;
+}
+
+function redirectTo(res, location) {
+  res.writeHead(308, {
+    Location: location,
+    "Cache-Control": "no-store"
+  });
+  res.end(`Redirecting to ${location}`);
+}
+
+function displayBrandName(config = siteConfig) {
+  const name = cleanText(config.name, 80) || DEFAULT_SITE_CONFIG.name;
+  const suffix = cleanText(config.nameSuffix, 16) || "";
+  return suffix ? `${name} ${suffix}` : name;
+}
+
+function countBy(items, selector) {
+  const counts = {};
+
+  for (const item of items || []) {
+    const key = selector(item);
+
+    if (!key) {
+      continue;
+    }
+
+    counts[key] = (counts[key] || 0) + 1;
+  }
+
+  return counts;
+}
+
+function sortCountEntries(counts, limit = 10) {
+  return Object.entries(counts || {})
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([label, value]) => ({ label, value }));
+}
+
+function summarizeNotificationDevices(pushData = {}) {
+  const accessPinEnabled = Boolean(pushData.accessPin?.enabled);
+  const currentPinVersion = Math.max(0, Number(pushData.accessPin?.version || 0));
+
+  const pushDevices = Array.isArray(pushData.subscriptions)
+    ? pushData.subscriptions.map((subscription) => ({
+        id: subscription.deviceId || subscription.endpoint,
+        endpoint: subscription.endpoint,
+        channel: "push",
+        label: subscription.label || "Push device",
+        detail: [subscription.browser, subscription.platform].filter(Boolean).join(" on ") || "Push subscription",
+        createdAt: subscription.createdAt || "",
+        updatedAt: subscription.updatedAt || subscription.createdAt || "",
+        accessPinVersion: Math.max(0, Number(subscription.accessPinVersion || 0)),
+        accessState: !accessPinEnabled
+          ? "Open"
+          : Math.max(0, Number(subscription.accessPinVersion || 0)) === currentPinVersion
+            ? "PIN"
+            : "Inactive",
+        authorized: !accessPinEnabled || Math.max(0, Number(subscription.accessPinVersion || 0)) === currentPinVersion
+      }))
+    : [];
+
+  return [...pushDevices].sort((a, b) => {
+    const accessSort = Number(b.authorized) - Number(a.authorized);
+
+    if (accessSort) {
+      return accessSort;
+    }
+
+    return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
+  });
+}
+
+function isPostExpired(post) {
+  if (!post?.expiresAt) {
+    return false;
+  }
+
+  const endOfDay = new Date(`${post.expiresAt}T23:59:59`);
+  return endOfDay < new Date();
+}
+
+function isExpiringSoon(post, days = 7) {
+  if (!post?.expiresAt || isPostExpired(post)) {
+    return false;
+  }
+
+  const endOfDay = new Date(`${post.expiresAt}T23:59:59`);
+  if (Number.isNaN(endOfDay.getTime())) {
+    return false;
+  }
+
+  const daysRemaining = (endOfDay.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+  return daysRemaining <= days;
+}
+
+function summarizeBoard(boardData = {}) {
+  const posts = Array.isArray(boardData.posts)
+    ? [...boardData.posts].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    : [];
+  const activePosts = posts.filter((post) => !isPostExpired(post));
+  const weather = boardData.weather || {};
+  const latestPost = posts[0] || null;
+
+  return {
+    totalPosts: posts.length,
+    activePosts: activePosts.length,
+    expiredPosts: posts.length - activePosts.length,
+    urgentPosts: activePosts.filter((post) => post.priority === "Urgent").length,
+    importantPosts: activePosts.filter((post) => post.priority === "Important").length,
+    alertPosts: posts.filter((post) => post.notifyEmployees).length,
+    expiringSoon: activePosts.filter((post) => isExpiringSoon(post)).length,
+    byType: sortCountEntries(countBy(posts, (post) => post.type || "Unknown")),
+    byPriority: sortCountEntries(countBy(posts, (post) => post.priority || "Normal")),
+    byAudience: sortCountEntries(countBy(posts, (post) => post.audience || "All employees"), 6),
+    latestPost: latestPost
+      ? {
+          id: latestPost.id,
+          title: latestPost.title,
+          type: latestPost.type,
+          priority: latestPost.priority,
+          createdAt: latestPost.createdAt,
+          expiresAt: latestPost.expiresAt,
+          audience: latestPost.audience,
+          notifyEmployees: Boolean(latestPost.notifyEmployees)
+        }
+      : null,
+    recentPosts: posts.slice(0, 5).map((post) => ({
+      id: post.id,
+      title: post.title,
+      type: post.type,
+      priority: post.priority,
+      createdAt: post.createdAt,
+      expiresAt: post.expiresAt,
+      audience: post.audience,
+      notifyEmployees: Boolean(post.notifyEmployees),
+      expired: isPostExpired(post)
+    })),
+    weather: {
+      condition: weather.condition || "Weather not configured",
+      temperature: weather.temperature || "--",
+      level: weather.level || "Clear",
+      location: weather.location || "",
+      resolvedName: weather.resolvedName || "",
+      updatedAt: weather.updatedAt || ""
+    }
+  };
+}
+
+function summarizeTraffic(analyticsData = {}) {
+  const totals = analyticsData.totals || {};
+  const requests = Math.max(0, Number(totals.requests || 0));
+  const durationMs = Math.max(0, Number(totals.durationMs || 0));
+
+  return {
+    totals: {
+      requests,
+      pageViews: Math.max(0, Number(totals.pageViews || 0)),
+      apiRequests: Math.max(0, Number(totals.apiRequests || 0)),
+      successfulRequests: Math.max(0, Number(totals.successfulRequests || 0)),
+      clientErrors: Math.max(0, Number(totals.clientErrors || 0)),
+      serverErrors: Math.max(0, Number(totals.serverErrors || 0)),
+      averageDurationMs: requests > 0 ? Math.round(durationMs / requests) : 0
+    },
+    byMethod: sortCountEntries(analyticsData.byMethod || {}),
+    byStatus: sortCountEntries(analyticsData.byStatus || {}),
+    byRoute: sortCountEntries(analyticsData.byRoute || {}, 12),
+    recentRequests: Array.isArray(analyticsData.recentRequests) ? analyticsData.recentRequests.slice(0, 12) : [],
+    recentErrors: Array.isArray(analyticsData.recentErrors) ? analyticsData.recentErrors.slice(0, 8) : []
+  };
+}
+
+function summarizeServerRuntime() {
+  const memory = process.memoryUsage();
+
+  return {
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    hostname: os.hostname(),
+    cpuCount: os.cpus().length,
+    uptimeSeconds: Math.round(process.uptime()),
+    pid: process.pid,
+    port: PORT,
+    boardStorage: boardStore.backend,
+    pushStorage: notificationHub.backend || "file",
+    analyticsStorage: analyticsStore.backend,
+    securityStorage: securityStore.backend,
+    dataFiles: {
+      board: path.basename(DATA_FILE),
+      push: path.basename(PUSH_DATA_FILE),
+      analytics: path.basename(ANALYTICS_DATA_FILE),
+      security: path.basename(SECURITY_DATA_FILE)
+    },
+    memory: {
+      rssMb: Math.round(memory.rss / 1024 / 1024),
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+      externalMb: Math.round(memory.external / 1024 / 1024)
+    },
+    publicBaseUrl: process.env.PUBLIC_BASE_URL ? process.env.PUBLIC_BASE_URL.replace(/\/+$/, "") : ""
+  };
+}
+
+function buildWebmasterSummary({ boardData, pushData, analyticsData, securityData, baseUrl }) {
+  const board = summarizeBoard(boardData);
+  const traffic = summarizeTraffic(analyticsData);
+  const pushSubscriptions = Array.isArray(pushData?.subscriptions) ? pushData.subscriptions.length : 0;
+  const origin = baseUrl.replace(/\/+$/, "");
+  const base = `${origin}${APP_BASE_PATH}`;
+  const devices = summarizeNotificationDevices(pushData);
+  const accessPinEnabled = Boolean(pushData?.accessPin?.enabled);
+  const activeSubscriptions = devices.filter((device) => device.authorized).length;
+  const hrPin = securityData?.hrPin || null;
+  const webmaster = securityData?.webmaster || null;
+
+  return {
+    generatedAt: nowIso(),
+    server: summarizeServerRuntime(),
+    board: {
+      ...board,
+      pushSubscriptions
+    },
+    notifications: {
+      pushSubscriptions,
+      activeSubscriptions,
+      inactiveSubscriptions: Math.max(0, devices.length - activeSubscriptions),
+      devices,
+      accessPin: {
+        enabled: accessPinEnabled,
+        version: Math.max(0, Number(pushData?.accessPin?.version || 0)),
+        updatedAt: pushData?.accessPin?.updatedAt || ""
+      }
+    },
+    security: {
+      hrPin: hrPin
+        ? {
+            enabled: true,
+            version: Math.max(0, Number(hrPin.version || 0)),
+            updatedAt: hrPin.updatedAt || ""
+          }
+        : {
+            enabled: false,
+            version: 0,
+            updatedAt: ""
+          },
+      webmaster: webmaster
+        ? {
+            label: webmaster.label || "Approved browser",
+            browser: webmaster.browser || "",
+            platform: webmaster.platform || "",
+            updatedAt: webmaster.updatedAt || ""
+          }
+        : null
+    },
+    traffic,
+    urls: {
+      base,
+      origin,
+      launcher: base,
+      employee: `${base}/employee`,
+      hr: `${base}/hr`,
+      webmaster: `${base}/webmaster`,
+      adminAlias: `${base}/admin`
+    }
+  };
+}
+
+function renderIndexHtml() {
+  return indexHtmlTemplate
+    .replaceAll("__SITE_NAME__", escapeHtml(displayBrandName(siteConfig)))
+    .replaceAll("__SITE_SHORT_NAME__", escapeHtml(siteConfig.shortName))
+    .replaceAll("__SITE_SUBTITLE__", escapeHtml(siteConfig.subtitle))
+    .replaceAll("__SITE_DESCRIPTION__", escapeHtml(siteConfig.description))
+    .replaceAll("__SITE_THEME_COLOR__", escapeHtml(siteConfig.themeColor))
+    .replaceAll("__SITE_BACKGROUND_COLOR__", escapeHtml(siteConfig.backgroundColor))
+    .replaceAll("__ASSET_VERSION__", escapeHtml(ASSET_VERSION))
+    .replace("<!-- BOARD_CONFIG -->", `<script>window.__BOARD_CONFIG__ = ${serializeForScript({
+      ...siteConfig,
+      assetVersion: ASSET_VERSION
+    })};</script>`);
+}
+
+function renderServiceWorker() {
+  return serviceWorkerTemplate.replaceAll("__ASSET_VERSION__", ASSET_VERSION);
+}
+
+function sendIndexHtml(res) {
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(renderIndexHtml());
+}
+
+function sendServiceWorker(res) {
+  res.writeHead(200, {
+    "Content-Type": "text/javascript; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(renderServiceWorker());
+}
+
+function sendManifest(res) {
+  const icon = {
+    src: "/assets/palziv-logo.png",
+    sizes: "1054x1055",
+    type: "image/png",
+    purpose: "any maskable"
+  };
+
+  const manifest = {
+    name: displayBrandName(siteConfig),
+    short_name: siteConfig.shortName,
+    description: siteConfig.description,
+    start_url: appPath(),
+    scope: `${APP_BASE_PATH}/`,
+    display: "standalone",
+    background_color: siteConfig.backgroundColor,
+    theme_color: siteConfig.themeColor,
+    orientation: "portrait-primary",
+    shortcuts: [
+      {
+        name: "Launcher",
+        short_name: "Home",
+        description: "Open the Palziv Alerts launcher",
+        url: appPath(),
+        icons: [icon]
+      },
+      {
+        name: "Employee Feed",
+        short_name: "Feed",
+        description: "Open the employee feed",
+        url: appPath("employee"),
+        icons: [icon]
+      },
+      {
+        name: "HR Console",
+        short_name: "HR",
+        description: "Open the HR publishing console",
+        url: appPath("hr"),
+        icons: [icon]
+      },
+      {
+        name: "Webmaster",
+        short_name: "Web",
+        description: "Open analytics and site diagnostics",
+        url: appPath("webmaster"),
+        icons: [icon]
+      }
+    ],
+    icons: [icon]
+  };
+
+  res.writeHead(200, {
+    "Content-Type": "application/manifest+json; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(JSON.stringify(manifest));
 }
 
 function appBaseUrl(req) {
@@ -65,7 +527,7 @@ function appBaseUrl(req) {
 }
 
 async function sendEmployeeQr(req, res) {
-  const employeeUrl = `${appBaseUrl(req)}/employee`;
+  const employeeUrl = `${appBaseUrl(req)}${appPath("employee")}`;
   const svg = await QRCode.toString(employeeUrl, {
     type: "svg",
     margin: 2,
@@ -83,8 +545,99 @@ async function sendEmployeeQr(req, res) {
   res.end(svg);
 }
 
-function requireAdmin() {
+async function requireHrAccess(req, res) {
+  const auth = await securityStore.checkHrAccess(req);
+
+  if (!auth.authorized) {
+    sendError(res, 401, "HR PIN required.");
+    return null;
+  }
+
+  return auth;
+}
+
+async function requireWebmasterAccess(req, res) {
+  const auth = await securityStore.checkWebmasterAccess(req);
+
+  if (!auth.authorized) {
+    sendError(res, 401, "Webmaster access requires an approved browser.");
+    return null;
+  }
+
+  return auth;
+}
+
+function normalizedRequestOrigin(value) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    return new URL(String(value)).origin;
+  } catch {
+    return "";
+  }
+}
+
+function isSameOriginRequest(req) {
+  const expectedOrigin = normalizedRequestOrigin(appBaseUrl(req));
+  const requestOrigins = [
+    normalizedRequestOrigin(req.headers.origin),
+    normalizedRequestOrigin(req.headers.referer),
+    normalizedRequestOrigin(req.headers.referrer)
+  ].filter(Boolean);
+
+  if (!requestOrigins.length) {
+    return true;
+  }
+
+  return requestOrigins.some((origin) => origin === expectedOrigin);
+}
+
+function requireSameOrigin(req, res) {
+  if (!isSameOriginRequest(req)) {
+    sendError(res, 403, "Cross-site requests are not allowed.");
+    return false;
+  }
+
   return true;
+}
+
+function requireCsrf(req, res, auth) {
+  if (!securityStore.verifyCsrf(req, auth)) {
+    sendError(res, 403, "A valid CSRF token is required.");
+    return false;
+  }
+
+  return true;
+}
+
+async function requireHrMutationAccess(req, res) {
+  const auth = await requireHrAccess(req, res);
+
+  if (!auth) {
+    return null;
+  }
+
+  if (!requireCsrf(req, res, auth)) {
+    return null;
+  }
+
+  return auth;
+}
+
+async function requireWebmasterMutationAccess(req, res) {
+  const auth = await requireWebmasterAccess(req, res);
+
+  if (!auth) {
+    return null;
+  }
+
+  if (!requireCsrf(req, res, auth)) {
+    return null;
+  }
+
+  return auth;
 }
 
 function cleanText(value, maxLength) {
@@ -94,12 +647,26 @@ function cleanText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function normalizeRelativePath(value, fallback = appPath("hr")) {
+  const text = cleanText(value, 200);
+
+  if (!text || !text.startsWith("/")) {
+    return fallback;
+  }
+
+  return text;
+}
+
 function cleanLongText(value, maxLength) {
   return String(value ?? "")
     .replace(/\r\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, maxLength);
+}
+
+function parseBooleanish(value) {
+  return value === true || value === "true" || value === "on" || value === 1 || value === "1";
 }
 
 function isValidExpiry(value) {
@@ -135,6 +702,7 @@ function normalizePost(input) {
   const body = cleanLongText(input.body, 700);
   const audience = cleanText(input.audience || "All employees", 80);
   const expiresAt = cleanText(input.expiresAt, 10);
+  const notifyEmployees = parseBooleanish(input.notifyEmployees) || priority === "Important" || priority === "Urgent";
 
   if (!title) throw new Error("Title is required.");
   if (!body) throw new Error("Message is required.");
@@ -144,6 +712,7 @@ function normalizePost(input) {
     id: crypto.randomUUID(),
     type,
     priority,
+    notifyEmployees,
     title,
     body,
     audience,
@@ -164,9 +733,86 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/admin/check") {
-      if (!requireAdmin(req, res)) return;
-      sendJson(res, 200, { ok: true });
+    if (req.method === "GET" && (url.pathname === "/api/admin/check" || url.pathname === "/api/hr/check")) {
+      const auth = await securityStore.checkHrAccess(req);
+      sendJson(res, 200, auth);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/unlock") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.unlockHrAccess(req, body.pin);
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      }, {
+        "Set-Cookie": result.setCookie
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/lock") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const result = await securityStore.lockHrAccess(req);
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      }, {
+        "Set-Cookie": result.setCookie
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/pin") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.issueHrPin(body);
+
+      sendJson(res, 201, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/webmaster/check") {
+      const auth = await securityStore.checkWebmasterAccess(req);
+      sendJson(res, 200, auth);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/approve") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.approveWebmasterAccess(req, body);
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      }, {
+        "Set-Cookie": result.setCookie
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/lock") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const result = await securityStore.lockWebmasterAccess(req);
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      }, {
+        "Set-Cookie": result.setCookie
+      });
       return;
     }
 
@@ -176,8 +822,129 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/push/config") {
+      sendJson(res, 200, {
+        supported: true,
+        publicKey: notificationHub.getPublicKey()
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/push/status") {
+      const data = await notificationHub.readData();
+      const devices = summarizeNotificationDevices(data).filter((device) => device.channel === "push");
+      const authorizedSubscriptions = devices.filter((device) => device.authorized).length;
+      sendJson(res, 200, {
+        supported: true,
+        subscriptions: data.subscriptions.length,
+        authorizedSubscriptions,
+        inactiveSubscriptions: Math.max(0, devices.length - authorizedSubscriptions),
+        devices,
+        pinRequired: Boolean(data.accessPin?.enabled),
+        pinVersion: Math.max(0, Number(data.accessPin?.version || 0)),
+        pinUpdatedAt: data.accessPin?.updatedAt || ""
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/webmaster/summary") {
+      if (!(await requireWebmasterAccess(req, res))) return;
+
+      const [boardData, pushData, analyticsData, securityData] = await Promise.all([
+        boardStore.readData(),
+        notificationHub.readData(),
+        analyticsStore.readData(),
+        securityStore.readData()
+      ]);
+
+      sendJson(res, 200, buildWebmasterSummary({
+        boardData,
+        pushData,
+        analyticsData,
+        securityData,
+        baseUrl: appBaseUrl(req)
+      }));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/push/subscribe") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await notificationHub.subscribe(body);
+
+      sendJson(res, 201, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/push/pin") {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await notificationHub.issueAccessPin(body);
+
+      sendJson(res, 201, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/push/pin") {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const result = await notificationHub.clearAccessPin();
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/push/unsubscribe") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await notificationHub.unsubscribe(body.endpoint);
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/push/test") {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const notification = {
+        id: "push-test",
+        title: cleanText(body.title, 80) || "Palziv test push",
+        body: cleanText(body.body ?? body.message, 280) || "This is a delivery check for the current device.",
+        type: "Test",
+        priority: "Normal",
+        url: normalizeRelativePath(body.url, appPath("hr")),
+        tag: cleanText(body.tag, 120) || "palziv-test-push",
+        requireInteraction: true,
+        createdAt: nowIso()
+      };
+      const result = await notificationHub.broadcast(notification);
+
+      sendJson(res, 201, {
+        ok: true,
+        notification,
+        ...result
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/posts") {
-      if (!requireAdmin(req, res)) return;
+      if (!(await requireHrMutationAccess(req, res))) return;
 
       const body = await readJsonBody(req);
       const post = normalizePost(body);
@@ -187,13 +954,30 @@ async function handleApi(req, res, url) {
         return post;
       });
 
-      sendJson(res, 201, { post });
+      let notification = null;
+
+      if (post.notifyEmployees) {
+        try {
+          const pushResult = await notificationHub.broadcast(post);
+
+          notification = {
+            push: pushResult
+          };
+        } catch (error) {
+          notification = {
+            error: error instanceof Error ? error.message : "Push broadcast failed."
+          };
+          console.error("Push broadcast failed:", error);
+        }
+      }
+
+      sendJson(res, 201, { post, notification });
       return;
     }
 
     const deleteMatch = url.pathname.match(/^\/api\/posts\/([^/]+)$/);
     if (req.method === "DELETE" && deleteMatch) {
-      if (!requireAdmin(req, res)) return;
+      if (!(await requireHrMutationAccess(req, res))) return;
 
       const id = decodeURIComponent(deleteMatch[1]);
       const deleted = await boardStore.updateData((data) => {
@@ -218,7 +1002,7 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "PUT" && url.pathname === "/api/weather") {
-      if (!requireAdmin(req, res)) return;
+      if (!(await requireHrMutationAccess(req, res))) return;
 
       const body = await readJsonBody(req);
       const weather = await resolveLiveWeather(body.location);
@@ -287,10 +1071,63 @@ async function serveStatic(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const startedAt = process.hrtime.bigint();
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  res.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    void analyticsStore.recordRequest({
+      at: nowIso(),
+      method: req.method || "GET",
+      pathname: url.pathname,
+      kind: url.pathname.startsWith("/api/") ? "api" : "page",
+      statusCode: res.statusCode,
+      durationMs: Math.round(durationMs),
+      userAgent: String(req.headers["user-agent"] || ""),
+      referer: String(req.headers.referer || req.headers.referrer || "")
+    }).catch((error) => {
+      console.error("Analytics record failed:", error);
+    });
+  });
 
   if (req.method === "GET" && url.pathname === "/employee-qr.svg") {
     await sendEmployeeQr(req, res);
+    return;
+  }
+
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/palzivalerts/" || url.pathname === "/employee" || url.pathname === "/hr" || url.pathname === "/webmaster" || url.pathname === "/admin" || url.pathname === "/palzivalerts/admin")) {
+    const redirects = new Map([
+      ["/", appPath()],
+      ["/index.html", appPath()],
+      ["/palzivalerts/", appPath()],
+      ["/employee", appPath("employee")],
+      ["/hr", appPath("hr")],
+      ["/webmaster", appPath("webmaster")],
+      ["/admin", appPath("hr")],
+      ["/palzivalerts/admin", appPath("hr")]
+    ]);
+    const nextLocation = redirects.get(url.pathname);
+
+    if (nextLocation && url.pathname !== nextLocation) {
+      redirectTo(res, nextLocation);
+    } else {
+      sendIndexHtml(res);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster"))) {
+    sendIndexHtml(res);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/sw.js") {
+    sendServiceWorker(res);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/manifest.webmanifest") {
+    sendManifest(res);
     return;
   }
 
@@ -303,7 +1140,16 @@ const server = http.createServer(async (req, res) => {
 });
 
 await boardStore.init();
+await notificationHub.init();
+await analyticsStore.init();
+await securityStore.init();
+
+const bootstrapHrPin = securityStore.getBootstrapHrPin();
+
+if (bootstrapHrPin) {
+  console.log(`HR access PIN initialized: ${bootstrapHrPin}`);
+}
 
 server.listen(PORT, () => {
-  console.log(`Company Board running at http://localhost:${PORT} (${boardStore.backend} storage)`);
+  console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);
 });

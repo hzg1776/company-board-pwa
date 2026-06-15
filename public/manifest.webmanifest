@@ -1,18 +1,76 @@
 {
-  "name": "Employee Board",
-  "short_name": "Board",
-  "description": "Read-only employee notification board with HR-managed company news, weather, and updates.",
-  "start_url": "/employee",
-  "scope": "/",
+  "name": "Palziv",
+  "short_name": "Palziv",
+  "description": "Updates and alerts portal for Palziv with HR-managed company news, weather, and push notifications.",
+  "start_url": "/palzivalerts",
+  "scope": "/palzivalerts/",
   "display": "standalone",
   "background_color": "#f4f8fb",
-  "theme_color": "#002855",
+  "theme_color": "#1b2329",
   "orientation": "portrait-primary",
+  "shortcuts": [
+    {
+      "name": "Launcher",
+      "short_name": "Home",
+      "description": "Open the Palziv Alerts launcher",
+      "url": "/palzivalerts",
+      "icons": [
+        {
+          "src": "/assets/palziv-logo.png",
+          "sizes": "1054x1055",
+          "type": "image/png",
+          "purpose": "any maskable"
+        }
+      ]
+    },
+    {
+      "name": "Employee Feed",
+      "short_name": "Feed",
+      "description": "Open the employee feed",
+      "url": "/palzivalerts/employee",
+      "icons": [
+        {
+          "src": "/assets/palziv-logo.png",
+          "sizes": "1054x1055",
+          "type": "image/png",
+          "purpose": "any maskable"
+        }
+      ]
+    },
+    {
+      "name": "HR Console",
+      "short_name": "HR",
+      "description": "Open the HR publishing console",
+      "url": "/palzivalerts/hr",
+      "icons": [
+        {
+          "src": "/assets/palziv-logo.png",
+          "sizes": "1054x1055",
+          "type": "image/png",
+          "purpose": "any maskable"
+        }
+      ]
+    },
+    {
+      "name": "Webmaster",
+      "short_name": "Web",
+      "description": "Open analytics and site diagnostics",
+      "url": "/palzivalerts/webmaster",
+      "icons": [
+        {
+          "src": "/assets/palziv-logo.png",
+          "sizes": "1054x1055",
+          "type": "image/png",
+          "purpose": "any maskable"
+        }
+      ]
+    }
+  ],
   "icons": [
     {
-      "src": "/assets/logo.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/assets/palziv-logo.png",
+      "sizes": "1054x1055",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

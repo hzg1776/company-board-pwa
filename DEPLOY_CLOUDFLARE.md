@@ -46,7 +46,7 @@ cloudflared --version
 2. Go to `Zero Trust` -> `Networks` -> `Tunnels`.
 3. Select `Create a tunnel`.
 4. Choose `Cloudflared`.
-5. Name it `company-board-pwa`.
+5. Name it `palziv-portal-pwa`.
 6. Select `Save tunnel`.
 7. Choose `Windows`.
 8. Copy the exact Windows service command Cloudflare shows and run it in Administrator PowerShell on the host machine.
@@ -57,24 +57,52 @@ In the same tunnel, set:
 
 ```text
 Subdomain: leave blank or use www
-Domain: itotexpress.com
+Domain: your-domain.example
 Type: HTTP
 URL: localhost:3116
 ```
 
+Make sure both your root hostname and the `www` hostname point to the tunnel if you want either hostname to work from mobile browsers.
+
 If you use the boot script below, it starts the app on port 3116 so the tunnel can stay pointed here.
+The boot script also checks `/api/health`, clears stale listeners on port `3116` if needed, and avoids creating duplicate tunnel processes.
+
+## 6b. Rename The App
+
+Set these environment variables on the Windows host if you want the displayed product name to change:
+
+- `SITE_NAME` for the base name
+- `SITE_NAME_SUFFIX` optional regional suffix if you ever need one
+- `SITE_SHORT_NAME` for the compact label on phones
+- `SITE_SUBTITLE` for the subheading under the logo
+
+Example in PowerShell:
+
+```powershell
+$env:SITE_NAME = "Palziv"
+$env:SITE_SHORT_NAME = "Palziv"
+$env:SITE_SUBTITLE = "Updates & Alerts Portal"
+```
+
+For a permanent host rename, set the same values with `setx` or in Windows System Properties before the startup task runs.
 
 ## 7. Verify Public Access
 
 ```powershell
-Invoke-WebRequest -Uri "https://itotexpress.com/api/health" -UseBasicParsing
+Invoke-WebRequest -Uri "https://your-domain.example/api/health" -UseBasicParsing
 ```
 
 Open:
 
 ```text
-https://itotexpress.com/employee
-https://itotexpress.com/admin
+https://www.your-domain.example/palzivalerts
+https://www.your-domain.example/palzivalerts/employee
+https://www.your-domain.example/palzivalerts/hr
+https://www.your-domain.example/palzivalerts/webmaster
+https://your-domain.example/palzivalerts
+https://your-domain.example/palzivalerts/employee
+https://your-domain.example/palzivalerts/hr
+https://your-domain.example/palzivalerts/webmaster
 ```
 
 ## 8. Windows Startup Script
@@ -93,7 +121,13 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\admin\Documents\Codex\Project
 
 Run that from an elevated PowerShell window. A non-elevated shell will get `Access is denied` when Windows tries to register the task.
 
-If elevation is available, the task runs at startup as `SYSTEM`. Otherwise, the installer cannot complete the registration from this session.
+The installer now does three things:
+
+- Registers the app startup task so the portal comes back after boot.
+- Registers a recurring recovery task that reruns the same startup script every 5 minutes so the host self-heals after a crash or service drop.
+- Repairs or installs the `cloudflared` Windows service, enables failure recovery, and points it at `localhost:3116`.
+
+If elevation is available, the startup and recovery tasks run as `SYSTEM`. Otherwise, the installer cannot complete the self-healing registration from this session.
 
 ## 9. Update Workflow
 
