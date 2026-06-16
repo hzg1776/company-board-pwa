@@ -2512,6 +2512,7 @@ function renderAdminSecurityPanel() {
 
 function renderPrivilegedPasswordPanel(route) {
   const role = route === "webmaster" ? "Webmaster" : "HR";
+  const passwordStatus = state.passwordChangeStatus?.[route] || null;
 
   return `
     <section class="panel-card" data-privileged-password-panel>
@@ -2522,6 +2523,13 @@ function renderPrivilegedPasswordPanel(route) {
           <p>Saving a new password keeps this session active and signs out other active ${escapeHtml(role.toLowerCase())} sessions.</p>
         </div>
       </div>
+      ${passwordStatus ? `
+      <div class="status-display">
+        <span>Last password changed</span>
+        <strong>${escapeHtml(formatDate(passwordStatus.changedAt))}</strong>
+        <small>${escapeHtml(passwordStatus.otherSessionsSignedOut ? "Other active sessions were signed out immediately." : "Session status unchanged.")}</small>
+      </div>
+      ` : ""}
       <form class="auth-form" data-privileged-password-form data-role-route="${escapeHtml(route)}">
         <div class="composer-grid">
           <label class="field">
@@ -3588,6 +3596,14 @@ async function handlePrivilegedPasswordChangeSubmit(event) {
         error: ""
       };
     }
+
+    state.passwordChangeStatus = {
+      ...(state.passwordChangeStatus || {}),
+      [route]: {
+        changedAt: new Date().toISOString(),
+        otherSessionsSignedOut: true
+      }
+    };
 
     setMessage(`${role} password updated. Other active sessions were signed out.`, "success");
   } catch (error) {
