@@ -1073,6 +1073,33 @@ svg {
   color: var(--signal);
 }
 
+.version-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.version-banner-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.version-banner-copy strong {
+  font-size: 0.98rem;
+  line-height: 1.2;
+}
+
+.version-banner-copy span {
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.version-banner-button {
+  flex: 0 0 auto;
+}
+
 .metric {
   min-height: 94px;
   padding: 14px;

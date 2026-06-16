@@ -166,6 +166,10 @@ const EMPLOYEE_REFRESH_MS = 60_000;
 
 const state = {
   deviceProfile: loadDeviceProfile(),
+  appUpdate: {
+    available: false,
+    latestVersion: ""
+  },
   posts: [],
   weather: null,
   access: {
@@ -947,6 +951,84 @@ async function requestJson(path, options = {}) {
   }
 
   return body;
+}
+
+function parseAssetVersionFromHtml(html) {
+  const match = String(html || "").match(/assetVersion":"([^"]+)"/);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+async function fetchLiveAssetVersion() {
+  const response = await fetch(routePath("launcher"), {
+    method: "GET",
+    cache: "no-store",
+    headers: {
+      "Cache-Control": "no-cache"
+    }
+  });
+
+  const html = await response.text();
+  return parseAssetVersionFromHtml(html);
+}
+
+async function checkForAppUpdate() {
+  try {
+    const liveVersion = await fetchLiveAssetVersion();
+    const hasUpdate = Boolean(liveVersion && liveVersion !== APP_ASSET_VERSION);
+
+    if (
+      state.appUpdate.available !== hasUpdate ||
+      String(state.appUpdate.latestVersion || "") !== String(liveVersion || "")
+    ) {
+      state.appUpdate = {
+        available: hasUpdate,
+        latestVersion: liveVersion || ""
+      };
+      render();
+    }
+  } catch {
+    // Ignore background version check failures.
+  }
+}
+
+async function reloadForAppUpdate() {
+  try {
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.update().catch(() => {})));
+    }
+
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((key) => String(key || "").startsWith("palziv-portal-v"))
+          .map((key) => caches.delete(key).catch(() => false))
+      );
+    }
+  } catch {
+    // Ignore update cleanup failures and fall through to reload.
+  }
+
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.set("v", String(Date.now()));
+  window.location.replace(nextUrl.toString());
+}
+
+function renderAppUpdateBanner() {
+  if (!state.appUpdate.available) {
+    return "";
+  }
+
+  return `
+    <div class="admin-banner warning version-banner">
+      <div class="version-banner-copy">
+        <strong>New portal update available</strong>
+        <span>This tab is running an older build. Reload now to pick up the latest HR and Webmaster UI changes.</span>
+      </div>
+      <button class="ghost-button version-banner-button" type="button" data-reload-app>${icon("refresh")} Reload now</button>
+    </div>
+  `;
 }
 
 function supportsPushNotifications() {
@@ -2216,6 +2298,7 @@ function renderEmployee() {
         </div>
       </header>
 
+      ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
       <section class="feed-shell" aria-label="Latest updates feed">
@@ -2266,6 +2349,7 @@ function renderLauncher() {
         </div>
       </header>
 
+      ${renderAppUpdateBanner()}
       <section class="launcher-panel panel-card">
         <div class="panel-title panel-title-wide">
           <div>
@@ -3121,6 +3205,7 @@ function renderWebmaster() {
         </div>
       </header>
 
+      ${renderAppUpdateBanner()}
       <section class="hero-strip hero-strip-webmaster" aria-label="Webmaster summary">
         ${renderWebmasterDrilldownStatCard({
           value: String(traffic.totals?.requests || 0),
@@ -3209,6 +3294,7 @@ function renderAdmin() {
         </div>
       </header>
 
+      ${renderAppUpdateBanner()}
       <section class="hero-strip hero-strip-hr" aria-label="HR summary">
         ${renderStatCard(String(activeCount), "Active updates", "Visible to employees")}
         ${renderStatCard(String(urgentCount), "Urgent alerts", "Items that trigger attention")}
@@ -3750,6 +3836,13 @@ document.addEventListener("click", async (event) => {
   const webmasterDrilldownButton = target.closest("[data-webmaster-drilldown-tab]");
   const employeeLogoutButton = target.closest("[data-employee-logout]");
   const adminLogoutButton = target.closest("[data-admin-logout]");
+  const reloadAppButton = target.closest("[data-reload-app]");
+
+  if (reloadAppButton) {
+    event.preventDefault();
+    await reloadForAppUpdate();
+    return;
+  }
 
   if (routeButton) {
     event.preventDefault();
@@ -4091,6 +4184,12 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+window.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    void checkForAppUpdate();
+  }
+});
+
 window.setInterval(async () => {
   if (currentRoute() !== "employee" || document.visibilityState !== "visible") {
     return;
@@ -4104,6 +4203,14 @@ window.setInterval(async () => {
   }
 }, EMPLOYEE_REFRESH_MS);
 
+window.setInterval(() => {
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+
+  void checkForAppUpdate();
+}, 60_000);
+
 try {
   await hydrateRoute();
 } catch (error) {
@@ -4111,5 +4218,6 @@ try {
 } finally {
   state.loading = false;
   render();
+  void checkForAppUpdate();
 }
 
