@@ -27,7 +27,11 @@ const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : 
 const PUSH_DATA_FILE = process.env.PUSH_DATA_FILE ? path.resolve(process.env.PUSH_DATA_FILE) : path.join(__dirname, "data", "push.json");
 const ANALYTICS_DATA_FILE = process.env.ANALYTICS_DATA_FILE ? path.resolve(process.env.ANALYTICS_DATA_FILE) : path.join(__dirname, "data", "analytics.json");
 const SECURITY_DATA_FILE = process.env.SECURITY_DATA_FILE ? path.resolve(process.env.SECURITY_DATA_FILE) : path.join(__dirname, "data", "security.json");
+const ADMIN_SETUP_TOKEN = String(process.env.ADMIN_SETUP_TOKEN || "");
+const CONFIGURED_PUBLIC_BASE_URL = parseRequiredPublicBaseUrl(process.env.PUBLIC_BASE_URL);
+const TRUST_PROXY_ADDRESSES = parseTrustedProxyAddresses(process.env.TRUST_PROXY_ADDRESSES || "");
 const MAX_BODY_BYTES = 1_000_000;
+const EMPLOYEE_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const DEFAULT_SITE_CONFIG = Object.freeze({
   name: "Palziv",
   nameSuffix: "",
@@ -114,6 +118,22 @@ function sendError(res, statusCode, message) {
   sendJson(res, statusCode, { error: message });
 }
 
+function createHttpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function matchesAdminSetupToken(value) {
+  if (!ADMIN_SETUP_TOKEN) {
+    return false;
+  }
+
+  const expected = Buffer.from(ADMIN_SETUP_TOKEN, "utf8");
+  const provided = Buffer.from(String(value || ""), "utf8");
+  return expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => {
     const entities = {
@@ -150,6 +170,32 @@ function appPath(...segments) {
   }
 
   return parts.join("/").replace(/\/+/g, "/") || APP_BASE_PATH;
+}
+
+function isSecureRequest(req) {
+  return requestProtocol(req) === "https" || CONFIGURED_PUBLIC_BASE_URL.startsWith("https://");
+}
+
+function serializeCookie(name, value, options = {}) {
+  const attributes = [
+    `${name}=${encodeURIComponent(String(value || ""))}`,
+    `Path=${options.path || APP_BASE_PATH}`,
+    `SameSite=${options.sameSite || "Lax"}`
+  ];
+
+  if (typeof options.maxAge === "number") {
+    attributes.push(`Max-Age=${Math.max(0, Math.floor(options.maxAge))}`);
+  }
+
+  if (options.httpOnly !== false) {
+    attributes.push("HttpOnly");
+  }
+
+  if (options.secure) {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
 function redirectTo(res, location) {
@@ -190,26 +236,26 @@ function sortCountEntries(counts, limit = 10) {
 }
 
 function summarizeNotificationDevices(pushData = {}) {
-  const accessPinEnabled = Boolean(pushData.accessPin?.enabled);
-  const currentPinVersion = Math.max(0, Number(pushData.accessPin?.version || 0));
-
   const pushDevices = Array.isArray(pushData.subscriptions)
-    ? pushData.subscriptions.map((subscription) => ({
-        id: subscription.deviceId || subscription.endpoint,
-        endpoint: subscription.endpoint,
-        channel: "push",
-        label: subscription.label || "Push device",
-        detail: [subscription.browser, subscription.platform].filter(Boolean).join(" on ") || "Push subscription",
-        createdAt: subscription.createdAt || "",
-        updatedAt: subscription.updatedAt || subscription.createdAt || "",
-        accessPinVersion: Math.max(0, Number(subscription.accessPinVersion || 0)),
-        accessState: !accessPinEnabled
-          ? "Open"
-          : Math.max(0, Number(subscription.accessPinVersion || 0)) === currentPinVersion
-            ? "PIN"
-            : "Inactive",
-        authorized: !accessPinEnabled || Math.max(0, Number(subscription.accessPinVersion || 0)) === currentPinVersion
-      }))
+    ? pushData.subscriptions.map((subscription) => {
+        const hasEmployeeBinding = Boolean(cleanText(subscription.employeeId, 80));
+        const authorized = hasEmployeeBinding && subscription.authorized !== false;
+
+        return {
+          id: subscription.deviceId || subscription.endpoint,
+          endpoint: subscription.endpoint,
+          channel: "push",
+          label: subscription.employeeName || subscription.label || "Push device",
+          detail: [
+            subscription.username ? `Account ${subscription.username}` : "",
+            [subscription.browser, subscription.platform].filter(Boolean).join(" on ")
+          ].filter(Boolean).join(" • ") || "Push subscription",
+          createdAt: subscription.createdAt || "",
+          updatedAt: subscription.updatedAt || subscription.createdAt || "",
+          accessState: !hasEmployeeBinding ? "Unbound" : subscription.authorized === false ? "Revoked" : "Active",
+          authorized
+        };
+      })
     : [];
 
   return [...pushDevices].sort((a, b) => {
@@ -354,17 +400,14 @@ function summarizeServerRuntime() {
   };
 }
 
-function buildWebmasterSummary({ boardData, pushData, analyticsData, securityData, baseUrl }) {
+function buildWebmasterSummary({ boardData, pushData, analyticsData, securityRuntime, baseUrl }) {
   const board = summarizeBoard(boardData);
   const traffic = summarizeTraffic(analyticsData);
   const pushSubscriptions = Array.isArray(pushData?.subscriptions) ? pushData.subscriptions.length : 0;
   const origin = baseUrl.replace(/\/+$/, "");
   const base = `${origin}${APP_BASE_PATH}`;
   const devices = summarizeNotificationDevices(pushData);
-  const accessPinEnabled = Boolean(pushData?.accessPin?.enabled);
   const activeSubscriptions = devices.filter((device) => device.authorized).length;
-  const hrPin = securityData?.hrPin || null;
-  const webmaster = securityData?.webmaster || null;
 
   return {
     generatedAt: nowIso(),
@@ -377,34 +420,9 @@ function buildWebmasterSummary({ boardData, pushData, analyticsData, securityDat
       pushSubscriptions,
       activeSubscriptions,
       inactiveSubscriptions: Math.max(0, devices.length - activeSubscriptions),
-      devices,
-      accessPin: {
-        enabled: accessPinEnabled,
-        version: Math.max(0, Number(pushData?.accessPin?.version || 0)),
-        updatedAt: pushData?.accessPin?.updatedAt || ""
-      }
+      devices
     },
-    security: {
-      hrPin: hrPin
-        ? {
-            enabled: true,
-            version: Math.max(0, Number(hrPin.version || 0)),
-            updatedAt: hrPin.updatedAt || ""
-          }
-        : {
-            enabled: false,
-            version: 0,
-            updatedAt: ""
-          },
-      webmaster: webmaster
-        ? {
-            label: webmaster.label || "Approved browser",
-            browser: webmaster.browser || "",
-            platform: webmaster.platform || "",
-            updatedAt: webmaster.updatedAt || ""
-          }
-        : null
-    },
+    security: securityRuntime || { accessModel: "open" },
     traffic,
     urls: {
       base,
@@ -511,19 +529,88 @@ function sendManifest(res) {
   res.end(JSON.stringify(manifest));
 }
 
-function appBaseUrl(req) {
-  if (process.env.PUBLIC_BASE_URL) {
-    return process.env.PUBLIC_BASE_URL.replace(/\/+$/, "");
+function normalizeRemoteAddress(value) {
+  const address = cleanText(value, 120).toLowerCase();
+  return address.startsWith('::ffff:') ? address.slice(7) : address;
+}
+
+function parseRequiredPublicBaseUrl(value) {
+  const raw = String(value || "").trim();
+
+  if (!raw) {
+    throw new Error("PUBLIC_BASE_URL is required and must match the deployed public origin.");
   }
 
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`)
-    .split(",")[0]
-    .trim();
-  const proto = String(req.headers["x-forwarded-proto"] || "")
-    .split(",")[0]
-    .trim() || (req.socket.encrypted ? "https" : "http");
+  let parsed;
 
-  return `${proto}://${host}`;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("PUBLIC_BASE_URL must be a valid absolute URL.");
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("PUBLIC_BASE_URL must use http or https.");
+  }
+
+  if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) {
+    throw new Error("PUBLIC_BASE_URL must contain only scheme, host, and optional port.");
+  }
+
+  return parsed.origin;
+}
+
+function isLiteralProxyAddress(value) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) || /^[a-f0-9:]+$/.test(value);
+}
+
+function parseTrustedProxyAddresses(value) {
+  const entries = String(value || '')
+    .split(',')
+    .map((entry) => normalizeRemoteAddress(entry))
+    .filter(Boolean);
+
+  for (const entry of entries) {
+    if (isLoopbackAddress(entry) || !isLiteralProxyAddress(entry)) {
+      throw new Error("TRUST_PROXY_ADDRESSES must list only actual reverse proxy IP addresses.");
+    }
+  }
+
+  return new Set(entries);
+}
+
+function isLoopbackAddress(value) {
+  const address = normalizeRemoteAddress(value);
+  return address === '127.0.0.1' || address === '::1' || address === 'localhost';
+}
+
+function trustedProxyRequest(req) {
+  const address = normalizeRemoteAddress(req.socket?.remoteAddress);
+  return TRUST_PROXY_ADDRESSES.has(address) || (TRUST_PROXY_ADDRESSES.has('loopback') && isLoopbackAddress(address));
+}
+
+function requestHost(req) {
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '')
+    .split(',')[0]
+    .trim();
+  const headerHost = String(req.headers.host || ('localhost:' + PORT))
+    .split(',')[0]
+    .trim();
+
+  return trustedProxyRequest(req) && forwardedHost ? forwardedHost : headerHost;
+}
+
+function requestProtocol(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+
+  return trustedProxyRequest(req) && forwardedProto ? forwardedProto : (req.socket.encrypted ? 'https' : 'http');
+}
+
+function appBaseUrl(req) {
+  return CONFIGURED_PUBLIC_BASE_URL;
 }
 
 async function sendEmployeeQr(req, res) {
@@ -546,25 +633,36 @@ async function sendEmployeeQr(req, res) {
 }
 
 async function requireHrAccess(req, res) {
-  const auth = await securityStore.checkHrAccess(req);
+  const access = await securityStore.checkHrAccess(req);
 
-  if (!auth.authorized) {
-    sendError(res, 401, "HR PIN required.");
+  if (!access.authorized) {
+    sendJson(res, 401, access);
     return null;
   }
 
-  return auth;
+  return access;
 }
 
 async function requireWebmasterAccess(req, res) {
-  const auth = await securityStore.checkWebmasterAccess(req);
+  const access = await securityStore.checkWebmasterAccess(req);
 
-  if (!auth.authorized) {
-    sendError(res, 401, "Webmaster access requires an approved browser.");
+  if (!access.authorized) {
+    sendJson(res, 401, access);
     return null;
   }
 
-  return auth;
+  return access;
+}
+
+async function requireEmployeeAccess(req, res) {
+  const access = await securityStore.checkEmployeeAccess(req);
+
+  if (!access.authorized) {
+    sendJson(res, 401, access);
+    return null;
+  }
+
+  return access;
 }
 
 function normalizedRequestOrigin(value) {
@@ -603,41 +701,113 @@ function requireSameOrigin(req, res) {
   return true;
 }
 
-function requireCsrf(req, res, auth) {
-  if (!securityStore.verifyCsrf(req, auth)) {
-    sendError(res, 403, "A valid CSRF token is required.");
-    return false;
+function requestCsrfToken(req) {
+  return cleanText(req.headers["x-csrf-token"] || req.headers["X-CSRF-Token"] || "", 200);
+}
+
+async function requireBoardReadAccess(req, res) {
+  const employeeAccess = await securityStore.checkEmployeeAccess(req);
+
+  if (employeeAccess.authorized) {
+    return {
+      role: "employee",
+      ...employeeAccess
+    };
   }
 
-  return true;
+  const hrAccess = await securityStore.checkHrAccess(req);
+
+  if (hrAccess.authorized) {
+    return {
+      role: "admin",
+      ...hrAccess
+    };
+  }
+
+  sendJson(res, 401, employeeAccess);
+  return null;
 }
 
 async function requireHrMutationAccess(req, res) {
-  const auth = await requireHrAccess(req, res);
-
-  if (!auth) {
+  if (!requireSameOrigin(req, res)) {
     return null;
   }
 
-  if (!requireCsrf(req, res, auth)) {
+  const access = await requireHrAccess(req, res);
+
+  if (!access) {
     return null;
   }
 
-  return auth;
+  if (!access.csrfToken || requestCsrfToken(req) !== access.csrfToken) {
+    sendError(res, 403, "Invalid CSRF token.");
+    return null;
+  }
+
+  return access;
 }
 
 async function requireWebmasterMutationAccess(req, res) {
-  const auth = await requireWebmasterAccess(req, res);
-
-  if (!auth) {
+  if (!requireSameOrigin(req, res)) {
     return null;
   }
 
-  if (!requireCsrf(req, res, auth)) {
+  const access = await requireWebmasterAccess(req, res);
+
+  if (!access) {
     return null;
   }
 
-  return auth;
+  if (!access.csrfToken || requestCsrfToken(req) !== access.csrfToken) {
+    sendError(res, 403, "Invalid CSRF token.");
+    return null;
+  }
+
+  return access;
+}
+
+async function disableEmployeePushAccess(employeeId) {
+  const targetEmployeeId = cleanText(employeeId, 80);
+
+  if (!targetEmployeeId) {
+    return { changed: 0 };
+  }
+
+  return notificationHub.updateData((data) => {
+    let changed = 0;
+    const updatedAt = nowIso();
+    data.subscriptions = data.subscriptions.map((subscription) => {
+      if (subscription.employeeId !== targetEmployeeId) {
+        return subscription;
+      }
+
+      changed += 1;
+      return {
+        ...subscription,
+        authorized: false,
+        updatedAt
+      };
+    });
+
+    return { changed };
+  });
+}
+
+function scopedEmployeePushStatus(pushData, employeeId) {
+  const devices = summarizeNotificationDevices({
+    subscriptions: Array.isArray(pushData?.subscriptions)
+      ? pushData.subscriptions.filter((subscription) => subscription.employeeId === employeeId)
+      : []
+  }).filter((device) => device.channel === "push");
+  const authorizedSubscriptions = devices.filter((device) => device.authorized).length;
+
+  return {
+    supported: true,
+    subscriptions: devices.length,
+    authorizedSubscriptions,
+    inactiveSubscriptions: Math.max(0, devices.length - authorizedSubscriptions),
+    devices
+  };
 }
 
 function cleanText(value, maxLength) {
@@ -728,6 +898,29 @@ function sortedPosts(posts) {
 
 async function handleApi(req, res, url) {
   try {
+    const cookieNames = securityStore.getAccessCookieNames();
+    const adminCookieHeader = serializeCookie(cookieNames.hr, "", {
+      path: "/",
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequest(req)
+    });
+    const webmasterCookieHeader = serializeCookie(cookieNames.webmaster, "", {
+      path: "/",
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequest(req)
+    });
+    const employeeCookieHeader = serializeCookie(cookieNames.employee, "", {
+      path: "/",
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequest(req)
+    });
+
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, { ok: true, now: nowIso() });
       return;
@@ -739,90 +932,267 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/hr/unlock") {
-      if (!requireSameOrigin(req, res)) return;
-
-      const body = await readJsonBody(req);
-      const result = await securityStore.unlockHrAccess(req, body.pin);
-
-      sendJson(res, 200, {
-        ok: true,
-        ...result
-      }, {
-        "Set-Cookie": result.setCookie
-      });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/hr/lock") {
-      if (!(await requireHrMutationAccess(req, res))) return;
-
-      const result = await securityStore.lockHrAccess(req);
-
-      sendJson(res, 200, {
-        ok: true,
-        ...result
-      }, {
-        "Set-Cookie": result.setCookie
-      });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/hr/pin") {
-      if (!(await requireHrMutationAccess(req, res))) return;
-
-      const body = await readJsonBody(req);
-      const result = await securityStore.issueHrPin(body);
-
-      sendJson(res, 201, {
-        ok: true,
-        ...result
-      });
-      return;
-    }
-
     if (req.method === "GET" && url.pathname === "/api/webmaster/check") {
       const auth = await securityStore.checkWebmasterAccess(req);
       sendJson(res, 200, auth);
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/webmaster/approve") {
-      if (!(await requireHrMutationAccess(req, res))) return;
+    if (req.method === "GET" && url.pathname === "/api/security/events") {
+      if (!(await requireHrAccess(req, res))) return;
+
+      const result = await securityStore.listSecurityEvents({
+        limit: Number(url.searchParams.get('limit') || 100)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/employee/check") {
+      const auth = await securityStore.checkEmployeeAccess(req);
+      sendJson(res, 200, auth);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/setup") {
+      if (!requireSameOrigin(req, res)) return;
+
+      if (!ADMIN_SETUP_TOKEN) {
+        throw createHttpError(503, "Admin setup is disabled. Configure ADMIN_SETUP_TOKEN on the server first.");
+      }
 
       const body = await readJsonBody(req);
-      const result = await securityStore.approveWebmasterAccess(req, body);
 
-      sendJson(res, 200, {
-        ok: true,
-        ...result
-      }, {
-        "Set-Cookie": result.setCookie
+      if (!matchesAdminSetupToken(body.setupToken)) {
+        throw createHttpError(403, "Invalid setup token.");
+      }
+
+      const result = await securityStore.setupAdminAccess({
+        password: body.password,
+        userAgent: req.headers["user-agent"]
+      });
+
+      sendJson(res, 201, result, {
+        "Set-Cookie": serializeCookie(cookieNames.hr, result.sessionId, {
+          path: "/",
+          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: isSecureRequest(req)
+        })
       });
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/webmaster/lock") {
+    if (req.method === "POST" && url.pathname === "/api/hr/login") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.authenticateAdmin({
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 200, result, {
+        "Set-Cookie": serializeCookie(cookieNames.hr, result.sessionId, {
+          path: "/",
+          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: isSecureRequest(req)
+        })
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/logout") {
+      if (!requireSameOrigin(req, res)) return;
+
+      await securityStore.logoutAdmin(req);
+      sendJson(res, 200, { ok: true }, {
+        "Set-Cookie": adminCookieHeader
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/setup") {
       if (!(await requireHrMutationAccess(req, res))) return;
 
-      const result = await securityStore.lockWebmasterAccess(req);
+      const body = await readJsonBody(req);
+      const result = await securityStore.setupWebmasterAccess({
+        password: body.password,
+        userAgent: req.headers["user-agent"]
+      });
+
+      sendJson(res, 201, result, {
+        "Set-Cookie": serializeCookie(cookieNames.webmaster, result.sessionId, {
+          path: "/",
+          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: isSecureRequest(req)
+        })
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/login") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.authenticateWebmaster({
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 200, result, {
+        "Set-Cookie": serializeCookie(cookieNames.webmaster, result.sessionId, {
+          path: "/",
+          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: isSecureRequest(req)
+        })
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/logout") {
+      if (!requireSameOrigin(req, res)) return;
+
+      await securityStore.logoutWebmaster(req);
+      sendJson(res, 200, { ok: true }, {
+        "Set-Cookie": webmasterCookieHeader
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/employee/login") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.authenticateEmployee({
+        username: body.username,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 200, result, {
+        "Set-Cookie": serializeCookie(cookieNames.employee, result.sessionId, {
+          path: "/",
+          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: isSecureRequest(req)
+        })
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/employee/logout") {
+      if (!requireSameOrigin(req, res)) return;
+
+      await securityStore.logoutEmployee(req);
+      sendJson(res, 200, { ok: true }, {
+        "Set-Cookie": employeeCookieHeader
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/employees") {
+      if (!(await requireHrAccess(req, res))) return;
+
+      const [employees, pushData] = await Promise.all([
+        securityStore.listEmployees(),
+        notificationHub.readData()
+      ]);
+      const devicesByEmployee = new Map();
+
+      for (const subscription of Array.isArray(pushData.subscriptions) ? pushData.subscriptions : []) {
+        if (!subscription.employeeId) {
+          continue;
+        }
+
+        const record = devicesByEmployee.get(subscription.employeeId) || { devices: 0, authorizedDevices: 0 };
+        record.devices += 1;
+        record.authorizedDevices += subscription.authorized === false ? 0 : 1;
+        devicesByEmployee.set(subscription.employeeId, record);
+      }
 
       sendJson(res, 200, {
-        ok: true,
-        ...result
-      }, {
-        "Set-Cookie": result.setCookie
+        employees: employees.map((employee) => ({
+          ...employee,
+          devices: devicesByEmployee.get(employee.id)?.devices || 0,
+          authorizedDevices: devicesByEmployee.get(employee.id)?.authorizedDevices || 0
+        }))
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/employees") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.createEmployeeAccount(body);
+      sendJson(res, 201, result);
+      return;
+    }
+
+    const employeeStatusMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/status$/);
+    if (req.method === "POST" && employeeStatusMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeeStatusMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.setEmployeeActive(employeeId, body.active !== false);
+
+      if (body.active === false) {
+        await disableEmployeePushAccess(employeeId);
+      }
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const employeePasswordMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/password$/);
+    if (req.method === "POST" && employeePasswordMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeePasswordMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.resetEmployeePassword(employeeId, body.password);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const employeeSessionsMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/sessions\/revoke$/);
+    if (req.method === "POST" && employeeSessionsMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeeSessionsMatch[1]);
+      const result = await securityStore.revokeEmployeeSessions(employeeId);
+      sendJson(res, 200, result);
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/posts") {
+      if (!(await requireBoardReadAccess(req, res))) return;
+
       const data = await boardStore.readData();
       sendJson(res, 200, { posts: sortedPosts(data.posts) });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/push/config") {
+      const boardAccess = await requireBoardReadAccess(req, res);
+
+      if (!boardAccess) {
+        return;
+      }
+
       sendJson(res, 200, {
         supported: true,
         publicKey: notificationHub.getPublicKey()
@@ -831,7 +1201,18 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/push/status") {
+      const boardAccess = await requireBoardReadAccess(req, res);
+
+      if (!boardAccess) {
+        return;
+      }
+
       const data = await notificationHub.readData();
+      if (boardAccess.role === "employee") {
+        sendJson(res, 200, scopedEmployeePushStatus(data, boardAccess.employee.id));
+        return;
+      }
+
       const devices = summarizeNotificationDevices(data).filter((device) => device.channel === "push");
       const authorizedSubscriptions = devices.filter((device) => device.authorized).length;
       sendJson(res, 200, {
@@ -839,10 +1220,7 @@ async function handleApi(req, res, url) {
         subscriptions: data.subscriptions.length,
         authorizedSubscriptions,
         inactiveSubscriptions: Math.max(0, devices.length - authorizedSubscriptions),
-        devices,
-        pinRequired: Boolean(data.accessPin?.enabled),
-        pinVersion: Math.max(0, Number(data.accessPin?.version || 0)),
-        pinUpdatedAt: data.accessPin?.updatedAt || ""
+        devices
       });
       return;
     }
@@ -850,7 +1228,7 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/webmaster/summary") {
       if (!(await requireWebmasterAccess(req, res))) return;
 
-      const [boardData, pushData, analyticsData, securityData] = await Promise.all([
+      const [boardData, pushData, analyticsData, securityRuntime] = await Promise.all([
         boardStore.readData(),
         notificationHub.readData(),
         analyticsStore.readData(),
@@ -861,7 +1239,7 @@ async function handleApi(req, res, url) {
         boardData,
         pushData,
         analyticsData,
-        securityData,
+        securityRuntime,
         baseUrl: appBaseUrl(req)
       }));
       return;
@@ -870,35 +1248,27 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/push/subscribe") {
       if (!requireSameOrigin(req, res)) return;
 
-      const body = await readJsonBody(req);
-      const result = await notificationHub.subscribe(body);
+      const boardAccess = await requireBoardReadAccess(req, res);
 
-      sendJson(res, 201, {
-        ok: true,
-        ...result
-      });
-      return;
-    }
+      if (!boardAccess) {
+        return;
+      }
 
-    if (req.method === "POST" && url.pathname === "/api/push/pin") {
-      if (!(await requireWebmasterMutationAccess(req, res))) return;
+      if (boardAccess.role !== "employee") {
+        sendError(res, 403, "Push enrollment is only available from the employee board.");
+        return;
+      }
 
       const body = await readJsonBody(req);
-      const result = await notificationHub.issueAccessPin(body);
+      const result = await notificationHub.subscribe({
+        ...body,
+        employeeId: boardAccess.employee.id,
+        employeeName: boardAccess.employee.name,
+        username: boardAccess.employee.username,
+        authorized: true
+      });
 
       sendJson(res, 201, {
-        ok: true,
-        ...result
-      });
-      return;
-    }
-
-    if (req.method === "DELETE" && url.pathname === "/api/push/pin") {
-      if (!(await requireWebmasterMutationAccess(req, res))) return;
-
-      const result = await notificationHub.clearAccessPin();
-
-      sendJson(res, 200, {
         ok: true,
         ...result
       });
@@ -908,8 +1278,37 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/push/unsubscribe") {
       if (!requireSameOrigin(req, res)) return;
 
+      const boardAccess = await requireBoardReadAccess(req, res);
+
+      if (!boardAccess) {
+        return;
+      }
+
       const body = await readJsonBody(req);
-      const result = await notificationHub.unsubscribe(body.endpoint);
+      const endpoint = cleanText(body.endpoint, 2048);
+
+      if (!endpoint) {
+        throw new Error("Subscription endpoint is required.");
+      }
+
+      if (boardAccess.role === "employee") {
+        const result = await notificationHub.updateData((data) => {
+          const originalLength = data.subscriptions.length;
+          data.subscriptions = data.subscriptions.filter((entry) => !(entry.endpoint === endpoint && entry.employeeId === boardAccess.employee.id));
+          return {
+            removed: data.subscriptions.length !== originalLength,
+            totalSubscriptions: data.subscriptions.length
+          };
+        });
+
+        sendJson(res, 200, {
+          ok: true,
+          ...result
+        });
+        return;
+      }
+
+      const result = await notificationHub.unsubscribe(endpoint);
 
       sendJson(res, 200, {
         ok: true,
@@ -996,6 +1395,8 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/weather") {
+      if (!(await requireBoardReadAccess(req, res))) return;
+
       const data = await boardStore.readData();
       sendJson(res, 200, { weather: data.weather });
       return;
@@ -1099,7 +1500,6 @@ const server = http.createServer(async (req, res) => {
     const redirects = new Map([
       ["/", appPath()],
       ["/index.html", appPath()],
-      ["/palzivalerts/", appPath()],
       ["/employee", appPath("employee")],
       ["/hr", appPath("hr")],
       ["/webmaster", appPath("webmaster")],
@@ -1143,12 +1543,6 @@ await boardStore.init();
 await notificationHub.init();
 await analyticsStore.init();
 await securityStore.init();
-
-const bootstrapHrPin = securityStore.getBootstrapHrPin();
-
-if (bootstrapHrPin) {
-  console.log(`HR access PIN initialized: ${bootstrapHrPin}`);
-}
 
 server.listen(PORT, () => {
   console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);

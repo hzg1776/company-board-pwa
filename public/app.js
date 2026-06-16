@@ -75,14 +75,6 @@ function buildSuggestedDeviceLabel() {
   return `${platform} ${browser}`.trim();
 }
 
-function formatAccessPin(value) {
-  const digits = String(value ?? "")
-    .replace(/\D+/g, "")
-    .slice(0, 8);
-
-  return digits.replace(/(\d{4})(?=\d)/g, "$1-");
-}
-
 function loadDeviceProfile() {
   const suggestedLabel = buildSuggestedDeviceLabel();
   const fallback = {
@@ -157,6 +149,7 @@ const adminTabs = [
   { id: "weather", label: "Weather", icon: "cloud" },
   { id: "alerts", label: "Alerts", icon: "bell" },
   { id: "history", label: "History", icon: "board" },
+  { id: "security", label: "Security", icon: "alert" },
   { id: "share", label: "Access", icon: "users" }
 ];
 const employeeFeedFilters = ["All", "Urgent", "Important", "Normal", "News", "Weather", "Safety", "Shift", "HR"];
@@ -174,37 +167,48 @@ const state = {
   posts: [],
   weather: null,
   access: {
+    employee: {
+      loaded: false,
+      authorized: false,
+      sessionExpiresAt: "",
+      employee: null,
+      busy: false,
+      error: ""
+    },
     hr: {
       loaded: false,
       authorized: false,
-      pinRequired: true,
-      pinVersion: 0,
-      pinUpdatedAt: "",
+      setupRequired: false,
       sessionExpiresAt: "",
       csrfToken: "",
-      credentialManaged: false,
       busy: false,
       error: ""
     },
     webmaster: {
       loaded: false,
       authorized: false,
+      setupRequired: false,
       hrAuthorized: false,
-      browserBound: true,
-      approvedBrowser: null,
       sessionExpiresAt: "",
       csrfToken: "",
       busy: false,
       error: ""
     }
   },
-  hrAccessPin: null,
+  employeeDirectory: {
+    loaded: false,
+    employees: []
+  },
+  securityEvents: {
+    loaded: false,
+    events: []
+  },
   webmaster: {
     loaded: false,
     summary: null,
     probes: {},
     browser: {},
-    accessPin: null
+    expanded: {}
   },
   push: {
     supported: false,
@@ -220,10 +224,7 @@ const state = {
     subscriptions: 0,
     authorizedSubscriptions: 0,
     inactiveSubscriptions: 0,
-    devices: [],
-    pinRequired: false,
-    pinVersion: 0,
-    pinUpdatedAt: ""
+    devices: []
   },
   message: "",
   messageType: "",
@@ -589,7 +590,6 @@ function buildWebmasterSnapshot() {
   const summary = state.webmaster.summary || {};
   const board = summary.board || {};
   const notifications = summary.notifications || {};
-  const security = summary.security || {};
   const traffic = summary.traffic || {};
   const browser = state.webmaster.browser || collectBrowserDiagnostics();
   const weather = state.weather || defaultWeather();
@@ -607,9 +607,6 @@ function buildWebmasterSnapshot() {
     : Array.isArray(notifications.devices)
       ? notifications.devices
       : [];
-  const pinRequired = state.pushStatus.loaded ? Boolean(state.pushStatus.pinRequired) : Boolean(notifications.accessPin?.enabled);
-  const pinVersion = state.pushStatus.loaded ? Number(state.pushStatus.pinVersion || 0) : Number(notifications.accessPin?.version || 0);
-  const pinUpdatedAt = state.pushStatus.loaded ? String(state.pushStatus.pinUpdatedAt || "") : String(notifications.accessPin?.updatedAt || "");
 
   return {
     generatedAt: summary.generatedAt || nowIso(),
@@ -625,14 +622,9 @@ function buildWebmasterSnapshot() {
       pushSubscriptions,
       activeSubscriptions,
       inactiveSubscriptions,
-      devices: pushDevices,
-      accessPin: {
-        enabled: pinRequired,
-        version: pinVersion,
-        updatedAt: pinUpdatedAt
-      }
+      devices: pushDevices
     },
-    security,
+    security: summary.security || { accessModel: "open" },
     traffic,
     browser,
     push: {
@@ -642,10 +634,7 @@ function buildWebmasterSnapshot() {
       subscriptions: pushSubscriptions,
       activeSubscriptions,
       inactiveSubscriptions,
-      devices: pushDevices,
-      pinRequired,
-      pinVersion,
-      pinUpdatedAt
+      devices: pushDevices
     },
     probes: state.webmaster.probes || {},
     note: "Copy this brief into Codex and ask it to inspect the highlighted issues first."
@@ -769,6 +758,117 @@ function renderStatCard(value, label, note = "") {
   `;
 }
 
+function renderWebmasterDrilldownStatCard({ value, label, note = "", tab, cardIds = [] }) {
+  return `
+    <button
+      class="stat-card webmaster-stat-button"
+      type="button"
+      data-webmaster-drilldown-tab="${escapeHtml(tab)}"
+      data-webmaster-drilldown-cards="${escapeHtml(cardIds.join(","))}"
+      aria-label="${escapeHtml(`${label}. ${note ? `${note}. ` : ""}Open detailed webmaster data.`)}"
+    >
+      <strong>${escapeHtml(value)}</strong>
+      <span>${escapeHtml(label)}</span>
+      ${note ? `<p>${escapeHtml(note)}</p>` : ""}
+      <small class="webmaster-stat-hint">Click for details</small>
+    </button>
+  `;
+}
+
+function isWebmasterCardExpanded(id, defaultOpen = false) {
+  const expanded = state.webmaster.expanded || {};
+  return typeof expanded[id] === "boolean" ? expanded[id] : defaultOpen;
+}
+
+function setWebmasterCardsExpanded(cardIds = [], open = true) {
+  const nextExpanded = {
+    ...(state.webmaster.expanded || {})
+  };
+
+  cardIds.forEach((cardId) => {
+    if (cardId) {
+      nextExpanded[cardId] = open;
+    }
+  });
+
+  state.webmaster.expanded = nextExpanded;
+}
+
+function renderWebmasterSummaryMetrics(metrics = []) {
+  const visibleMetrics = Array.isArray(metrics)
+    ? metrics.filter(
+      (metric) =>
+        metric &&
+        metric.label &&
+        metric.value !== undefined &&
+        metric.value !== null &&
+        String(metric.value).trim() !== ""
+    )
+    : [];
+
+  if (!visibleMetrics.length) {
+    return "";
+  }
+
+  return `
+    <div class="webmaster-expand-metrics">
+      ${visibleMetrics
+        .map(
+          (metric) => `
+            <div class="webmaster-expand-metric">
+              <span>${escapeHtml(metric.label)}</span>
+              <strong>${escapeHtml(String(metric.value))}</strong>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderWebmasterExpandableCard({
+  id,
+  eyebrow,
+  title,
+  description = "",
+  badge = "",
+  hint = "Click to toggle",
+  iconName = "chart",
+  summaryMetrics = [],
+  body = "",
+  defaultOpen = false,
+  className = ""
+}) {
+  const classes = ["panel-card", "webmaster-expandable", className].filter(Boolean).join(" ");
+
+  return `
+    <details
+      class="${escapeHtml(classes)}"
+      data-webmaster-expand-id="${escapeHtml(id)}"
+      ${isWebmasterCardExpanded(id, defaultOpen) ? "open" : ""}
+    >
+      <summary class="webmaster-expand-summary">
+        <div class="webmaster-expand-summary-head">
+          <div class="webmaster-expand-summary-copy">
+            <p class="eyebrow">${icon(iconName)} ${escapeHtml(eyebrow)}</p>
+            <h3>${escapeHtml(title)}</h3>
+            ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+          </div>
+          <div class="webmaster-expand-summary-meta">
+            ${badge ? `<span class="sync-pill">${escapeHtml(badge)}</span>` : ""}
+            <span class="webmaster-expand-hint">${escapeHtml(hint)}</span>
+            <span class="webmaster-expand-caret" aria-hidden="true"></span>
+          </div>
+        </div>
+        ${renderWebmasterSummaryMetrics(summaryMetrics)}
+      </summary>
+      <div class="webmaster-expand-body">
+        ${body}
+      </div>
+    </details>
+  `;
+}
+
 function renderFilterSelect({ name, value, options, label }) {
   return `
     <label class="field inline">
@@ -795,15 +895,15 @@ function isStateChangingMethod(method) {
 function csrfTokenForPath(pathname) {
   const route = new URL(String(pathname || "/"), window.location.origin).pathname;
 
-  if (route === "/api/push/pin" || route === "/api/push/test") {
+  if (route === "/api/push/test" || route === "/api/webmaster/logout") {
     return String(state.access.webmaster?.csrfToken || "");
   }
 
   if (
-    route === "/api/hr/lock" ||
-    route === "/api/hr/pin" ||
-    route === "/api/webmaster/approve" ||
-    route === "/api/webmaster/lock" ||
+    route === "/api/hr/logout" ||
+    route === "/api/webmaster/setup" ||
+    route === "/api/employees" ||
+    route.startsWith("/api/employees/") ||
     route === "/api/posts" ||
     route.startsWith("/api/posts/") ||
     route === "/api/weather"
@@ -885,22 +985,87 @@ async function loadBoard() {
   }
 }
 
+async function loadEmployeeAccessStatus() {
+  const probe = await safeTimedRequestJson("/api/employee/check", {
+    authorized: false,
+    sessionExpiresAt: "",
+    employee: null
+  });
+
+  state.access.employee = {
+    ...state.access.employee,
+    loaded: true,
+    authorized: Boolean(probe.body.authorized),
+    sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
+    employee: probe.body.employee || null,
+    error: ""
+  };
+
+  return state.access.employee;
+}
+
+async function loadEmployeeDirectory() {
+  try {
+    const result = await requestJson("/api/employees");
+    state.employeeDirectory = {
+      loaded: true,
+      employees: Array.isArray(result.employees) ? result.employees : []
+    };
+  } catch {
+    state.employeeDirectory = {
+      loaded: true,
+      employees: []
+    };
+  }
+
+  return state.employeeDirectory;
+}
+
+async function loadSecurityEvents() {
+  try {
+    const result = await requestJson("/api/security/events");
+    state.securityEvents = {
+      loaded: true,
+      events: Array.isArray(result.events) ? result.events : []
+    };
+  } catch {
+    state.securityEvents = {
+      loaded: true,
+      events: []
+    };
+  }
+
+  return state.securityEvents;
+}
+
 async function refreshAdminData() {
   const access = await loadHrAccessStatus();
 
   if (!access.authorized) {
+    state.employeeDirectory = {
+      loaded: false,
+      employees: []
+    };
+    state.securityEvents = {
+      loaded: false,
+      events: []
+    };
     return {
       locked: true
     };
   }
 
-  const [_, pushStatus] = await Promise.all([
+  const [_, pushStatus, employeeDirectory, securityEvents] = await Promise.all([
     loadBoard(),
-    loadPushStatus()
+    loadPushStatus(),
+    loadEmployeeDirectory(),
+    loadSecurityEvents()
   ]);
 
   return {
-    pushStatus
+    pushStatus,
+    employeeDirectory,
+    securityEvents
   };
 }
 
@@ -942,12 +1107,10 @@ async function refreshWebmasterData() {
     subscriptions: Number(pushProbe.body.subscriptions || 0),
     authorizedSubscriptions: Number(pushProbe.body.authorizedSubscriptions || 0),
     inactiveSubscriptions: Number(pushProbe.body.inactiveSubscriptions || 0),
-    devices: Array.isArray(pushProbe.body.devices) ? pushProbe.body.devices : [],
-    pinRequired: Boolean(pushProbe.body.pinRequired),
-    pinVersion: Number(pushProbe.body.pinVersion || 0),
-    pinUpdatedAt: String(pushProbe.body.pinUpdatedAt || "")
+    devices: Array.isArray(pushProbe.body.devices) ? pushProbe.body.devices : []
   };
   state.webmaster = {
+    ...state.webmaster,
     loaded: true,
     summary: summaryProbe.body || null,
     probes: {
@@ -958,70 +1121,29 @@ async function refreshWebmasterData() {
       health: healthProbe.ms
     },
     browser: collectBrowserDiagnostics(),
-    accessPin: summaryProbe.body?.notifications?.accessPin || null,
-    health: healthProbe.body || {}
+    health: healthProbe.body || {},
+    expanded: state.webmaster.expanded || {}
   };
 
   await syncPushState();
   return state.webmaster;
 }
 
-function normalizeApprovedBrowser(value) {
-  return value
-    ? {
-        label: String(value.label || ""),
-        browser: String(value.browser || ""),
-        platform: String(value.platform || ""),
-        userAgent: String(value.userAgent || ""),
-        updatedAt: String(value.updatedAt || "")
-      }
-    : null;
-}
-
-async function waitForWebmasterAuthorization(timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const probe = await safeTimedRequestJson("/api/webmaster/check", {
-      authorized: false,
-      hrAuthorized: false,
-      browserBound: true,
-      approvedBrowser: null,
-      sessionExpiresAt: "",
-      csrfToken: ""
-    });
-
-    if (probe.body?.authorized) {
-      return probe.body;
-    }
-
-    await new Promise((resolve) => window.setTimeout(resolve, 100));
-  }
-
-  return null;
-}
-
 async function loadHrAccessStatus() {
   const probe = await safeTimedRequestJson("/api/hr/check", {
     authorized: false,
-    pinRequired: true,
-    pinVersion: 0,
-    pinUpdatedAt: "",
+    setupRequired: false,
     sessionExpiresAt: "",
-    csrfToken: "",
-    credentialManaged: false
+    csrfToken: ""
   });
 
   state.access.hr = {
     ...state.access.hr,
     loaded: true,
     authorized: Boolean(probe.body.authorized),
-    pinRequired: Boolean(probe.body.pinRequired),
-    pinVersion: Number(probe.body.pinVersion || 0),
-    pinUpdatedAt: String(probe.body.pinUpdatedAt || ""),
+    setupRequired: Boolean(probe.body.setupRequired),
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
-    credentialManaged: Boolean(probe.body.credentialManaged),
     error: ""
   };
 
@@ -1031,22 +1153,18 @@ async function loadHrAccessStatus() {
 async function loadWebmasterAccessStatus() {
   const probe = await safeTimedRequestJson("/api/webmaster/check", {
     authorized: false,
+    setupRequired: false,
     hrAuthorized: false,
-    browserBound: true,
-    approvedBrowser: null,
     sessionExpiresAt: "",
     csrfToken: ""
   });
-
-  const approvedBrowser = normalizeApprovedBrowser(probe.body.approvedBrowser);
 
   state.access.webmaster = {
     ...state.access.webmaster,
     loaded: true,
     authorized: Boolean(probe.body.authorized),
+    setupRequired: Boolean(probe.body.setupRequired),
     hrAuthorized: Boolean(probe.body.hrAuthorized),
-    browserBound: Boolean(probe.body.browserBound ?? true),
-    approvedBrowser,
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
     error: ""
@@ -1074,10 +1192,6 @@ function pushSupportText() {
       : "This browser cannot receive push alerts. Open the portal in a push-capable browser to subscribe this device.";
   }
 
-  if (state.pushStatus.pinRequired) {
-    return "Enter the access PIN from HR before subscribing this device.";
-  }
-
   if (!state.push.ready) {
     return "Checking alert support on this device.";
   }
@@ -1096,10 +1210,6 @@ function pushSupportText() {
 function formatPushError(error, fallback) {
   const message = String(error?.message || "").trim();
   const lower = message.toLowerCase();
-
-  if (error?.statusCode === 403 || lower.includes("access pin") || lower.includes("pin is required") || lower.includes("invalid access pin")) {
-    return "This device needs the current access PIN from HR.";
-  }
 
   if (error?.name === "NotAllowedError" || lower.includes("permission denied") || lower.includes("permission is blocked")) {
     return "This browser blocked push registration. Allow notifications for this site and try again.";
@@ -1125,7 +1235,6 @@ function buildEmployeeSetupState() {
   const pushSupported = supportsPushNotifications();
   const pushSubscribed = Boolean(state.push.subscribed);
   const pushPermission = state.push.permission;
-  const pinRequired = Boolean(state.pushStatus.pinRequired);
   const pushReady = pushSupported && pushPermission === "granted" && pushSubscribed;
   let nextStep = {
     title: "Save the employee name",
@@ -1148,23 +1257,13 @@ function buildEmployeeSetupState() {
   } else if (pushPermission === "denied") {
       nextStep = {
         title: "Enable notifications for this site",
-        detail: pinRequired
-          ? "Notification access is turned off here. Enter the employee name and access PIN, then turn it back on and tap subscribe."
-          : "Notification access is turned off here. Enter the employee name, then turn it back on and tap subscribe.",
+        detail: "Notification access is turned off here. Enter the employee name, then turn it back on and tap subscribe.",
         action: "profile"
-      };
-  } else if (pinRequired && !pushSubscribed) {
-      nextStep = {
-        title: "Enter the access PIN",
-        detail: "Use the code from HR to enroll this device before alerts can be delivered.",
-        action: "push"
       };
   } else if (!pushSubscribed) {
       nextStep = {
       title: "Subscribe this browser",
-      detail: pinRequired
-        ? "This browser can receive web push. Enter the employee name and access PIN, then tap subscribe to finish setup."
-        : "This browser can receive web push. Enter the employee name, then tap subscribe to finish setup.",
+      detail: "This browser can receive web push. Enter the employee name, then tap subscribe to finish setup.",
       action: "push"
     };
   } else if (pushReady) {
@@ -1178,7 +1277,7 @@ function buildEmployeeSetupState() {
   const primaryAction = nextStep.action === "push"
     ? {
         id: "push",
-        label: pushSubscribed ? "Refresh push setup" : pinRequired ? "Save name & PIN" : "Save name & subscribe",
+        label: pushSubscribed ? "Refresh push setup" : "Save name & subscribe",
         icon: "bell"
       }
     : {
@@ -1195,15 +1294,9 @@ function buildEmployeeSetupState() {
       complete: Boolean(employeeName)
     },
     {
-      title: "Access PIN",
-      value: pinRequired ? "Required" : "Open",
-      detail: pinRequired ? "Ask HR for the current access PIN before subscribing." : "No PIN is required for this portal right now.",
-      complete: !pinRequired
-    },
-    {
       title: "Web push",
       value: pushSupported ? (pushReady ? "Ready" : pushPermission === "denied" ? "Blocked" : "Available") : "Unavailable",
-      detail: pushSupported ? (pinRequired ? "Subscribe this browser after entering the access PIN." : "Subscribe this browser to receive push alerts.") : "This browser cannot use web push.",
+      detail: pushSupported ? "Subscribe this browser to receive push alerts." : "This browser cannot use web push.",
       complete: pushReady
     }
   ];
@@ -1213,7 +1306,6 @@ function buildEmployeeSetupState() {
     pushSupported,
     pushSubscribed,
     pushPermission,
-    pinRequired,
     busy: Boolean(state.push.busy),
     ready: Boolean(employeeName) && pushReady,
     nextStep,
@@ -1231,10 +1323,7 @@ async function loadPushStatus() {
       subscriptions: Number(result.subscriptions || 0),
       authorizedSubscriptions: Number(result.authorizedSubscriptions || 0),
       inactiveSubscriptions: Number(result.inactiveSubscriptions || 0),
-      devices: Array.isArray(result.devices) ? result.devices : [],
-      pinRequired: Boolean(result.pinRequired),
-      pinVersion: Number(result.pinVersion || 0),
-      pinUpdatedAt: String(result.pinUpdatedAt || "")
+      devices: Array.isArray(result.devices) ? result.devices : []
     };
   } catch {
     state.pushStatus = {
@@ -1243,10 +1332,7 @@ async function loadPushStatus() {
       subscriptions: 0,
       authorizedSubscriptions: 0,
       inactiveSubscriptions: 0,
-      devices: [],
-      pinRequired: false,
-      pinVersion: 0,
-      pinUpdatedAt: ""
+      devices: []
     };
   }
 
@@ -1282,7 +1368,7 @@ async function syncPushState() {
   return state.push;
 }
 
-async function enablePushAlerts(profile = state.deviceProfile, accessPin = "") {
+async function enablePushAlerts(profile = state.deviceProfile) {
   if (!supportsPushNotifications()) {
     throw new Error("This browser does not support push alerts.");
   }
@@ -1325,7 +1411,6 @@ async function enablePushAlerts(profile = state.deviceProfile, accessPin = "") {
         browser: browserNameFromUserAgent(),
         platform: platformNameFromUserAgent(),
         userAgent: navigator.userAgent,
-        accessPin: String(accessPin || "").trim(),
         createdAt: profile.updatedAt || nowIso(),
         updatedAt: nowIso()
       })
@@ -1410,24 +1495,24 @@ async function sendTestPush() {
     if (total <= 0) {
       setMessage("No subscribed devices were available for the test push.", "warning");
     } else if (authorized <= 0) {
-      setMessage("No devices are authorized under the current access PIN.", "warning");
+      setMessage("No subscribed devices were available for the test push.", "warning");
     } else if (skipped > 0 && removed > 0) {
       setMessage(
-        `Test push sent to ${delivered}/${authorized} authorized device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} are not enrolled under the current PIN and ${removed} stale subscription${removed === 1 ? "" : "s"} were removed.`,
+        `Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} skipped and ${removed} stale subscription${removed === 1 ? "" : "s"} were removed.`,
         "success"
       );
     } else if (skipped > 0) {
       setMessage(
-        `Test push sent to ${delivered}/${authorized} authorized device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} are not enrolled under the current PIN.`,
+        `Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} skipped.`,
         "success"
       );
     } else if (removed > 0) {
       setMessage(
-        `Test push sent to ${delivered}/${authorized} authorized device${authorized === 1 ? "" : "s"}; ${removed} stale subscription${removed === 1 ? "" : "s"} removed.`,
+        `Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}; ${removed} stale subscription${removed === 1 ? "" : "s"} removed.`,
         "success"
       );
     } else {
-      setMessage(`Test push sent to ${delivered}/${authorized} authorized device${authorized === 1 ? "" : "s"}.`, "success");
+      setMessage(`Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}.`, "success");
     }
 
     state.push.error = "";
@@ -1439,300 +1524,6 @@ async function sendTestPush() {
     state.push.busy = false;
     if (pushError) {
       state.push.error = formatPushError(pushError, "Could not send a test push.");
-    }
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function issueAccessPin() {
-  state.push.busy = true;
-  render();
-  let accessPinError = null;
-
-  try {
-    const result = await requestJson("/api/push/pin", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-
-    state.webmaster.accessPin = {
-      pin: String(result.pin || ""),
-      version: Number(result.version || 0),
-      updatedAt: String(result.updatedAt || nowIso())
-    };
-
-    await loadPushStatus();
-    setMessage(`Generated access PIN ${state.webmaster.accessPin.pin}.`, "success");
-  } catch (error) {
-    accessPinError = error instanceof Error ? error : new Error("Could not generate an access PIN.");
-    setMessage(formatPushError(accessPinError, "Could not generate an access PIN."));
-    throw accessPinError;
-  } finally {
-    state.push.busy = false;
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function disableAccessPin() {
-  state.push.busy = true;
-  render();
-  let accessPinError = null;
-
-  try {
-    await requestJson("/api/push/pin", {
-      method: "DELETE"
-    });
-
-    state.webmaster.accessPin = null;
-    await loadPushStatus();
-    setMessage("Disabled the access PIN. New subscriptions are open again.", "success");
-  } catch (error) {
-    accessPinError = error instanceof Error ? error : new Error("Could not disable the access PIN.");
-    setMessage(formatPushError(accessPinError, "Could not disable the access PIN."));
-    throw accessPinError;
-  } finally {
-    state.push.busy = false;
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function copyAccessPin() {
-  const pin = String(state.webmaster.accessPin?.pin || "").trim();
-
-  if (!pin) {
-    setMessage("Generate an access PIN first.", "warning");
-    render();
-    clearMessageSoon();
-    return;
-  }
-
-  const copied = await copyText(pin);
-  setMessage(copied ? "Copied the access PIN." : "Could not copy the access PIN.");
-  render();
-  clearMessageSoon();
-}
-
-async function unlockHrPage(pin) {
-  state.access.hr.busy = true;
-  state.access.hr.error = "";
-  render();
-
-  let hrError = null;
-
-  try {
-    const result = await requestJson("/api/hr/unlock", {
-      method: "POST",
-      body: JSON.stringify({
-        pin: String(pin || "").trim()
-      })
-    });
-
-    state.access.hr.authorized = Boolean(result.authorized);
-    state.access.hr.pinRequired = Boolean(result.pinRequired);
-    state.access.hr.pinVersion = Number(result.pinVersion || 0);
-    state.access.hr.pinUpdatedAt = String(result.pinUpdatedAt || "");
-    state.access.hr.sessionExpiresAt = String(result.sessionExpiresAt || "");
-    state.access.hr.csrfToken = String(result.csrfToken || "");
-    state.access.hr.credentialManaged = Boolean(result.credentialManaged);
-    await hydrateRoute();
-    setMessage("HR unlocked on this browser.", "success");
-  } catch (error) {
-    hrError = error instanceof Error ? error : new Error("Could not unlock HR.");
-    state.access.hr.error = hrError.message || "Could not unlock HR.";
-    throw hrError;
-  } finally {
-    state.access.hr.busy = false;
-    if (hrError) {
-      state.access.hr.error = hrError.message || "Could not unlock HR.";
-    }
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function lockHrAccessSession() {
-  state.access.hr.busy = true;
-  render();
-
-  let hrError = null;
-
-  try {
-    const result = await requestJson("/api/hr/lock", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-
-    state.access.hr.authorized = Boolean(result.authorized);
-    state.access.hr.sessionExpiresAt = "";
-    state.access.hr.csrfToken = "";
-    await loadHrAccessStatus();
-    setMessage("Locked the HR session on this browser.", "success");
-  } catch (error) {
-    hrError = error instanceof Error ? error : new Error("Could not lock HR.");
-    state.access.hr.error = hrError.message || "Could not lock HR.";
-    throw hrError;
-  } finally {
-    state.access.hr.busy = false;
-    if (hrError) {
-      state.access.hr.error = hrError.message || "Could not lock HR.";
-    }
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function issueHrAccessPin() {
-  if (state.access.hr?.credentialManaged) {
-    setMessage("HR access is managed by environment variables in this deployment.", "warning");
-    render();
-    clearMessageSoon();
-    return;
-  }
-
-  state.access.hr.busy = true;
-  state.access.hr.error = "";
-  render();
-
-  let hrError = null;
-
-  try {
-    const result = await requestJson("/api/hr/pin", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-
-    state.hrAccessPin = {
-      pin: String(result.pin || ""),
-      version: Number(result.version || 0),
-      updatedAt: String(result.updatedAt || nowIso())
-    };
-
-    state.access.hr.pinVersion = Number(result.version || 0);
-    state.access.hr.pinUpdatedAt = String(result.updatedAt || nowIso());
-    state.access.hr.pinRequired = true;
-    setMessage(`Generated HR PIN ${state.hrAccessPin.pin}.`, "success");
-  } catch (error) {
-    hrError = error instanceof Error ? error : new Error("Could not generate the HR PIN.");
-    state.access.hr.error = hrError.message || "Could not generate the HR PIN.";
-    throw hrError;
-  } finally {
-    state.access.hr.busy = false;
-    if (hrError) {
-      state.access.hr.error = hrError.message || "Could not generate the HR PIN.";
-    }
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function copyHrAccessPin() {
-  const pin = String(state.hrAccessPin?.pin || "").trim();
-
-  if (!pin) {
-    setMessage("Generate an HR PIN first.", "warning");
-    render();
-    clearMessageSoon();
-    return;
-  }
-
-  const copied = await copyText(pin);
-  setMessage(copied ? "Copied the HR PIN." : "Could not copy the HR PIN.");
-  render();
-  clearMessageSoon();
-}
-
-async function approveWebmasterBrowser() {
-  state.access.webmaster.busy = true;
-  state.access.webmaster.error = "";
-  render();
-
-  let webmasterError = null;
-
-  try {
-    if (!state.access.hr?.csrfToken && state.access.webmaster?.hrAuthorized) {
-      await loadHrAccessStatus();
-    }
-
-    const result = await requestJson("/api/webmaster/approve", {
-      method: "POST",
-      body: JSON.stringify({
-        label: buildSuggestedDeviceLabel(),
-        browser: browserNameFromUserAgent(),
-        platform: platformNameFromUserAgent(),
-        userAgent: navigator.userAgent
-      })
-    });
-
-    state.access.webmaster.authorized = Boolean(result.authorized);
-    state.access.webmaster.loaded = true;
-    state.access.webmaster.hrAuthorized = Boolean(result.hrAuthorized ?? state.access.hr?.authorized);
-    state.access.webmaster.browserBound = Boolean(result.browserBound ?? true);
-    state.access.webmaster.approvedBrowser = normalizeApprovedBrowser(result.approvedBrowser) || state.access.webmaster.approvedBrowser;
-    state.access.webmaster.sessionExpiresAt = String(result.sessionExpiresAt || "");
-    state.access.webmaster.csrfToken = String(result.csrfToken || "");
-    state.webmaster.loaded = true;
-    const confirmedAccess = await waitForWebmasterAuthorization();
-
-    if (confirmedAccess?.authorized) {
-      state.access.webmaster.authorized = true;
-      state.access.webmaster.hrAuthorized = Boolean(confirmedAccess.hrAuthorized);
-      state.access.webmaster.browserBound = Boolean(confirmedAccess.browserBound ?? true);
-      state.access.webmaster.approvedBrowser = normalizeApprovedBrowser(confirmedAccess.approvedBrowser) || state.access.webmaster.approvedBrowser;
-      state.access.webmaster.sessionExpiresAt = String(confirmedAccess.sessionExpiresAt || state.access.webmaster.sessionExpiresAt || "");
-      state.access.webmaster.csrfToken = String(confirmedAccess.csrfToken || state.access.webmaster.csrfToken || "");
-
-      try {
-        await refreshWebmasterData();
-      } catch {
-        // Keep the optimistic webmaster state if the summary call lags behind the cookie.
-      }
-    }
-
-    setMessage("Approved this browser for webmaster access.", "success");
-  } catch (error) {
-    webmasterError = error instanceof Error ? error : new Error("Could not approve this browser.");
-    state.access.webmaster.error = webmasterError.message || "Could not approve this browser.";
-    throw webmasterError;
-  } finally {
-    state.access.webmaster.busy = false;
-    if (webmasterError) {
-      state.access.webmaster.error = webmasterError.message || "Could not approve this browser.";
-    }
-    render();
-    clearMessageSoon();
-  }
-}
-
-async function lockWebmasterBrowser() {
-  state.access.webmaster.busy = true;
-  render();
-
-  let webmasterError = null;
-
-  try {
-    const result = await requestJson("/api/webmaster/lock", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-
-    state.access.webmaster.authorized = Boolean(result.authorized);
-    state.access.webmaster.browserBound = Boolean(result.browserBound ?? false);
-    state.access.webmaster.approvedBrowser = null;
-    state.access.webmaster.sessionExpiresAt = "";
-    state.access.webmaster.csrfToken = "";
-    await loadWebmasterAccessStatus();
-    setMessage("Revoked the webmaster browser.", "success");
-  } catch (error) {
-    webmasterError = error instanceof Error ? error : new Error("Could not revoke the webmaster browser.");
-    state.access.webmaster.error = webmasterError.message || "Could not revoke the webmaster browser.";
-    throw webmasterError;
-  } finally {
-    state.access.webmaster.busy = false;
-    if (webmasterError) {
-      state.access.webmaster.error = webmasterError.message || "Could not revoke the webmaster browser.";
     }
     render();
     clearMessageSoon();
@@ -1829,8 +1620,6 @@ function renderEmployeeSetupWizard() {
         ? (isIosDevice() ? "Install required" : "No push support")
         : setup.pushPermission === "denied"
           ? "Push blocked"
-          : setup.pinRequired && !setup.pushSubscribed
-            ? "PIN required"
           : setup.nextStep.action === "push"
             ? "Subscribe"
             : "Web push";
@@ -1850,16 +1639,6 @@ function renderEmployeeSetupWizard() {
           <span>Employee name</span>
           <input name="employeeName" maxlength="80" required value="${escapeHtml(setup.employeeName)}" placeholder="e.g. Maria Lopez" autocomplete="off" autocapitalize="words" spellcheck="false" data-employee-name-field>
         </label>
-        ${
-          setup.pinRequired
-            ? `
-              <label class="field full">
-                <span>Access PIN</span>
-                <input name="accessPin" maxlength="16" required inputmode="numeric" autocomplete="one-time-code" placeholder="1234-5678" spellcheck="false" data-access-pin-field>
-              </label>
-            `
-            : ""
-        }
       </div>
 
       <div class="device-setup-actions">
@@ -2175,12 +1954,10 @@ function renderEmployeeSharePanel() {
 function renderAdminPushPanel() {
   const subscriptions = Number(state.pushStatus.subscriptions || 0);
   const activeSubscriptions = Number(state.pushStatus.authorizedSubscriptions ?? subscriptions);
-  const inactiveSubscriptions = Number(state.pushStatus.inactiveSubscriptions || 0);
   const loaded = Boolean(state.pushStatus.loaded);
   const readyCopy = state.pushStatus.supported
     ? "Push delivery is ready."
     : "Push delivery is unavailable on this server.";
-  const pinRequired = Boolean(state.pushStatus.pinRequired);
 
   return `
     <section class="tool-panel push-panel panel-card">
@@ -2188,7 +1965,7 @@ function renderAdminPushPanel() {
         <div>
           <p class="eyebrow">${icon("bell")} Alert delivery</p>
           <h2>${escapeHtml(loaded ? `${activeSubscriptions} active device${activeSubscriptions === 1 ? "" : "s"}` : "Loading alert status")}</h2>
-          <p>${escapeHtml(readyCopy)} Employees enable alerts once on each device, then urgent updates can reach everyone at once.${inactiveSubscriptions ? ` ${inactiveSubscriptions} inactive device${inactiveSubscriptions === 1 ? "" : "s"} need the current PIN or an unsubscribe.` : ""}</p>
+          <p>${escapeHtml(readyCopy)} Employees enable alerts once on each device, then urgent updates can reach everyone at once.</p>
         </div>
       </div>
       <div class="push-metrics">
@@ -2201,8 +1978,8 @@ function renderAdminPushPanel() {
           <span>Push status</span>
         </div>
         <div class="push-metric">
-          <strong>${escapeHtml(pinRequired ? "On" : "Open")}</strong>
-          <span>Access PIN</span>
+          <strong>${escapeHtml(loaded ? String(subscriptions) : "…")}</strong>
+          <span>Total devices</span>
         </div>
       </div>
       ${renderAdminPushActions()}
@@ -2211,63 +1988,207 @@ function renderAdminPushPanel() {
 }
 
 function renderAccessPinPanel() {
-  const pinRequired = Boolean(state.pushStatus.pinRequired);
-  const pin = state.webmaster.accessPin?.pin || "";
-  const pinVersion = Number(state.pushStatus.pinVersion || state.webmaster.accessPin?.version || 0);
-  const updatedAt = state.webmaster.accessPin?.updatedAt || state.pushStatus.pinUpdatedAt || "";
-  const activeDevices = Number(state.pushStatus.authorizedSubscriptions ?? (Array.isArray(state.pushStatus.devices) ? state.pushStatus.devices.filter((device) => device.authorized !== false).length : 0));
-  const busy = Boolean(state.push.busy);
-  const pinLabel = pin
-    ? "Current PIN"
-    : pinRequired
-      ? "PIN active"
-      : "No PIN generated yet";
-  const pinValue = pin
-    ? pin
-    : pinRequired
-      ? "Generate a new PIN to reveal the code"
-      : "Generate a PIN to reveal the code";
-  const pinNote = updatedAt
-    ? `Last updated ${formatDate(updatedAt)}`
-    : pinRequired
-      ? "The current code is active but not visible until you issue a new one."
-      : "Use the button below to issue a new code.";
+  const snapshot = buildWebmasterSnapshot();
+  const notifications = snapshot.notifications || {};
+  const devices = state.pushStatus.loaded
+    ? Number(state.pushStatus.subscriptions || 0)
+    : Number(notifications.pushSubscriptions || 0);
+  const activeDevices = state.pushStatus.loaded
+    ? Number(state.pushStatus.authorizedSubscriptions || 0)
+    : Number(notifications.activeSubscriptions || 0);
+
+  return renderWebmasterExpandableCard({
+    id: "overview-enrollment",
+    eyebrow: "Enrollment",
+    title: "Open device enrollment",
+    description: "Employees can subscribe supported browsers directly and receive urgent updates on that device.",
+    badge: "Open",
+    iconName: "check",
+    summaryMetrics: [
+      { label: "Subscribed", value: String(devices) },
+      { label: "Active", value: String(activeDevices) },
+      { label: "Push", value: state.pushStatus.supported ? "Ready" : "Off" }
+    ],
+    body: `
+      <div class="push-metrics">
+        <div class="push-metric">
+          <strong>${escapeHtml(String(devices))}</strong>
+          <span>Subscribed devices</span>
+        </div>
+        <div class="push-metric">
+          <strong>${escapeHtml(state.pushStatus.supported ? "Ready" : "Off")}</strong>
+          <span>Push delivery</span>
+        </div>
+      </div>
+
+      <p class="panel-copy">If a device needs cleanup, unsubscribe it from the roster or turn alerts off on that browser.</p>
+    `
+  });
+}
+
+function renderEmployeeAuthGate() {
+  const authError = state.access.employee.error || state.message;
+
+  return `
+    <main class="auth-shell">
+      <section class="auth-gate-card panel-card">
+        ${brandBlock("Employee sign in")}
+        <div class="panel-title">
+          <div>
+            <p class="eyebrow">${icon("lock")} Employee access</p>
+            <h2>Sign in to read company updates</h2>
+            <p>Each employee now has a named account. HR can disable that account immediately when employment ends.</p>
+          </div>
+        </div>
+        ${authError ? `<div class="employee-banner">${escapeHtml(authError)}</div>` : ""}
+        <form class="auth-form" data-employee-login-form>
+          <label class="field">
+            <span>Username</span>
+            <input name="username" maxlength="80" required autocomplete="username" placeholder="e.g. maria.lopez">
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input name="password" type="password" minlength="10" required autocomplete="current-password" placeholder="Your employee password">
+          </label>
+          <div class="auth-form-actions">
+            <button class="button" type="submit">${icon("lock")} Sign in</button>
+            <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  `;
+}
+
+function renderAdminAuthGate(route) {
+  const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
+  const sectionTitle = route === "webmaster" ? "Webmaster" : "HR";
+  const authError = access.error || state.message;
+  const canSetup = route === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
+  const setupBlocked = route === "webmaster" && access.setupRequired && !access.hrAuthorized;
+  const passwordLabel = route === "webmaster" ? "Webmaster password" : "Management password";
+
+  return `
+    <main class="auth-shell">
+      <section class="auth-gate-card panel-card">
+        ${brandBlock(`${sectionTitle} sign in`)}
+        <div class="panel-title">
+          <div>
+            <p class="eyebrow">${icon("lock")} ${escapeHtml(sectionTitle)} access</p>
+            <h2>${escapeHtml(setupBlocked ? "Webmaster access must be provisioned by HR" : (canSetup ? `Set the ${sectionTitle.toLowerCase()} password` : `Sign in to ${sectionTitle}`))}</h2>
+            <p>${escapeHtml(setupBlocked ? "An HR admin must sign in first and provision a separate webmaster password before this area can be used." : (canSetup ? (route === "hr" ? "First-run setup requires the deployment setup secret and a new management password." : "HR must create the initial webmaster password before a separate webmaster session can sign in.") : `Enter the ${route === "webmaster" ? "webmaster" : "management"} password to open this protected area.`))}</p>
+          </div>
+        </div>
+        ${authError ? `<div class="employee-banner">${escapeHtml(authError)}</div>` : ""}
+        ${setupBlocked ? `
+        <div class="panel-card">
+          <p class="panel-copy">Use the HR console to provision webmaster access, then return here to sign in with the separate webmaster password.</p>
+        </div>
+        <div class="auth-form-actions">
+          <button class="button" type="button" data-route="hr">${icon("users")} Open HR console</button>
+          <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
+        </div>
+        ` : `
+        <form class="auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(route)}">
+          ${route === "hr" && canSetup ? `
+          <label class="field">
+            <span>Deployment setup secret</span>
+            <input name="setupToken" type="password" required autocomplete="one-time-code" placeholder="Bootstrap secret">
+          </label>
+          ` : ""}
+          <label class="field">
+            <span>${escapeHtml(canSetup ? passwordLabel : "Password")}</span>
+            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? `Create the ${passwordLabel.toLowerCase()}` : passwordLabel)}">
+          </label>
+          <div class="auth-form-actions">
+            <button class="button" type="submit">${icon("lock")} ${escapeHtml(canSetup ? "Save password" : "Sign in")}</button>
+            <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
+          </div>
+        </form>
+        `}
+      </section>
+    </main>
+  `;
+}
+
+function renderEmployeeDirectoryCard(employee) {
+  return `
+    <article class="panel-card employee-directory-card ${employee.active ? "employee-directory-active" : "employee-directory-inactive"}">
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("users")} Employee account</p>
+          <h3>${escapeHtml(employee.name || employee.username)}</h3>
+          <p>@${escapeHtml(employee.username)} · ${escapeHtml(employee.active ? "Active" : "Disabled")}</p>
+        </div>
+        <span class="sync-pill">${escapeHtml(employee.active ? "Enabled" : "Revoked")}</span>
+      </div>
+      <div class="panel-metrics employee-directory-metrics">
+        ${renderStatCard(String(employee.activeSessions || 0), "Sessions", employee.lastLoginAt ? `Last login ${formatDate(employee.lastLoginAt)}` : "No login yet")}
+        ${renderStatCard(String(employee.authorizedDevices || 0), "Active devices", `${employee.devices || 0} total enrolled`)}
+        ${renderStatCard(employee.disabledAt ? formatDate(employee.disabledAt) : "Live", "Status changed", employee.updatedAt ? formatDate(employee.updatedAt) : "Not updated")}
+      </div>
+      <div class="employee-directory-actions">
+        <form data-employee-access-form>
+          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+          <input type="hidden" name="active" value="${employee.active ? "false" : "true"}">
+          <button class="ghost-button" type="submit">${employee.active ? `${icon("alert")} Disable access` : `${icon("check")} Re-enable access`}</button>
+        </form>
+        <form data-revoke-employee-sessions-form>
+          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+          <button class="ghost-button" type="submit">${icon("refresh")} Sign out all sessions</button>
+        </form>
+      </div>
+      <form class="employee-password-form" data-reset-employee-password-form>
+        <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+        <label class="field full">
+          <span>Reset password</span>
+          <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New temporary password">
+        </label>
+        <div class="auth-form-actions">
+          <button class="ghost-button" type="submit">${icon("lock")} Save new password</button>
+        </div>
+      </form>
+    </article>
+  `;
+}
+
+function renderEmployeeDirectoryPanel() {
+  const employees = Array.isArray(state.employeeDirectory.employees) ? state.employeeDirectory.employees : [];
 
   return `
     <section class="panel-card">
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("lock")} Access control</p>
-          <h3>Enrollment PIN</h3>
-          <p>${escapeHtml(pinRequired ? "Devices must enroll with the current PIN before they can receive alerts." : "Open enrollment is active. Generate a PIN when you want to lock down new device access.")}</p>
+          <p class="eyebrow">${icon("lock")} Employee accounts</p>
+          <h3>Create, disable, and reset employee access</h3>
+          <p>Disabling an account immediately blocks board access and deauthorizes that employee's push devices.</p>
         </div>
-        <span class="sync-pill">${escapeHtml(pinRequired ? "PIN required" : "Open enrollment")}</span>
+        <span class="sync-pill">${escapeHtml(`${employees.length} account${employees.length === 1 ? "" : "s"}`)}</span>
       </div>
 
-      <div class="push-metrics">
-        <div class="push-metric">
-          <strong>${escapeHtml(pinRequired ? `v${pinVersion || 1}` : "Off")}</strong>
-          <span>PIN version</span>
+      <form class="auth-form employee-create-form" data-create-employee-form>
+        <div class="composer-grid">
+          <label class="field">
+            <span>Employee name</span>
+            <input name="name" maxlength="120" required placeholder="e.g. Maria Lopez">
+          </label>
+          <label class="field">
+            <span>Username</span>
+            <input name="username" maxlength="80" required placeholder="e.g. maria.lopez">
+          </label>
+          <label class="field field-span-2">
+            <span>Temporary password</span>
+            <input name="password" type="password" minlength="10" required placeholder="At least 10 characters">
+          </label>
         </div>
-        <div class="push-metric">
-          <strong>${escapeHtml(String(activeDevices))}</strong>
-          <span>Authorized devices</span>
+        <div class="auth-form-actions">
+          <button class="button" type="submit">${icon("users")} Create employee account</button>
         </div>
-      </div>
+      </form>
 
-      <div class="access-pin-display ${pin ? "has-pin" : "empty"}">
-        <span>${escapeHtml(pinLabel)}</span>
-        <strong>${escapeHtml(pinValue)}</strong>
-        <small>${escapeHtml(pinNote)}</small>
+      <div class="employee-directory-list">
+        ${employees.length ? employees.map((employee) => renderEmployeeDirectoryCard(employee)).join("") : '<div class="empty-state">No employee accounts yet.</div>'}
       </div>
-
-      <div class="employee-alert-actions admin-alert-actions">
-        <button class="button" type="button" data-issue-access-pin ${busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("lock")} ${escapeHtml(pinRequired ? "Rotate access PIN" : "Generate access PIN")}</button>
-        ${pinRequired ? `<button class="ghost-button" type="button" data-disable-access-pin ${busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("check")} Disable PIN</button>` : ""}
-        ${pin ? `<button class="ghost-button" type="button" data-copy-access-pin ${busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("clipboard")} Copy PIN</button>` : ""}
-      </div>
-
-      <p class="panel-copy">Rotating the PIN invalidates the old code for future subscriptions. Devices already enrolled under a previous PIN must resubscribe with the new one.</p>
     </section>
   `;
 }
@@ -2275,13 +2196,16 @@ function renderAccessPinPanel() {
 function renderEmployee() {
   const notices = filteredEmployeePosts();
   const totalNotices = visiblePosts().length;
+  const employeeName = state.access.employee.employee?.name || "Employee";
 
   return `
     <main class="page-shell employee-shell">
       <header class="page-head">
         ${brandBlock()}
         <div class="page-actions">
+          <span class="sync-pill">${icon("users")} ${escapeHtml(employeeName)}</span>
           <span class="sync-pill">${icon("news")} Latest feed</span>
+          <button class="ghost-button" type="button" data-employee-logout>${icon("lock")} Sign out</button>
         </div>
       </header>
 
@@ -2520,187 +2444,106 @@ function renderAdminHistoryPanel() {
   `;
 }
 
-function renderAdminAccessPanel() {
-  const hrAccess = state.access.hr || {};
-  const webmasterAccess = state.access.webmaster || {};
-  const hrCredentialManaged = Boolean(hrAccess.credentialManaged);
-  const hrPin = String(state.hrAccessPin?.pin || "");
-  const hrPinVersion = Number(hrAccess.pinVersion || state.hrAccessPin?.version || 0);
-  const hrUpdatedAt = state.hrAccessPin?.updatedAt || hrAccess.pinUpdatedAt || "";
-  const approvedBrowser = webmasterAccess.approvedBrowser || null;
-  const approvedBrowserLabel = approvedBrowser
-    ? approvedBrowser.label || [approvedBrowser.platform, approvedBrowser.browser].filter(Boolean).join(" ").trim()
-    : "";
-  const approvedBrowserDetail = approvedBrowser
-    ? [approvedBrowser.platform, approvedBrowser.browser, approvedBrowser.updatedAt ? `approved ${formatDate(approvedBrowser.updatedAt)}` : ""]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
+function renderSecurityEventCard(event) {
+  const eventType = String(event.type || "event").replace(/_/g, " ");
+  const outcome = String(event.outcome || "logged");
+  const sourceIp = event.sourceIp || "unknown";
+  const accountKey = event.accountKey || "n/a";
+  const detail = event.detail || "No detail";
+
+  return `
+    <article class="panel-card">
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("alert")} ${escapeHtml(eventType)}</p>
+          <h3>${escapeHtml(outcome)}</h3>
+          <p>${escapeHtml(formatDate(event.createdAt || nowIso()))}</p>
+        </div>
+        <span class="sync-pill">${escapeHtml(event.actor || "system")}</span>
+      </div>
+      <div class="status-display">
+        <span>Account</span>
+        <strong>${escapeHtml(accountKey)}</strong>
+        <small>${escapeHtml(detail)}</small>
+      </div>
+      <p class="panel-copy">Source IP: ${escapeHtml(sourceIp)}${event.userAgent ? ` | Agent: ${escapeHtml(event.userAgent)}` : ""}</p>
+    </article>
+  `;
+}
+
+function renderAdminSecurityPanel() {
+  const events = Array.isArray(state.securityEvents.events) ? state.securityEvents.events : [];
+  const failedCount = events.filter((event) => String(event.type || "").endsWith("_failed")).length;
+  const throttledCount = events.filter((event) => String(event.type || "").endsWith("_throttled")).length;
 
   return `
     <section class="panel-stack">
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("lock")} Access control</p>
-          <h2>Control who gets in</h2>
-          <p>HR uses a PIN. Webmaster is locked to one approved browser.</p>
+          <p class="eyebrow">${icon("alert")} Security visibility</p>
+          <h2>Recent auth events</h2>
+          <p>Review the latest failed logins, throttles, and lockouts across HR, Webmaster, and employee sign-in.</p>
         </div>
-        <span class="sync-pill">${escapeHtml(hrAccess.authorized ? "HR unlocked" : "HR locked")}</span>
+        <span class="sync-pill">Persisted</span>
       </div>
 
       <section class="panel-card">
         <div class="panel-title panel-title-wide">
           <div>
-            <p class="eyebrow">${icon("users")} HR page</p>
-            <h3>HR access PIN</h3>
-            <p>${escapeHtml(hrCredentialManaged ? "This deployment uses an environment-managed admin credential." : "Rotate this PIN whenever you want to lock out old HR sessions.")}</p>
+            <p class="eyebrow">${icon("lock")} Auth pressure</p>
+            <h3>Current snapshot</h3>
+            <p>These counters are drawn from the most recent persisted security events.</p>
           </div>
-          <span class="sync-pill">${escapeHtml(hrAccess.pinRequired ? `v${hrPinVersion || 1}` : "Open")}</span>
         </div>
-
-        <div class="access-pin-display ${hrPin ? "has-pin" : "empty"}">
-          <span>${escapeHtml(hrCredentialManaged ? "Managed credential" : hrPin ? "Current HR PIN" : "Generate a PIN")}</span>
-          <strong>${escapeHtml(hrCredentialManaged ? "Set in environment variables" : hrPin ? hrPin : "Generate a new PIN to reveal the code")}</strong>
-          <small>${escapeHtml(
-            hrCredentialManaged
-              ? "Update ADMIN_PASSWORD or HR_PIN on the server to change HR access."
-              : hrUpdatedAt
-                ? `Last updated ${formatDate(hrUpdatedAt)}`
-                : "The current PIN is hidden until you issue a new one."
-          )}</small>
+        <div class="hero-strip hero-strip-hr" aria-label="Security summary">
+          ${renderStatCard(String(events.length), "Recent events", "Newest 100 persisted events")}
+          ${renderStatCard(String(failedCount), "Failed sign-ins", "Invalid credentials and denied attempts")}
+          ${renderStatCard(String(throttledCount), "Throttled", "Backoff and temporary lockouts")}
+          ${renderStatCard(events[0]?.createdAt ? formatDate(events[0].createdAt) : "None", "Latest event", "Most recent auth signal")}
         </div>
-
-        <div class="employee-alert-actions admin-alert-actions">
-          <button class="button" type="button" data-issue-hr-pin ${hrAccess.busy || hrCredentialManaged ? "disabled aria-disabled=\"true\"" : ""}>${icon("lock")} ${escapeHtml(hrCredentialManaged ? "Managed in environment" : hrPin ? "Rotate HR PIN" : "Generate HR PIN")}</button>
-          ${hrPin ? `<button class="ghost-button" type="button" data-copy-hr-pin ${hrAccess.busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("clipboard")} Copy HR PIN</button>` : ""}
-          <button class="ghost-button" type="button" data-lock-hr-session ${hrAccess.busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("check")} Lock HR session</button>
-        </div>
-
-        <p class="panel-copy">${escapeHtml(
-          hrCredentialManaged
-            ? "HR access is controlled by the server environment. Browser rotation is disabled for this deployment."
-            : "The HR page stays locked until the current PIN is entered. Rotating it invalidates older browser sessions."
-        )}</p>
-      </section>
-      <section class="panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("shield")} Webmaster access</p>
-            <h3>Approve this browser</h3>
-            <p>Only the approved browser can open the webmaster page. Websites cannot read MAC addresses, so approval is stored as a signed browser cookie.</p>
-          </div>
-          <span class="sync-pill">${escapeHtml(webmasterAccess.authorized ? "Approved" : "Locked")}</span>
-        </div>
-
-        <div class="access-pin-display ${approvedBrowser ? "has-pin" : "empty"}">
-          <span>${escapeHtml(approvedBrowser ? "Approved browser" : "No browser approved")}</span>
-          <strong>${escapeHtml(approvedBrowserLabel || "Approve this browser")}</strong>
-          <small>${escapeHtml(approvedBrowserDetail || (hrAccess.authorized ? "This browser can be approved now." : "Unlock HR first in the browser you want to use for webmaster access."))}</small>
-        </div>
-
-        <div class="employee-alert-actions admin-alert-actions">
-          <button class="button" type="button" data-approve-webmaster-browser ${webmasterAccess.busy || !hrAccess.authorized ? "disabled aria-disabled=\"true\"" : ""}>${icon("shield")} Approve this browser</button>
-          <button class="ghost-button" type="button" data-lock-webmaster-browser ${webmasterAccess.busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("delete")} Revoke browser</button>
-        </div>
-
-        <p class="panel-copy">Webmaster approval is browser-bound because websites cannot read MAC addresses. Revoke it here any time you want to force a new approval.</p>
       </section>
 
-      ${renderEmployeeSharePanel()}
+      <section class="panel-stack">
+        ${events.length ? events.map((event) => renderSecurityEventCard(event)).join("") : '<div class="empty-state">No recent security events.</div>'}
+      </section>
     </section>
   `;
 }
 
-function renderHrLockScreen() {
-  const hrAccess = state.access.hr || {};
-  const pinError = hrAccess.error ? `<p class="employee-alert-error">${escapeHtml(hrAccess.error)}</p>` : "";
-
+function renderAdminAccessPanel() {
   return `
-    <main class="auth-shell">
-      <section class="panel-card auth-gate-card">
-        ${brandBlock("HR access required")}
+    <section class="panel-stack">
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("users")} Access & sharing</p>
+          <h2>Managed employee access</h2>
+          <p>Employee board access is now tied to named accounts so HR can revoke terminated workers immediately.</p>
+        </div>
+        <span class="sync-pill">Protected</span>
+      </div>
+
+      <section class="panel-card">
         <div class="panel-title panel-title-wide">
           <div>
-            <p class="eyebrow">${icon("lock")} Locked page</p>
-            <h2>Unlock the HR console</h2>
-            <p>Enter the HR PIN to publish updates, manage weather, and control alerts.</p>
+            <p class="eyebrow">${icon("check")} Access model</p>
+            <h3>Named employee accounts</h3>
+            <p>Each employee signs in with a username and password. Disable the account to cut off board access and future push delivery.</p>
           </div>
-          <span class="sync-pill">${escapeHtml(hrAccess.pinRequired ? "PIN required" : "Open")}</span>
+          <span class="sync-pill">Accounts</span>
         </div>
 
-        <form class="auth-form" data-hr-unlock-form>
-          <label class="field full">
-            <span>HR PIN</span>
-            <input
-              name="pin"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength="16"
-              required
-              placeholder="1234-5678"
-              data-hr-pin-field
-            >
-          </label>
+        <div class="status-display">
+          <span>Access mode</span>
+          <strong>Managed</strong>
+          <small>Employee feed access now depends on an active account instead of just knowing the URL.</small>
+        </div>
 
-          <div class="auth-form-actions">
-            <button class="button" type="submit" ${hrAccess.busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("lock")} Unlock HR</button>
-            <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
-          </div>
-
-          <p class="form-note">Web apps cannot read MAC addresses. HR access is protected by a signed browser cookie after the correct PIN is entered.</p>
-          ${pinError}
-        </form>
+        <p class="panel-copy">This is the clean minimum to block fired employees right away. The next step after this is SSO if you want central identity management.</p>
       </section>
-    </main>
-  `;
-}
 
-function renderWebmasterLockScreen() {
-  const webmasterAccess = state.access.webmaster || {};
-  const approvedBrowser = webmasterAccess.approvedBrowser || null;
-  const approvedBrowserLabel = approvedBrowser
-    ? approvedBrowser.label || [approvedBrowser.platform, approvedBrowser.browser].filter(Boolean).join(" ").trim()
-    : "";
-  const approvedBrowserDetail = approvedBrowser
-    ? [approvedBrowser.platform, approvedBrowser.browser, approvedBrowser.updatedAt ? `approved ${formatDate(approvedBrowser.updatedAt)}` : ""]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
-  const approvalNote = webmasterAccess.hrAuthorized
-    ? "HR is unlocked in this browser. Approve it once and the webmaster page will stay open here until you revoke it."
-    : "Unlock HR in the browser you want to use first, then approve this browser for webmaster access.";
-  const actionButton = webmasterAccess.hrAuthorized
-    ? `<button class="button" type="button" data-approve-webmaster-browser ${webmasterAccess.busy ? "disabled aria-disabled=\"true\"" : ""}>${icon("shield")} Approve this browser</button>`
-    : `<button class="button" type="button" data-route="hr">${icon("users")} Open HR</button>`;
-
-  return `
-    <main class="auth-shell">
-      <section class="panel-card auth-gate-card">
-        ${brandBlock("Webmaster access required")}
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("shield")} Browser locked</p>
-            <h2>Approve this browser</h2>
-            <p>Webmaster access is bound to one approved browser. The browser is locked until HR approves it.</p>
-          </div>
-          <span class="sync-pill">${escapeHtml(webmasterAccess.authorized ? "Approved" : "Locked")}</span>
-        </div>
-
-        <div class="access-pin-display ${approvedBrowser ? "has-pin" : "empty"}">
-          <span>${escapeHtml(approvedBrowser ? "Approved browser" : "No browser approved")}</span>
-          <strong>${escapeHtml(approvedBrowserLabel || "Approve this browser")}</strong>
-          <small>${escapeHtml(approvedBrowserDetail || approvalNote)}</small>
-        </div>
-
-        <div class="auth-form-actions">
-          ${actionButton}
-          <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
-        </div>
-
-        <p class="form-note">MAC addresses are not exposed to websites. This lock is enforced with a signed cookie on the approved browser.</p>
-        ${webmasterAccess.error ? `<p class="employee-alert-error">${escapeHtml(webmasterAccess.error)}</p>` : ""}
-      </section>
-    </main>
+      ${renderEmployeeDirectoryPanel()}
+      ${renderEmployeeSharePanel()}
+    </section>
   `;
 }
 
@@ -2708,7 +2551,6 @@ function renderWebmasterOverviewPanel() {
   const snapshot = buildWebmasterSnapshot();
   const board = snapshot.board || {};
   const notifications = snapshot.notifications || {};
-  const security = snapshot.security || {};
   const urls = snapshot.urls || {};
   const server = snapshot.server || {};
   const probes = state.webmaster.probes || {};
@@ -2724,47 +2566,67 @@ function renderWebmasterOverviewPanel() {
         <span class="sync-pill">${icon("check")} Live snapshot</span>
       </div>
 
-      <section class="panel-card">
-        ${renderKeyValueGrid([
+      ${renderWebmasterExpandableCard({
+        id: "overview-site-snapshot",
+        eyebrow: "Site snapshot",
+        title: "Routes, access, and last publish",
+        description: "Open the live portal routes, latest update, push enrollment, and health timing in one place.",
+        badge: "Live",
+        iconName: "chart",
+        summaryMetrics: [
+          { label: "Generated", value: formatDate(snapshot.generatedAt) },
+          { label: "Push subs", value: String(notifications.pushSubscriptions || 0) },
+          { label: "Health", value: formatDurationMs(probes.health || 0) }
+        ],
+        body: renderKeyValueGrid([
           ["Generated", formatDate(snapshot.generatedAt), "Snapshot time"],
           ["Launcher URL", urls.base || `${window.location.origin}${appPath()}`, "Canonical entry point"],
           ["HR route", urls.hr || `${window.location.origin}${routePath("hr")}`, "Publish console"],
           ["Employee route", urls.employee || `${window.location.origin}${routePath("employee")}`, "Read-only feed"],
           ["Latest update", board.latestPost ? board.latestPost.title : "None", board.latestPost ? formatDate(board.latestPost.createdAt) : "No posts yet"],
           ["Push subs", String(notifications.pushSubscriptions || 0), "Web push enrollments"],
-          ["HR pin", security.hrPin?.enabled ? `v${security.hrPin.version || 1}` : "Open", security.hrPin?.updatedAt ? `Updated ${formatDate(security.hrPin.updatedAt)}` : "No HR PIN configured"],
-          ["Webmaster", security.webmaster ? security.webmaster.label || "Approved browser" : "Locked", security.webmaster ? [security.webmaster.platform, security.webmaster.browser].filter(Boolean).join(" · ") : "Approve a browser"],
+          ["Admin access", "Separated roles", "Distinct HR and Webmaster sessions"],
+          ["Enrollment", "Employee-authenticated", "Employees must sign in before subscribing"],
           ["Health ping", formatDurationMs(probes.health || 0), "API round-trip"]
-        ])}
-      </section>
+        ])
+      })}
 
-      <section class="panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("monitor")} Host snapshot</p>
-            <h3>Runtime and probe timings</h3>
-          </div>
-        </div>
-        ${renderKeyValueGrid([
+      ${renderWebmasterExpandableCard({
+        id: "overview-host-snapshot",
+        eyebrow: "Host snapshot",
+        title: "Runtime and probe timings",
+        description: "Check the active Node runtime, item counts, and how long each Webmaster probe took.",
+        badge: "Tracked",
+        iconName: "monitor",
+        summaryMetrics: [
+          { label: "Node", value: server.nodeVersion || "Unknown" },
+          { label: "Board items", value: String(board.totalPosts || 0) },
+          { label: "Summary fetch", value: formatDurationMs(probes.summary || 0) }
+        ],
+        body: renderKeyValueGrid([
           ["Node", server.nodeVersion || "Unknown", `Uptime ${server.uptimeSeconds || 0}s`],
           ["Board items", String(board.totalPosts || 0), "Updates tracked"],
           ["Summary fetch", formatDurationMs(probes.summary || 0), "Webmaster endpoint"],
           ["Posts fetch", formatDurationMs(probes.posts || 0), "Feed data"],
           ["Weather fetch", formatDurationMs(probes.weather || 0), "Weather payload"],
           ["Push status", formatDurationMs(probes.pushStatus || 0), "Notification status"]
-        ])}
-      </section>
+        ])
+      })}
 
-      <section class="panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("users")} Delivery roster</p>
-            <h3>Subscribed devices</h3>
-            <p>Active devices stay on top. Inactive entries need the current PIN or an unsubscribe.</p>
-          </div>
-        </div>
-        ${renderNotificationDeviceRoster(notifications.devices || [], "No push devices have subscribed yet.")}
-      </section>
+      ${renderWebmasterExpandableCard({
+        id: "overview-delivery-roster",
+        eyebrow: "Delivery roster",
+        title: "Subscribed devices",
+        description: "Active devices stay on top. Remove stale devices from the roster or turn alerts off on that browser.",
+        badge: "Devices",
+        iconName: "users",
+        summaryMetrics: [
+          { label: "Active", value: String(notifications.activeSubscriptions || 0) },
+          { label: "Inactive", value: String(notifications.inactiveSubscriptions || 0) },
+          { label: "Total", value: String(notifications.pushSubscriptions || 0) }
+        ],
+        body: renderNotificationDeviceRoster(notifications.devices || [], "No push devices have subscribed yet.")
+      })}
 
       ${renderAccessPinPanel()}
     </section>
@@ -2774,6 +2636,10 @@ function renderWebmasterOverviewPanel() {
 function renderWebmasterTrafficPanel() {
   const snapshot = buildWebmasterSnapshot();
   const traffic = snapshot.traffic || {};
+  const successRate = traffic.totals?.requests
+    ? `${Math.round(((traffic.totals.successfulRequests || 0) / traffic.totals.requests) * 100)}%`
+    : "0%";
+  const topRoute = traffic.byRoute?.[0]?.label || "None";
 
   return `
     <section class="panel-stack">
@@ -2785,54 +2651,75 @@ function renderWebmasterTrafficPanel() {
         </div>
       </div>
 
-      <section class="panel-card">
-        ${renderKeyValueGrid([
-          ["Requests", String(traffic.totals?.requests || 0), "All tracked requests"],
-          ["Page views", String(traffic.totals?.pageViews || 0), "Employee, HR, and webmaster views"],
-          ["API calls", String(traffic.totals?.apiRequests || 0), "Backend requests"],
-          ["Success rate", traffic.totals?.requests ? `${Math.round(((traffic.totals.successfulRequests || 0) / traffic.totals.requests) * 100)}%` : "0%", "2xx and 3xx responses"],
-          ["Server errors", String(traffic.totals?.serverErrors || 0), "5xx responses"],
-          ["Average response", formatDurationMs(traffic.totals?.averageDurationMs || 0), "Across tracked requests"]
-        ])}
+      ${renderWebmasterExpandableCard({
+        id: "traffic-summary",
+        eyebrow: "Traffic summary",
+        title: "Requests, response time, and route mix",
+        description: "Open the full request totals plus method, status, and route breakdowns.",
+        badge: "Tracked",
+        iconName: "refresh",
+        summaryMetrics: [
+          { label: "Requests", value: String(traffic.totals?.requests || 0) },
+          { label: "Errors", value: String(traffic.totals?.serverErrors || 0) },
+          { label: "Avg response", value: formatDurationMs(traffic.totals?.averageDurationMs || 0) },
+          { label: "Success", value: successRate }
+        ],
+        body: `
+          ${renderKeyValueGrid([
+            ["Requests", String(traffic.totals?.requests || 0), "All tracked requests"],
+            ["Page views", String(traffic.totals?.pageViews || 0), "Employee, HR, and webmaster views"],
+            ["API calls", String(traffic.totals?.apiRequests || 0), "Backend requests"],
+            ["Success rate", successRate, "2xx and 3xx responses"],
+            ["Server errors", String(traffic.totals?.serverErrors || 0), "5xx responses"],
+            ["Average response", formatDurationMs(traffic.totals?.averageDurationMs || 0), "Across tracked requests"]
+          ])}
 
-        <div class="analytics-grid">
-          <div class="panel-stack">
-            <h3>Methods</h3>
-            ${renderCountList(traffic.byMethod || [], "No methods yet")}
-          </div>
-          <div class="panel-stack">
-            <h3>Status codes</h3>
-            ${renderCountList(traffic.byStatus || [], "No statuses yet")}
-          </div>
-          <div class="panel-stack">
-            <h3>Top routes</h3>
-            ${renderCountList(traffic.byRoute || [], "No routes yet")}
-          </div>
-        </div>
-      </section>
-
-      <section class="panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("news")} Recent requests</p>
-            <h3>Latest activity</h3>
-          </div>
-        </div>
-        <div class="request-list">
-          ${traffic.recentRequests?.length ? traffic.recentRequests.map((request) => renderRecentRequest(request)).join("") : '<div class="empty-state compact">No requests recorded yet.</div>'}
-        </div>
-        ${traffic.recentErrors?.length ? `
-          <div class="panel-title panel-title-wide request-errors-head">
-            <div>
-              <p class="eyebrow">${icon("alert")} Recent errors</p>
-              <h3>Failing routes</h3>
+          <div class="analytics-grid">
+            <div class="panel-stack">
+              <h3>Methods</h3>
+              ${renderCountList(traffic.byMethod || [], "No methods yet")}
+            </div>
+            <div class="panel-stack">
+              <h3>Status codes</h3>
+              ${renderCountList(traffic.byStatus || [], "No statuses yet")}
+            </div>
+            <div class="panel-stack">
+              <h3>Top routes</h3>
+              ${renderCountList(traffic.byRoute || [], "No routes yet")}
             </div>
           </div>
+        `
+      })}
+
+      ${renderWebmasterExpandableCard({
+        id: "traffic-requests",
+        eyebrow: "Recent requests",
+        title: "Latest activity and failures",
+        description: "Expand to inspect the newest requests first, plus any recent failing routes.",
+        badge: "Live",
+        iconName: "news",
+        summaryMetrics: [
+          { label: "Recent", value: String(traffic.recentRequests?.length || 0) },
+          { label: "Errors", value: String(traffic.recentErrors?.length || 0) },
+          { label: "Top route", value: topRoute }
+        ],
+        body: `
           <div class="request-list">
-            ${traffic.recentErrors.map((request) => renderRecentRequest(request)).join("")}
+            ${traffic.recentRequests?.length ? traffic.recentRequests.map((request) => renderRecentRequest(request)).join("") : '<div class="empty-state compact">No requests recorded yet.</div>'}
           </div>
-        ` : ""}
-      </section>
+          ${traffic.recentErrors?.length ? `
+            <div class="panel-title panel-title-wide request-errors-head">
+              <div>
+                <p class="eyebrow">${icon("alert")} Recent errors</p>
+                <h3>Failing routes</h3>
+              </div>
+            </div>
+            <div class="request-list">
+              ${traffic.recentErrors.map((request) => renderRecentRequest(request)).join("")}
+            </div>
+          ` : ""}
+        `
+      })}
     </section>
   `;
 }
@@ -2842,6 +2729,7 @@ function renderWebmasterSystemPanel() {
   const server = snapshot.server || {};
   const browser = snapshot.browser || {};
   const probes = state.webmaster.probes || {};
+  const loadMetric = browser.performance?.loadMs ? `${browser.performance.loadMs} ms` : "Unknown";
 
   return `
     <section class="panel-stack">
@@ -2853,58 +2741,84 @@ function renderWebmasterSystemPanel() {
         </div>
       </div>
 
-      <section class="panel-card">
-        <div class="analytics-grid">
-          <div class="panel-stack">
-            <h3>Server</h3>
-            ${renderKeyValueGrid([
-              ["Node", server.nodeVersion || "Unknown", `PID ${server.pid || "?"}`],
-              ["Platform", `${server.platform || "Unknown"} · ${server.arch || "Unknown"}`, `CPU ${server.cpuCount || 0}`],
-              ["Uptime", `${server.uptimeSeconds || 0}s`, `Port ${server.port || "?"}`],
-              ["Memory", `${formatBytes((server.memory?.rssMb || 0) * 1024 * 1024)}`, `Heap ${server.memory?.heapUsedMb || 0} MB used`],
-              ["Storage", `${server.boardStorage || "file"} / ${server.pushStorage || "file"}`, "Board / push stores"],
-              ["Analytics file", server.dataFiles?.analytics || "analytics.json", "Request history"]
-            ])}
+      ${renderWebmasterExpandableCard({
+        id: "system-runtime",
+        eyebrow: "Runtime diagnostics",
+        title: "Server and browser environment",
+        description: "Expand to inspect the current host runtime plus the browser context being used for this session.",
+        badge: browser.online ? "Online" : "Offline",
+        iconName: "monitor",
+        summaryMetrics: [
+          { label: "Node", value: server.nodeVersion || "Unknown" },
+          { label: "Port", value: String(server.port || "?") },
+          { label: "Push", value: browser.pushSupport ? "Supported" : "Unsupported" }
+        ],
+        body: `
+          <div class="analytics-grid">
+            <div class="panel-stack">
+              <h3>Server</h3>
+              ${renderKeyValueGrid([
+                ["Node", server.nodeVersion || "Unknown", `PID ${server.pid || "?"}`],
+                ["Platform", `${server.platform || "Unknown"} · ${server.arch || "Unknown"}`, `CPU ${server.cpuCount || 0}`],
+                ["Uptime", `${server.uptimeSeconds || 0}s`, `Port ${server.port || "?"}`],
+                ["Memory", `${formatBytes((server.memory?.rssMb || 0) * 1024 * 1024)}`, `Heap ${server.memory?.heapUsedMb || 0} MB used`],
+                ["Storage", `${server.boardStorage || "file"} / ${server.pushStorage || "file"}`, "Board / push stores"],
+                ["Analytics file", server.dataFiles?.analytics || "analytics.json", "Request history"]
+              ])}
+            </div>
+            <div class="panel-stack">
+              <h3>Browser</h3>
+              ${renderKeyValueGrid([
+                ["Route", browser.route || "Unknown", browser.secureContext ? "Secure context" : "Not secure"],
+                ["Viewport", browser.viewport ? `${browser.viewport.width} x ${browser.viewport.height}` : "Unknown", `Pixel ratio ${browser.screen?.pixelRatio || 1}`],
+                ["Screen", browser.screen ? `${browser.screen.width} x ${browser.screen.height}` : "Unknown", `${browser.online ? "Online" : "Offline"} · ${browser.language || "Unknown"}`],
+                ["Connection", browser.connection ? `${browser.connection.effectiveType || "Unknown"} · ${browser.connection.downlink || 0} Mbps` : "Unavailable", browser.connection?.saveData ? "Data saver on" : "Data saver off"],
+                ["Service worker", browser.serviceWorker?.supported ? "Supported" : "Unsupported", browser.serviceWorker?.controlled ? "Controlled" : "Not controlled"],
+                ["Push support", browser.pushSupport ? "Supported" : "Unsupported", browser.timezone || "Timezone unknown"]
+              ])}
+            </div>
           </div>
-          <div class="panel-stack">
-            <h3>Browser</h3>
-            ${renderKeyValueGrid([
-              ["Route", browser.route || "Unknown", browser.secureContext ? "Secure context" : "Not secure"],
-              ["Viewport", browser.viewport ? `${browser.viewport.width} x ${browser.viewport.height}` : "Unknown", `Pixel ratio ${browser.screen?.pixelRatio || 1}`],
-              ["Screen", browser.screen ? `${browser.screen.width} x ${browser.screen.height}` : "Unknown", `${browser.online ? "Online" : "Offline"} · ${browser.language || "Unknown"}`],
-              ["Connection", browser.connection ? `${browser.connection.effectiveType || "Unknown"} · ${browser.connection.downlink || 0} Mbps` : "Unavailable", browser.connection?.saveData ? "Data saver on" : "Data saver off"],
-              ["Service worker", browser.serviceWorker?.supported ? "Supported" : "Unsupported", browser.serviceWorker?.controlled ? "Controlled" : "Not controlled"],
-              ["Push support", browser.pushSupport ? "Supported" : "Unsupported", browser.timezone || "Timezone unknown"]
-            ])}
-          </div>
-        </div>
-      </section>
+        `
+      })}
 
-      <section class="panel-card">
-        <div class="analytics-grid">
-          <div class="panel-stack">
-            <h3>Probe timings</h3>
-            ${renderCountList([
-              { label: "Summary", value: formatDurationMs(probes.summary || 0) },
-              { label: "Posts", value: formatDurationMs(probes.posts || 0) },
-              { label: "Weather", value: formatDurationMs(probes.weather || 0) },
-              { label: "Push", value: formatDurationMs(probes.pushStatus || 0) },
-              { label: "Health", value: formatDurationMs(probes.health || 0) }
-            ], "No probes yet")}
+      ${renderWebmasterExpandableCard({
+        id: "system-performance",
+        eyebrow: "Performance",
+        title: "Probe timings and browser performance",
+        description: "Open the probe timings and page load metrics to pinpoint where latency is coming from.",
+        badge: "Timing",
+        iconName: "refresh",
+        summaryMetrics: [
+          { label: "Summary", value: formatDurationMs(probes.summary || 0) },
+          { label: "Health", value: formatDurationMs(probes.health || 0) },
+          { label: "Load", value: loadMetric }
+        ],
+        body: `
+          <div class="analytics-grid">
+            <div class="panel-stack">
+              <h3>Probe timings</h3>
+              ${renderCountList([
+                { label: "Summary", value: formatDurationMs(probes.summary || 0) },
+                { label: "Posts", value: formatDurationMs(probes.posts || 0) },
+                { label: "Weather", value: formatDurationMs(probes.weather || 0) },
+                { label: "Push", value: formatDurationMs(probes.pushStatus || 0) },
+                { label: "Health", value: formatDurationMs(probes.health || 0) }
+              ], "No probes yet")}
+            </div>
+            <div class="panel-stack">
+              <h3>Performance</h3>
+              ${renderKeyValueGrid([
+                ["Load", loadMetric, "Navigation timing"],
+                ["DOMContentLoaded", browser.performance?.domContentLoadedMs ? `${browser.performance.domContentLoadedMs} ms` : "Unknown", "Document ready time"],
+                ["Transfer", browser.performance ? formatBytes(browser.performance.transferSize || 0) : "Unknown", "Transferred payload"],
+                ["Encoded body", browser.performance ? formatBytes(browser.performance.encodedBodySize || 0) : "Unknown", "Uncompressed size"],
+                ["Heap used", browser.memory ? formatBytes(browser.memory.usedJSHeapSize || 0) : "Unknown", "Browser JS heap"],
+                ["Heap limit", browser.memory ? formatBytes(browser.memory.jsHeapSizeLimit || 0) : "Unknown", "Browser cap"]
+              ])}
+            </div>
           </div>
-          <div class="panel-stack">
-            <h3>Performance</h3>
-            ${renderKeyValueGrid([
-              ["Load", browser.performance?.loadMs ? `${browser.performance.loadMs} ms` : "Unknown", "Navigation timing"],
-              ["DOMContentLoaded", browser.performance?.domContentLoadedMs ? `${browser.performance.domContentLoadedMs} ms` : "Unknown", "Document ready time"],
-              ["Transfer", browser.performance ? formatBytes(browser.performance.transferSize || 0) : "Unknown", "Transferred payload"],
-              ["Encoded body", browser.performance ? formatBytes(browser.performance.encodedBodySize || 0) : "Unknown", "Uncompressed size"],
-              ["Heap used", browser.memory ? formatBytes(browser.memory.usedJSHeapSize || 0) : "Unknown", "Browser JS heap"],
-              ["Heap limit", browser.memory ? formatBytes(browser.memory.jsHeapSizeLimit || 0) : "Unknown", "Browser cap"]
-            ])}
-          </div>
-        </div>
-      </section>
+        `
+      })}
     </section>
   `;
 }
@@ -2912,6 +2826,7 @@ function renderWebmasterSystemPanel() {
 function renderWebmasterContentPanel() {
   const snapshot = buildWebmasterSnapshot();
   const board = snapshot.board || {};
+  const latestPost = board.recentPosts?.[0] || board.latestPost || null;
 
   return `
     <section class="panel-stack">
@@ -2923,43 +2838,64 @@ function renderWebmasterContentPanel() {
         </div>
       </div>
 
-      <section class="panel-card">
-        ${renderKeyValueGrid([
-          ["Total posts", String(board.totalPosts || 0), "All saved updates"],
-          ["Active posts", String(board.activePosts || 0), "Not expired"],
-          ["Urgent posts", String(board.urgentPosts || 0), "Require immediate attention"],
-          ["Important posts", String(board.importantPosts || 0), "Visible to staff"],
-          ["Alert-enabled", String(board.alertPosts || 0), "Will notify subscribed devices"],
-          ["Expiring soon", String(board.expiringSoon || 0), "Next 7 days"]
-        ])}
+      ${renderWebmasterExpandableCard({
+        id: "content-inventory",
+        eyebrow: "Inventory",
+        title: "Live post counts and breakdowns",
+        description: "Open the full content totals plus the type, priority, and audience mix.",
+        badge: "Live",
+        iconName: "board",
+        summaryMetrics: [
+          { label: "Active", value: String(board.activePosts || 0) },
+          { label: "Urgent", value: String(board.urgentPosts || 0) },
+          { label: "Expiring", value: String(board.expiringSoon || 0) },
+          { label: "Alerts", value: String(board.alertPosts || 0) }
+        ],
+        body: `
+          ${renderKeyValueGrid([
+            ["Total posts", String(board.totalPosts || 0), "All saved updates"],
+            ["Active posts", String(board.activePosts || 0), "Not expired"],
+            ["Urgent posts", String(board.urgentPosts || 0), "Require immediate attention"],
+            ["Important posts", String(board.importantPosts || 0), "Visible to staff"],
+            ["Alert-enabled", String(board.alertPosts || 0), "Will notify subscribed devices"],
+            ["Expiring soon", String(board.expiringSoon || 0), "Next 7 days"]
+          ])}
 
-        <div class="analytics-grid">
-          <div class="panel-stack">
-            <h3>By type</h3>
-            ${renderCountList(board.byType || [], "No posts yet")}
+          <div class="analytics-grid">
+            <div class="panel-stack">
+              <h3>By type</h3>
+              ${renderCountList(board.byType || [], "No posts yet")}
+            </div>
+            <div class="panel-stack">
+              <h3>By priority</h3>
+              ${renderCountList(board.byPriority || [], "No posts yet")}
+            </div>
+            <div class="panel-stack">
+              <h3>By audience</h3>
+              ${renderCountList(board.byAudience || [], "No posts yet")}
+            </div>
           </div>
-          <div class="panel-stack">
-            <h3>By priority</h3>
-            ${renderCountList(board.byPriority || [], "No posts yet")}
-          </div>
-          <div class="panel-stack">
-            <h3>By audience</h3>
-            ${renderCountList(board.byAudience || [], "No posts yet")}
-          </div>
-        </div>
-      </section>
+        `
+      })}
 
-      <section class="panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("news")} Latest posts</p>
-            <h3>Most recent activity</h3>
+      ${renderWebmasterExpandableCard({
+        id: "content-recent",
+        eyebrow: "Latest posts",
+        title: "Most recent activity",
+        description: "Expand to inspect the newest published updates in the same order employees see them.",
+        badge: "Recent",
+        iconName: "news",
+        summaryMetrics: [
+          { label: "Count", value: String(board.recentPosts?.length || 0) },
+          { label: "Latest", value: latestPost ? formatDate(latestPost.createdAt) : "None" },
+          { label: "Type", value: latestPost?.type || "None" }
+        ],
+        body: `
+          <div class="post-list compact">
+            ${board.recentPosts?.length ? board.recentPosts.map((post) => renderNotice(post, false)).join("") : '<div class="empty-state compact">No updates yet.</div>'}
           </div>
-        </div>
-        <div class="post-list compact">
-          ${board.recentPosts?.length ? board.recentPosts.map((post) => renderNotice(post, false)).join("") : '<div class="empty-state compact">No updates yet.</div>'}
-        </div>
-      </section>
+        `
+      })}
     </section>
   `;
 }
@@ -2977,22 +2913,36 @@ function renderWebmasterCodexPanel() {
           <h2>Copy the incident brief</h2>
           <p>Use these buttons to move the snapshot into Codex without rebuilding the context by hand.</p>
         </div>
-        <div class="action-row">
-          <button class="ghost-button" type="button" data-copy-webmaster-brief>${icon("clipboard")} Copy brief</button>
-          <button class="ghost-button" type="button" data-copy-webmaster-json>${icon("chart")} Copy JSON</button>
-        </div>
       </div>
 
-      <section class="panel-card codex-panel">
-        <label class="field full">
-          <span>Codex brief</span>
-          <textarea readonly rows="18" data-webmaster-brief>${escapeHtml(brief)}</textarea>
-        </label>
-        <label class="field full">
-          <span>Raw JSON snapshot</span>
-          <textarea readonly rows="18" data-webmaster-json>${escapeHtml(raw)}</textarea>
-        </label>
-      </section>
+      ${renderWebmasterExpandableCard({
+        id: "codex-brief",
+        eyebrow: "Codex transfer",
+        title: "Copy the incident brief and raw snapshot",
+        description: "Expand this container to copy the ready-made brief or inspect the underlying JSON snapshot.",
+        badge: "Clipboard",
+        iconName: "clipboard",
+        summaryMetrics: [
+          { label: "Generated", value: formatDate(snapshot.generatedAt) },
+          { label: "Active posts", value: String(snapshot.board?.activePosts || 0) },
+          { label: "Server errors", value: String(snapshot.traffic?.totals?.serverErrors || 0) }
+        ],
+        className: "codex-panel",
+        body: `
+          <div class="action-row">
+            <button class="ghost-button" type="button" data-copy-webmaster-brief>${icon("clipboard")} Copy brief</button>
+            <button class="ghost-button" type="button" data-copy-webmaster-json>${icon("chart")} Copy JSON</button>
+          </div>
+          <label class="field full">
+            <span>Codex brief</span>
+            <textarea readonly rows="18" data-webmaster-brief>${escapeHtml(brief)}</textarea>
+          </label>
+          <label class="field full">
+            <span>Raw JSON snapshot</span>
+            <textarea readonly rows="18" data-webmaster-json>${escapeHtml(raw)}</textarea>
+          </label>
+        `
+      })}
     </section>
   `;
 }
@@ -3013,16 +2963,53 @@ function renderWebmaster() {
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR console</button>
           <button class="ghost-button" type="button" data-copy-webmaster-brief>${icon("clipboard")} Copy brief</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
+          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign out</button>
         </div>
       </header>
 
       <section class="hero-strip hero-strip-webmaster" aria-label="Webmaster summary">
-        ${renderStatCard(String(traffic.totals?.requests || 0), "Requests", `${traffic.totals?.apiRequests || 0} API calls`)}
-        ${renderStatCard(String(traffic.totals?.serverErrors || 0), "Server errors", `${traffic.totals?.clientErrors || 0} client errors`)}
-        ${renderStatCard(String(board.activePosts || 0), "Active updates", `${board.expiringSoon || 0} expiring soon`)}
-        ${renderStatCard(String(board.urgentPosts || 0), "Urgent updates", `${board.alertPosts || 0} alert-enabled`)}
-        ${renderStatCard(String(state.pushStatus.subscriptions || 0), "Subscriptions", state.push.supported ? "Push ready" : "No push support")}
-        ${renderStatCard(formatDurationMs(traffic.totals?.averageDurationMs || 0), "Avg response", `Health ${formatDurationMs(probes.health || 0)}`)}
+        ${renderWebmasterDrilldownStatCard({
+          value: String(traffic.totals?.requests || 0),
+          label: "Requests",
+          note: `${traffic.totals?.apiRequests || 0} API calls`,
+          tab: "traffic",
+          cardIds: ["traffic-summary", "traffic-requests"]
+        })}
+        ${renderWebmasterDrilldownStatCard({
+          value: String(traffic.totals?.serverErrors || 0),
+          label: "Server errors",
+          note: `${traffic.totals?.clientErrors || 0} client errors`,
+          tab: "traffic",
+          cardIds: ["traffic-summary", "traffic-requests"]
+        })}
+        ${renderWebmasterDrilldownStatCard({
+          value: String(board.activePosts || 0),
+          label: "Active updates",
+          note: `${board.expiringSoon || 0} expiring soon`,
+          tab: "content",
+          cardIds: ["content-inventory", "content-recent"]
+        })}
+        ${renderWebmasterDrilldownStatCard({
+          value: String(board.urgentPosts || 0),
+          label: "Urgent updates",
+          note: `${board.alertPosts || 0} alert-enabled`,
+          tab: "content",
+          cardIds: ["content-inventory", "content-recent"]
+        })}
+        ${renderWebmasterDrilldownStatCard({
+          value: String(state.pushStatus.subscriptions || 0),
+          label: "Subscriptions",
+          note: state.push.supported ? "Push ready" : "No push support",
+          tab: "overview",
+          cardIds: ["overview-delivery-roster", "overview-enrollment"]
+        })}
+        ${renderWebmasterDrilldownStatCard({
+          value: formatDurationMs(traffic.totals?.averageDurationMs || 0),
+          label: "Avg response",
+          note: `Health ${formatDurationMs(probes.health || 0)}`,
+          tab: "system",
+          cardIds: ["system-runtime", "system-performance"]
+        })}
       </section>
 
       ${state.message ? `<div class="webmaster-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
@@ -3062,6 +3049,7 @@ function renderAdmin() {
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee feed</button>
           <button class="ghost-button" type="button" data-route="webmaster">${icon("chart")} Webmaster</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
+          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign out</button>
         </div>
       </header>
 
@@ -3086,7 +3074,9 @@ function renderAdmin() {
                 ? renderAdminAlertsPanel()
                 : activeAdminTab === "history"
                   ? renderAdminHistoryPanel()
-                  : renderAdminAccessPanel()
+                  : activeAdminTab === "security"
+                    ? renderAdminSecurityPanel()
+                    : renderAdminAccessPanel()
         }
       </section>
     </main>
@@ -3149,6 +3139,22 @@ async function hydrateRoute() {
     return;
   }
 
+  const access = await loadEmployeeAccessStatus();
+
+  if (!access.authorized) {
+    state.posts = [];
+    state.weather = defaultWeather();
+    state.pushStatus = {
+      loaded: false,
+      supported: false,
+      subscriptions: 0,
+      authorizedSubscriptions: 0,
+      inactiveSubscriptions: 0,
+      devices: []
+    };
+    return;
+  }
+
   await loadBoard();
   await Promise.all([
     loadPushStatus()
@@ -3158,24 +3164,22 @@ async function hydrateRoute() {
 
 function render() {
   const route = currentRoute();
-  const hrUnlocked = Boolean(state.access.hr?.authorized);
-  const webmasterUnlocked = Boolean(state.access.webmaster?.authorized);
   document.body.dataset.route = route;
   const pageMarkup = state.loading
     ? '<main class="auth-shell"><section class="empty-state">Loading portal...</section></main>'
     : route === "launcher"
       ? renderLauncher()
       : route === "hr"
-        ? (state.access.hr?.loaded && !hrUnlocked ? renderHrLockScreen() : renderAdmin())
+        ? (state.access.hr.authorized ? renderAdmin() : renderAdminAuthGate("hr"))
       : route === "webmaster"
-          ? (state.access.webmaster?.loaded && !webmasterUnlocked ? renderWebmasterLockScreen() : renderWebmaster())
-          : renderEmployee();
+          ? (state.access.webmaster.authorized ? renderWebmaster() : renderAdminAuthGate("webmaster"))
+          : (state.access.employee.authorized ? renderEmployee() : renderEmployeeAuthGate());
   document.title = route === "launcher"
     ? APP_DISPLAY_TITLE
     : route === "hr"
-    ? `${APP_DISPLAY_TITLE} HR${state.access.hr?.loaded && !hrUnlocked ? " Locked" : ""}`
+    ? `${APP_DISPLAY_TITLE} HR`
     : route === "webmaster"
-      ? `${APP_DISPLAY_TITLE} Webmaster${state.access.webmaster?.loaded && !webmasterUnlocked ? " Locked" : ""}`
+      ? `${APP_DISPLAY_TITLE} Webmaster`
       : APP_DISPLAY_TITLE;
   const focusSnapshot = captureFocusSnapshot();
   app.innerHTML = pageMarkup;
@@ -3283,8 +3287,9 @@ async function handlePostSubmit(event) {
     if (result.notification?.error) {
       setMessage(`Published, but alert delivery failed: ${result.notification.error}`, "warning");
     } else if (result.post.notifyEmployees) {
-      const delivered = Number(result.notification?.delivered || 0);
-      const total = Number(result.notification?.total || 0);
+      const pushResult = result.notification?.push || result.notification || {};
+      const delivered = Number(pushResult.delivered || 0);
+      const total = Number(pushResult.total || 0);
       setMessage(
         total > 0
           ? `Published and notified ${delivered}/${total} subscribed device${total === 1 ? "" : "s"}.`
@@ -3326,7 +3331,6 @@ async function handleDeviceSetupSubmit(event) {
     ...state.deviceProfile,
     employeeName: String(data.employeeName || data.label || "").trim() || buildSuggestedDeviceLabel()
   });
-  const accessPin = String(data.accessPin || "").trim();
   const setup = buildEmployeeSetupState();
   const action = resolveDeviceSetupAction({
     submitterAction: submitter?.dataset.deviceAction,
@@ -3338,7 +3342,7 @@ async function handleDeviceSetupSubmit(event) {
 
   try {
     if (action === "push") {
-      await enablePushAlerts(nextProfile, accessPin);
+      await enablePushAlerts(nextProfile);
     } else {
       state.push.error = "";
       setMessage("Saved the employee name.", "success");
@@ -3349,6 +3353,163 @@ async function handleDeviceSetupSubmit(event) {
     } else {
       setMessage(error.message || "Could not save the employee name.");
     }
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleEmployeeLoginSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  state.access.employee = {
+    ...state.access.employee,
+    busy: true,
+    error: ""
+  };
+  render();
+
+  try {
+    await requestJson("/api/employee/login", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+    await hydrateRoute();
+    setMessage("Signed in.", "success");
+  } catch (error) {
+    state.access.employee = {
+      ...state.access.employee,
+      authorized: false,
+      employee: null,
+      error: error.message || "Could not sign in."
+    };
+  } finally {
+    state.access.employee.busy = false;
+    render();
+  }
+}
+
+async function handleAdminAuthSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const mode = form.dataset.adminAuthMode === "setup" ? "setup" : "login";
+  const route = form.dataset.adminRoute === "webmaster" ? "webmaster" : "hr";
+  const targetAccess = route === "webmaster" ? "webmaster" : "hr";
+  const endpoint = route === "webmaster"
+    ? (mode === "setup" ? "/api/webmaster/setup" : "/api/webmaster/login")
+    : (mode === "setup" ? "/api/hr/setup" : "/api/hr/login");
+
+  state.access[targetAccess] = {
+    ...state.access[targetAccess],
+    busy: true,
+    error: ""
+  };
+  render();
+
+  try {
+    await requestJson(endpoint, {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+    await hydrateRoute();
+    setMessage(
+      mode === "setup"
+        ? (route === "webmaster" ? "Webmaster password configured." : "Management password configured.")
+        : "Signed in.",
+      "success"
+    );
+  } catch (error) {
+    state.access[targetAccess] = {
+      ...state.access[targetAccess],
+      error: error.message || "Could not complete sign in."
+    };
+  } finally {
+    state.access[targetAccess].busy = false;
+    render();
+  }
+}
+
+async function handleCreateEmployeeSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  try {
+    await requestJson("/api/employees", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+    form.reset();
+    await refreshAdminData();
+    setMessage("Employee account created.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not create the employee account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleEmployeeAccessSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(String(data.employeeId || ""))}/status`, {
+      method: "POST",
+      body: JSON.stringify({
+        active: String(data.active || "") === "true"
+      })
+    });
+    await refreshAdminData();
+    setMessage(String(data.active || "") === "true" ? "Employee access restored." : "Employee access disabled.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update employee access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleResetEmployeePasswordSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(String(data.employeeId || ""))}/password`, {
+      method: "POST",
+      body: JSON.stringify({
+        password: data.password
+      })
+    });
+    form.reset();
+    await refreshAdminData();
+    setMessage("Employee password reset.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not reset the password.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleRevokeEmployeeSessionsSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(String(data.employeeId || ""))}/sessions/revoke`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await refreshAdminData();
+    setMessage("Employee sessions revoked.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not revoke employee sessions.");
   }
 
   render();
@@ -3373,14 +3534,9 @@ document.addEventListener("click", async (event) => {
   const enableAlertsButton = target.closest("[data-enable-alerts]");
   const disableAlertsButton = target.closest("[data-disable-alerts]");
   const sendTestPushButton = target.closest("[data-send-test-push]");
-  const issueAccessPinButton = target.closest("[data-issue-access-pin]");
-  const disableAccessPinButton = target.closest("[data-disable-access-pin]");
-  const copyAccessPinButton = target.closest("[data-copy-access-pin]");
-  const issueHrPinButton = target.closest("[data-issue-hr-pin]");
-  const copyHrPinButton = target.closest("[data-copy-hr-pin]");
-  const lockHrSessionButton = target.closest("[data-lock-hr-session]");
-  const approveWebmasterButton = target.closest("[data-approve-webmaster-browser]");
-  const lockWebmasterButton = target.closest("[data-lock-webmaster-browser]");
+  const webmasterDrilldownButton = target.closest("[data-webmaster-drilldown-tab]");
+  const employeeLogoutButton = target.closest("[data-employee-logout]");
+  const adminLogoutButton = target.closest("[data-admin-logout]");
 
   if (routeButton) {
     event.preventDefault();
@@ -3395,6 +3551,68 @@ document.addEventListener("click", async (event) => {
     } else if (tabButton.dataset.tabGroup === "webmaster") {
       activeWebmasterTab = tabButton.dataset.tab || "overview";
     }
+    render();
+    return;
+  }
+
+  if (webmasterDrilldownButton) {
+    event.preventDefault();
+    activeWebmasterTab = webmasterDrilldownButton.dataset.webmasterDrilldownTab || "overview";
+    setWebmasterCardsExpanded(
+      String(webmasterDrilldownButton.dataset.webmasterDrilldownCards || "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      true
+    );
+    render();
+    return;
+  }
+
+  if (employeeLogoutButton) {
+    event.preventDefault();
+    await requestJson("/api/employee/logout", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    state.access.employee = {
+      ...state.access.employee,
+      authorized: false,
+      sessionExpiresAt: "",
+      employee: null,
+      error: ""
+    };
+    state.posts = [];
+    render();
+    return;
+  }
+
+  if (adminLogoutButton) {
+    event.preventDefault();
+    const route = currentRoute() === "webmaster" ? "webmaster" : "hr";
+    await requestJson(route === "webmaster" ? "/api/webmaster/logout" : "/api/hr/logout", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    if (route === "webmaster") {
+      state.access.webmaster = {
+        ...state.access.webmaster,
+        authorized: false,
+        sessionExpiresAt: "",
+        csrfToken: "",
+        error: ""
+      };
+    } else {
+      state.access.hr = {
+        ...state.access.hr,
+        authorized: false,
+        setupRequired: false,
+        sessionExpiresAt: "",
+        csrfToken: "",
+        error: ""
+      };
+    }
+    await hydrateRoute();
     render();
     return;
   }
@@ -3477,115 +3695,36 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
-
-  if (issueAccessPinButton) {
-    event.preventDefault();
-
-    try {
-      await issueAccessPin();
-    } catch (error) {
-      setMessage(formatPushError(error, "Could not generate an access PIN."));
-      render();
-    }
-    return;
-  }
-
-  if (disableAccessPinButton) {
-    event.preventDefault();
-
-    try {
-      await disableAccessPin();
-    } catch (error) {
-      setMessage(formatPushError(error, "Could not disable the access PIN."));
-      render();
-    }
-    return;
-  }
-
-  if (copyAccessPinButton) {
-    event.preventDefault();
-
-    try {
-      await copyAccessPin();
-    } catch {
-      setMessage("Could not copy the access PIN.");
-      render();
-    }
-    return;
-  }
-
-  if (issueHrPinButton) {
-    event.preventDefault();
-
-    try {
-      await issueHrAccessPin();
-    } catch (error) {
-      setMessage(error.message || "Could not generate the HR PIN.");
-      render();
-    }
-    return;
-  }
-
-  if (copyHrPinButton) {
-    event.preventDefault();
-
-    try {
-      await copyHrAccessPin();
-    } catch {
-      setMessage("Could not copy the HR PIN.");
-      render();
-    }
-    return;
-  }
-
-  if (lockHrSessionButton) {
-    event.preventDefault();
-
-    try {
-      await lockHrAccessSession();
-    } catch (error) {
-      setMessage(error.message || "Could not lock the HR session.");
-      render();
-    }
-    return;
-  }
-
-  if (approveWebmasterButton) {
-    event.preventDefault();
-
-    try {
-      await approveWebmasterBrowser();
-    } catch (error) {
-      setMessage(error.message || "Could not approve this browser.");
-      render();
-    }
-    return;
-  }
-
-  if (lockWebmasterButton) {
-    event.preventDefault();
-
-    try {
-      await lockWebmasterBrowser();
-    } catch (error) {
-      setMessage(error.message || "Could not revoke the webmaster browser.");
-      render();
-    }
-    return;
-  }
 }, true);
 
 app.addEventListener("submit", async (event) => {
-  if (event.target.matches("[data-hr-unlock-form]")) {
-    event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.target));
+  if (event.target.matches("[data-employee-login-form]")) {
+    await handleEmployeeLoginSubmit(event);
+    return;
+  }
 
-    try {
-      await unlockHrPage(data.pin);
-    } catch (error) {
-      setMessage(error.message || "Could not unlock HR.");
-      render();
-    }
+  if (event.target.matches("[data-admin-auth-form]")) {
+    await handleAdminAuthSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-create-employee-form]")) {
+    await handleCreateEmployeeSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-employee-access-form]")) {
+    await handleEmployeeAccessSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-reset-employee-password-form]")) {
+    await handleResetEmployeePasswordSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-revoke-employee-sessions-form]")) {
+    await handleRevokeEmployeeSessionsSubmit(event);
     return;
   }
 
@@ -3689,6 +3828,17 @@ app.addEventListener("click", (event) => {
 
 app.addEventListener("toggle", (event) => {
   if (!(event.target instanceof HTMLDetailsElement)) return;
+
+  if (event.target.matches("[data-webmaster-expand-id]")) {
+    const cardId = String(event.target.dataset.webmasterExpandId || "");
+
+    if (cardId) {
+      state.webmaster.expanded[cardId] = event.target.open;
+    }
+
+    return;
+  }
+
   if (!event.target.matches("[data-employee-setup-dropdown]")) return;
 
   state.employeeSetupOpen = event.target.open;
@@ -3729,11 +3879,8 @@ window.setInterval(async () => {
   }
 
   try {
-    await loadBoard();
-    await Promise.all([
-      loadPushStatus()
-    ]);
-    await syncPushState();
+    await hydrateRoute();
+    render();
   } catch {
     // Keep the UI stable if polling fails.
   }
@@ -3747,3 +3894,4 @@ try {
   state.loading = false;
   render();
 }
+

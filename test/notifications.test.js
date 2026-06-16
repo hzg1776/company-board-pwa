@@ -153,61 +153,15 @@ test("createNotificationHub tracks push labels and persists push only", async ()
   }
 });
 
-test("createNotificationHub issues and enforces access pins", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-pin-"));
+test("createNotificationHub keeps enrollment open and deduplicates subscriptions", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-open-"));
   const dataFile = path.join(tempDir, "push.json");
   const hub = createNotificationHub({ dataFile });
 
   try {
     await hub.init();
 
-    const pinResult = await hub.issueAccessPin({});
-    assert.match(pinResult.pin, /^\d{4}-\d{4}$/);
-    assert.equal(pinResult.version, 1);
-
-    await assert.rejects(
-      hub.subscribe({
-        endpoint: "https://push.example.com/endpoint/blocked",
-        expirationTime: null,
-        keys: {
-          p256dh: "sample-public-key",
-          auth: "sample-auth-key"
-        },
-        deviceId: "device-blocked",
-        label: "Blocked device",
-        browser: "Chrome",
-        platform: "Windows"
-      }),
-      (error) => {
-        assert.equal(error.statusCode, 403);
-        return true;
-      }
-    );
-
     const subscribeResult = await hub.subscribe({
-      endpoint: "https://push.example.com/endpoint/allowed",
-      expirationTime: null,
-      keys: {
-        p256dh: "sample-public-key",
-        auth: "sample-auth-key"
-      },
-      deviceId: "device-allowed",
-      label: "Allowed device",
-      browser: "Chrome",
-      platform: "Windows",
-      accessPin: pinResult.pin
-    });
-
-    assert.equal(subscribeResult.totalSubscriptions, 1);
-
-    const snapshot = await hub.readData();
-    assert.equal(snapshot.accessPin.version, 1);
-    assert.equal(snapshot.subscriptions[0].accessPinVersion, 1);
-
-    const cleared = await hub.clearAccessPin();
-    assert.equal(cleared.enabled, false);
-
-    const openSubscription = await hub.subscribe({
       endpoint: "https://push.example.com/endpoint/open",
       expirationTime: null,
       keys: {
@@ -220,7 +174,30 @@ test("createNotificationHub issues and enforces access pins", async () => {
       platform: "Windows"
     });
 
-    assert.equal(openSubscription.totalSubscriptions, 2);
+    assert.equal(subscribeResult.totalSubscriptions, 1);
+
+    const updatedSubscription = await hub.subscribe({
+      endpoint: "https://push.example.com/endpoint/open",
+      expirationTime: null,
+      keys: {
+        p256dh: "sample-public-key",
+        auth: "sample-auth-key"
+      },
+      deviceId: "device-open",
+      label: "Updated device label",
+      browser: "Edge",
+      platform: "Windows",
+      userAgent: "Mozilla/5.0"
+    });
+
+    assert.equal(updatedSubscription.totalSubscriptions, 1);
+
+    const snapshot = await hub.readData();
+    assert.equal(snapshot.subscriptions.length, 1);
+    assert.equal(snapshot.subscriptions[0].label, "Updated device label");
+    assert.equal(snapshot.subscriptions[0].browser, "Edge");
+    assert.equal("accessPin" in snapshot, false);
+    assert.equal("accessPinVersion" in snapshot.subscriptions[0], false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

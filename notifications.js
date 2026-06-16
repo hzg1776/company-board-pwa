@@ -11,7 +11,6 @@ const DEFAULT_TITLE = "Palziv alert";
 const DEFAULT_BODY = "Open the Palziv portal for details.";
 const DEFAULT_URL = "/palzivalerts/employee";
 const DEFAULT_ICON = "/assets/logo.svg";
-const ACCESS_PIN_LENGTH = 8;
 
 function nowIso() {
   return new Date().toISOString();
@@ -22,106 +21,6 @@ function cleanText(value, maxLength) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLength);
-}
-
-function normalizeAccessPinText(value) {
-  return String(value ?? "")
-    .replace(/\D+/g, "")
-    .slice(0, ACCESS_PIN_LENGTH);
-}
-
-function formatAccessPin(value) {
-  const digits = normalizeAccessPinText(value);
-  return digits.replace(/(\d{4})(?=\d)/g, "$1-");
-}
-
-function generateAccessPin() {
-  let pin = "";
-
-  for (let index = 0; index < ACCESS_PIN_LENGTH; index += 1) {
-    pin += String(crypto.randomInt(0, 10));
-  }
-
-  return pin;
-}
-
-function hashAccessPin(pin, salt) {
-  const normalizedPin = normalizeAccessPinText(pin);
-
-  if (!normalizedPin || !salt) {
-    return "";
-  }
-
-  return crypto.scryptSync(normalizedPin, salt, 32).toString("hex");
-}
-
-function createAccessPinState(pin, version = 1, createdAt = nowIso()) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const normalizedPin = normalizeAccessPinText(pin);
-
-  if (!normalizedPin) {
-    throw new Error("Access PIN is required.");
-  }
-
-  return {
-    enabled: true,
-    version: Math.max(1, Number(version) || 1),
-    salt,
-    hash: hashAccessPin(normalizedPin, salt),
-    createdAt,
-    updatedAt: createdAt
-  };
-}
-
-function normalizeAccessPinState(input) {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-
-  if (input.enabled === false) {
-    return null;
-  }
-
-  const salt = cleanText(input.salt, 128);
-  const hash = cleanText(input.hash, 256);
-  const version = Math.max(1, Number(input.version) || 1);
-
-  if (!salt || !hash) {
-    return null;
-  }
-
-  const createdAt = cleanText(input.createdAt, 40) || nowIso();
-  const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
-
-  return {
-    enabled: true,
-    version,
-    salt,
-    hash,
-    createdAt,
-    updatedAt
-  };
-}
-
-function verifyAccessPinState(accessPinState, pin) {
-  if (!accessPinState?.enabled) {
-    return true;
-  }
-
-  const normalizedPin = normalizeAccessPinText(pin);
-
-  if (!normalizedPin) {
-    return false;
-  }
-
-  const expected = Buffer.from(accessPinState.hash, "hex");
-  const actual = Buffer.from(hashAccessPin(normalizedPin, accessPinState.salt), "hex");
-
-  if (!expected.length || expected.length !== actual.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(expected, actual);
 }
 
 function buildDeviceLabel(input = {}) {
@@ -158,6 +57,10 @@ function normalizeDeviceMetadata(input = {}, channel = "push") {
     channel,
     deviceId,
     label: buildDeviceLabel(input),
+    employeeId: cleanText(input.employeeId, 80),
+    employeeName: cleanText(input.employeeName, 120),
+    username: cleanText(input.username, 80),
+    authorized: input.authorized !== false,
     browser: cleanText(input.browser, 60),
     platform: cleanText(input.platform, 60),
     userAgent: cleanText(input.userAgent, 240),
@@ -198,7 +101,6 @@ function normalizeSubscription(input) {
       p256dh,
       auth
     },
-    accessPinVersion: Math.max(0, Number(input.accessPinVersion) || 0),
     ...normalizeDeviceMetadata(input, "push")
   };
 }
@@ -232,8 +134,7 @@ function normalizeVapidKeys(input) {
 export function createDefaultNotificationState() {
   return {
     vapid: webpush.generateVAPIDKeys(),
-    subscriptions: [],
-    accessPin: null
+    subscriptions: []
   };
 }
 
@@ -245,12 +146,10 @@ export function normalizeNotificationState(input) {
   const subscriptions = Array.isArray(input.subscriptions)
     ? dedupeSubscriptions(input.subscriptions.map((subscription) => normalizeSubscription(subscription)).filter(Boolean))
     : [];
-  const accessPin = normalizeAccessPinState(input.accessPin);
 
   return {
     vapid: normalizeVapidKeys(input.vapid),
-    subscriptions,
-    accessPin
+    subscriptions
   };
 }
 
@@ -300,12 +199,12 @@ function isRecoverableSubscriptionError(error) {
   return statusCode === 404 || statusCode === 410 || message.includes("not found") || message.includes("gone");
 }
 
-function isSubscriptionAuthorized(state, subscription) {
-  if (!state?.accessPin?.enabled) {
-    return true;
-  }
+function hasEmployeeBinding(subscription) {
+  return Boolean(cleanText(subscription?.employeeId, 80));
+}
 
-  return Number(subscription?.accessPinVersion || 0) === Number(state.accessPin.version || 0);
+function isSubscriptionAuthorized(subscription) {
+  return hasEmployeeBinding(subscription) && subscription?.authorized !== false;
 }
 
 export function buildNotificationPayload(notification = {}) {
@@ -410,22 +309,6 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
       throw new Error("Invalid push subscription.");
     }
 
-    const accessPin = state.accessPin;
-
-    if (accessPin?.enabled) {
-      const candidatePin = cleanText(subscriptionInput?.accessPin || subscriptionInput?.pin || subscriptionInput?.code, 32);
-
-      if (!verifyAccessPinState(accessPin, candidatePin)) {
-        const error = new Error("A valid access PIN is required to subscribe this device.");
-        error.statusCode = 403;
-        throw error;
-      }
-
-      subscription.accessPinVersion = accessPin.version;
-    } else {
-      subscription.accessPinVersion = 0;
-    }
-
     return updateData((data) => {
       data.subscriptions = dedupeSubscriptions([
         subscription,
@@ -463,7 +346,7 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
     const payload = buildNotificationPayload(notificationInput);
     const body = JSON.stringify(payload);
     const snapshot = await readData();
-    const activeSubscriptions = snapshot.subscriptions.filter((subscription) => isSubscriptionAuthorized(snapshot, subscription));
+    const activeSubscriptions = snapshot.subscriptions.filter((subscription) => isSubscriptionAuthorized(subscription));
 
     if (!activeSubscriptions.length) {
       return {
@@ -514,34 +397,6 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
     };
   }
 
-  async function issueAccessPin(input = {}) {
-    const desiredPin = normalizeAccessPinText(input.pin) || generateAccessPin();
-
-    return updateData((data) => {
-      const version = Math.max(1, Number(data.accessPin?.version || 0) + 1);
-      const createdAt = nowIso();
-      data.accessPin = createAccessPinState(desiredPin, version, createdAt);
-
-      return {
-        pin: formatAccessPin(desiredPin),
-        rawPin: desiredPin,
-        version: data.accessPin.version,
-        updatedAt: data.accessPin.updatedAt,
-        enabled: true
-      };
-    });
-  }
-
-  async function clearAccessPin() {
-    return updateData((data) => {
-      data.accessPin = null;
-
-      return {
-        enabled: false
-      };
-    });
-  }
-
   async function close() {
     return undefined;
   }
@@ -555,8 +410,6 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
     subscribe,
     unsubscribe,
     broadcast,
-    issueAccessPin,
-    clearAccessPin,
     getPublicKey,
     close
   };

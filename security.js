@@ -2,17 +2,18 @@ import crypto from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const ACCESS_PIN_LENGTH = 8;
-const HR_SESSION_COOKIE = "palziv_hr_auth";
-const LEGACY_ADMIN_SESSION_COOKIE = "palziv_admin_auth";
-const WEBMASTER_SESSION_COOKIE = "palziv_webmaster_auth";
-const ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60;
-const WEBMASTER_SESSION_TTL_SECONDS = 180 * 24 * 60 * 60;
-const LOGIN_LIMIT = Object.freeze({
-  maxAttempts: 5,
-  windowMs: 10 * 60 * 1000,
-  lockMs: 10 * 60 * 1000
-});
+const EMPLOYEE_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+const MIN_PASSWORD_LENGTH = 10;
+const LOGIN_FAILURE_WINDOW_MS = 1000 * 60 * 15;
+const LOGIN_BACKOFF_START_FAILURE = 3;
+const LOGIN_BACKOFF_BASE_MS = 1000 * 5;
+const LOGIN_BACKOFF_MAX_MS = 1000 * 60 * 15;
+const LOGIN_LOCKOUT_START_FAILURE = 6;
+const LOGIN_LOCKOUT_STEP_MS = 1000 * 60 * 5;
+const LOGIN_LOCKOUT_MAX_MS = 1000 * 60 * 60;
+const LOGIN_GUARD_RETENTION_MS = 1000 * 60 * 60 * 24;
+const SECURITY_EVENT_LIMIT = 250;
 
 function nowIso() {
   return new Date().toISOString();
@@ -25,359 +26,217 @@ function cleanText(value, maxLength) {
     .slice(0, maxLength);
 }
 
-function normalizeCredentialText(value) {
-  return String(value ?? "").trim().slice(0, 256);
+function normalizeUsername(value) {
+  return cleanText(value, 80).toLowerCase();
 }
 
-function normalizeAccessPinText(value) {
-  return String(value ?? "")
-    .replace(/\D+/g, "")
-    .slice(0, ACCESS_PIN_LENGTH);
+function passwordDigest(password, salt) {
+  return crypto.scryptSync(String(password), String(salt), 64).toString("hex");
 }
 
-function formatAccessPin(value) {
-  const digits = normalizeAccessPinText(value);
-  return digits.replace(/(\d{4})(?=\d)/g, "$1-");
+function createPasswordHash(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  return {
+    salt,
+    hash: passwordDigest(password, salt)
+  };
 }
 
-function generateAccessPin() {
-  let pin = "";
+function verifyPassword(password, salt, hash) {
+  const expected = Buffer.from(String(hash || ""), "hex");
+  const actual = Buffer.from(passwordDigest(password, salt), "hex");
 
-  for (let index = 0; index < ACCESS_PIN_LENGTH; index += 1) {
-    pin += String(crypto.randomInt(0, 10));
-  }
-
-  return pin;
-}
-
-function timingSafeStringEqual(leftValue, rightValue) {
-  const left = Buffer.from(String(leftValue ?? ""), "utf8");
-  const right = Buffer.from(String(rightValue ?? ""), "utf8");
-
-  if (!left.length || left.length !== right.length) {
+  if (!expected.length || expected.length !== actual.length) {
     return false;
   }
 
-  return crypto.timingSafeEqual(left, right);
+  return crypto.timingSafeEqual(actual, expected);
 }
 
-function credentialMatches(candidateValue, configuredValue) {
-  const candidate = normalizeCredentialText(candidateValue);
-  const configured = normalizeCredentialText(configuredValue);
-  const candidatePin = normalizeAccessPinText(candidateValue);
-  const configuredPin = normalizeAccessPinText(configuredValue);
+function normalizeEmployee(input = {}) {
+  const createdAt = cleanText(input.createdAt, 40) || nowIso();
+  const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
+  const id = cleanText(input.id, 80) || crypto.randomUUID();
+  const name = cleanText(input.name, 120);
+  const username = normalizeUsername(input.username);
+  const passwordSalt = cleanText(input.passwordSalt, 128);
+  const passwordHash = cleanText(input.passwordHash, 256);
+  const sessionVersion = Number.isInteger(input.sessionVersion) && input.sessionVersion >= 0
+    ? input.sessionVersion
+    : 0;
 
-  return (
-    timingSafeStringEqual(candidate, configured) ||
-    (candidatePin.length === ACCESS_PIN_LENGTH &&
-      configuredPin.length === ACCESS_PIN_LENGTH &&
-      timingSafeStringEqual(candidatePin, configuredPin))
+  return {
+    id,
+    name,
+    username,
+    passwordSalt,
+    passwordHash,
+    active: input.active !== false,
+    sessionVersion,
+    lastLoginAt: cleanText(input.lastLoginAt, 40),
+    createdAt,
+    updatedAt,
+    disabledAt: cleanText(input.disabledAt, 40)
+  };
+}
+
+function normalizeAdmin(input = {}) {
+  const updatedAt = cleanText(input.updatedAt, 40);
+
+  return {
+    passwordSalt: cleanText(input.passwordSalt, 128),
+    passwordHash: cleanText(input.passwordHash, 256),
+    updatedAt
+  };
+}
+
+function hasConfiguredAdminRecord(input = {}) {
+  return Boolean(
+    cleanText(input.passwordSalt, 128) &&
+    cleanText(input.passwordHash, 256)
   );
 }
 
-function credentialVersionFor(value) {
-  return crypto
-    .createHash("sha256")
-    .update(normalizeCredentialText(value))
-    .digest("hex")
-    .slice(0, 16);
+function selectCanonicalAdminRecord(primary, fallback) {
+  return hasConfiguredAdminRecord(primary) ? primary : fallback;
 }
 
-function resolveConfiguredCredential() {
-  const adminPassword = normalizeCredentialText(process.env.ADMIN_PASSWORD);
-  const legacyHrPin = normalizeCredentialText(process.env.HR_PIN);
-
-  if (adminPassword) {
-    return {
-      value: adminPassword,
-      source: "ADMIN_PASSWORD"
-    };
+function selectCanonicalAdminSessions(primary, fallback) {
+  if (Array.isArray(primary) && primary.length) {
+    return primary;
   }
 
-  if (legacyHrPin) {
-    return {
-      value: legacyHrPin,
-      source: "HR_PIN"
-    };
-  }
+  return Array.isArray(fallback) ? fallback : [];
+}
 
-  const bootstrapPin = generateAccessPin();
+function normalizeAdminSession(input = {}) {
+  const createdAt = cleanText(input.createdAt, 40) || nowIso();
+  const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
+  const expiresAt = cleanText(input.expiresAt, 40);
+
   return {
-    value: bootstrapPin,
-    source: "bootstrap",
-    bootstrapPin: formatAccessPin(bootstrapPin)
+    id: cleanText(input.id, 120),
+    createdAt,
+    updatedAt,
+    expiresAt,
+    revokedAt: cleanText(input.revokedAt, 40),
+    csrfToken: cleanText(input.csrfToken, 120),
+    userAgent: cleanText(input.userAgent, 240)
   };
 }
 
-function resolveSessionSecret() {
-  const configured = normalizeCredentialText(process.env.SESSION_SECRET || process.env.SECURITY_SESSION_SECRET);
-
-  if (configured.length >= 32) {
-    return {
-      value: configured,
-      source: "environment"
-    };
-  }
+function normalizeEmployeeSession(input = {}) {
+  const createdAt = cleanText(input.createdAt, 40) || nowIso();
+  const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
+  const expiresAt = cleanText(input.expiresAt, 40);
 
   return {
-    value: crypto.randomBytes(32).toString("hex"),
-    source: "ephemeral"
+    id: cleanText(input.id, 120),
+    employeeId: cleanText(input.employeeId, 80),
+    sessionVersion: Number.isInteger(input.sessionVersion) && input.sessionVersion >= 0
+      ? input.sessionVersion
+      : 0,
+    createdAt,
+    updatedAt,
+    expiresAt,
+    revokedAt: cleanText(input.revokedAt, 40),
+    userAgent: cleanText(input.userAgent, 240)
   };
 }
 
-function signSessionToken(secret, payload) {
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = crypto.createHmac("sha256", secret).update(body).digest("base64url");
-  return `v1.${body}.${signature}`;
+function normalizeSecurityKey(value) {
+  return cleanText(value, 160).toLowerCase() || "unknown";
 }
 
-function verifySessionToken(secret, token) {
-  const value = cleanText(token, 4096);
-  const parts = value.split(".");
-
-  if (parts.length !== 3 || parts[0] !== "v1") {
-    return null;
-  }
-
-  const [, body, signature] = parts;
-  const expectedSignature = crypto.createHmac("sha256", secret).update(body).digest("base64url");
-  const actual = Buffer.from(signature, "utf8");
-  const expected = Buffer.from(expectedSignature, "utf8");
-
-  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
-    return null;
-  }
-
-  try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-
-    if (!payload || typeof payload !== "object") {
-      return null;
-    }
-
-    const expiresAt = cleanText(payload.expiresAt, 40);
-
-    if (!expiresAt || Number.isNaN(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) {
-      return null;
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-function parseCookies(cookieHeader = "") {
-  return String(cookieHeader || "")
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .reduce((cookies, part) => {
-      const equalsIndex = part.indexOf("=");
-
-      if (equalsIndex < 0) {
-        return cookies;
-      }
-
-      const name = part.slice(0, equalsIndex).trim();
-      const value = part.slice(equalsIndex + 1).trim();
-
-      if (name) {
-        cookies[name] = value;
-      }
-
-      return cookies;
-    }, {});
-}
-
-function readCookieValue(req, name) {
-  const cookies = parseCookies(req?.headers?.cookie || "");
-  return cookies[name] || "";
-}
-
-function isSecureRequest(req) {
-  const forwardedProto = String(req?.headers?.["x-forwarded-proto"] || "")
-    .split(",")[0]
-    .trim()
-    .toLowerCase();
-
-  return Boolean(req?.socket?.encrypted || forwardedProto === "https");
-}
-
-function createCookieHeader(name, value, { maxAgeSeconds = 0, secure = false } = {}) {
-  const attributes = [
-    `${name}=${value}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Strict"
-  ];
-
-  if (maxAgeSeconds > 0) {
-    attributes.push(`Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`);
-  }
-
-  if (secure) {
-    attributes.push("Secure");
-  }
-
-  return attributes.join("; ");
-}
-
-function clearCookieHeader(name, { secure = false } = {}) {
-  const attributes = [
-    `${name}=`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Strict",
-    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-    "Max-Age=0"
-  ];
-
-  if (secure) {
-    attributes.push("Secure");
-  }
-
-  return attributes.join("; ");
-}
-
-function clientAddress(req) {
-  return String(req?.headers?.["x-forwarded-for"] || req?.socket?.remoteAddress || "unknown")
-    .split(",")[0]
-    .trim() || "unknown";
-}
-
-function createRateLimiter() {
-  const attempts = new Map();
-
-  function keyFor(req, bucket) {
-    return `${bucket}:${clientAddress(req)}`;
-  }
-
-  function entryFor(key) {
-    const current = attempts.get(key);
-    const now = Date.now();
-
-    if (!current || now - current.windowStartedAt > LOGIN_LIMIT.windowMs) {
-      const fresh = {
-        count: 0,
-        windowStartedAt: now,
-        lockedUntil: 0
-      };
-      attempts.set(key, fresh);
-      return fresh;
-    }
-
-    return current;
-  }
-
-  function assertAllowed(req, bucket) {
-    const key = keyFor(req, bucket);
-    const entry = entryFor(key);
-
-    if (entry.lockedUntil > Date.now()) {
-      const error = new Error("Too many failed attempts. Try again later.");
-      error.statusCode = 429;
-      throw error;
-    }
-  }
-
-  function recordFailure(req, bucket) {
-    const key = keyFor(req, bucket);
-    const entry = entryFor(key);
-    entry.count += 1;
-
-    if (entry.count >= LOGIN_LIMIT.maxAttempts) {
-      entry.lockedUntil = Date.now() + LOGIN_LIMIT.lockMs;
-    }
-  }
-
-  function recordSuccess(req, bucket) {
-    attempts.delete(keyFor(req, bucket));
-  }
-
+function normalizeLoginGuardEntry(input = {}) {
   return {
-    assertAllowed,
-    recordFailure,
-    recordSuccess
+    key: normalizeSecurityKey(input.key),
+    failureCount: Number.isFinite(Number(input.failureCount)) && Number(input.failureCount) > 0
+      ? Math.floor(Number(input.failureCount))
+      : 0,
+    firstFailureAt: cleanText(input.firstFailureAt, 40),
+    lastFailureAt: cleanText(input.lastFailureAt, 40),
+    backoffUntil: cleanText(input.backoffUntil, 40),
+    lockUntil: cleanText(input.lockUntil, 40)
   };
 }
 
-function createSessionCookie(req, name, secret, payload, maxAgeSeconds) {
-  const session = signSessionToken(secret, payload);
-  return createCookieHeader(name, session, {
-    maxAgeSeconds,
-    secure: isSecureRequest(req)
-  });
-}
-
-function isValidIsoTimestamp(value) {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value));
-}
-
-function cleanUserAgent(value) {
-  return cleanText(value, 320);
-}
-
-function userAgentHashFor(value) {
-  return crypto
-    .createHash("sha256")
-    .update(cleanUserAgent(value))
-    .digest("hex")
-    .slice(0, 32);
-}
-
-function requestUserAgent(req) {
-  return cleanUserAgent(req?.headers?.["user-agent"]);
-}
-
-function normalizeWebmasterApproval(value = {}) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const userAgent = cleanUserAgent(value.userAgent);
-  const providedUserAgentHash = cleanText(value.userAgentHash, 128);
-
-  if (!providedUserAgentHash && !userAgent) {
-    return null;
-  }
-
-  const userAgentHash = providedUserAgentHash || userAgentHashFor(userAgent);
-
-  if (!userAgentHash) {
-    return null;
-  }
-
+function normalizeLoginGuardBucket(input = {}) {
   return {
-    id: cleanText(value.id, 128) || crypto.randomUUID(),
-    label: cleanText(value.label, 80) || "Approved browser",
-    browser: cleanText(value.browser, 80),
-    platform: cleanText(value.platform, 80),
-    userAgent,
-    userAgentHash,
-    updatedAt: isValidIsoTimestamp(value.updatedAt) ? value.updatedAt : nowIso()
+    byIp: Array.isArray(input.byIp)
+      ? input.byIp.map((entry) => normalizeLoginGuardEntry(entry)).filter((entry) => entry.key)
+      : [],
+    byAccount: Array.isArray(input.byAccount)
+      ? input.byAccount.map((entry) => normalizeLoginGuardEntry(entry)).filter((entry) => entry.key)
+      : []
   };
 }
 
-function publicWebmasterApproval(approval) {
-  if (!approval) {
-    return null;
-  }
-
+function normalizeLoginGuards(input = {}) {
   return {
-    label: approval.label || "Approved browser",
-    browser: approval.browser || "",
-    platform: approval.platform || "",
-    userAgent: approval.userAgent || "",
-    updatedAt: approval.updatedAt || ""
+    hr: normalizeLoginGuardBucket(input.hr || input.admin),
+    webmaster: normalizeLoginGuardBucket(input.webmaster),
+    employee: normalizeLoginGuardBucket(input.employee)
   };
 }
 
-export function normalizeSecurityState(input = {}) {
+function normalizeSecurityEvent(input = {}) {
+  const createdAt = cleanText(input.createdAt, 40) || nowIso();
+
   return {
-    admin: input.admin && typeof input.admin === "object" ? input.admin : null,
-    hrPin: input.hrPin && typeof input.hrPin === "object" ? input.hrPin : null,
-    webmaster: normalizeWebmasterApproval(input.webmaster)
+    id: cleanText(input.id, 120) || crypto.randomUUID(),
+    createdAt,
+    type: cleanText(input.type, 80),
+    actor: cleanText(input.actor, 40),
+    accountKey: cleanText(input.accountKey, 80),
+    sourceIp: normalizeSecurityKey(input.sourceIp),
+    outcome: cleanText(input.outcome, 40),
+    detail: cleanText(input.detail, 200),
+    userAgent: cleanText(input.userAgent, 240)
+  };
+}
+
+function normalizeSecurityState(input = {}) {
+  const admin = normalizeAdmin(selectCanonicalAdminRecord(input.hr, input.admin));
+  const webmaster = normalizeAdmin(input.webmaster);
+
+  const employees = Array.isArray(input.employees)
+    ? input.employees
+      .map((employee) => normalizeEmployee(employee))
+      .filter((employee) => employee.username && employee.passwordSalt && employee.passwordHash)
+    : [];
+  const adminSessions = selectCanonicalAdminSessions(input.hrSessions, input.adminSessions)
+    .map((session) => normalizeAdminSession(session))
+    .filter((session) => session.id && session.csrfToken);
+  const webmasterSessions = Array.isArray(input.webmasterSessions)
+    ? input.webmasterSessions
+      .map((session) => normalizeAdminSession(session))
+      .filter((session) => session.id && session.csrfToken)
+    : [];
+  const employeeSessions = Array.isArray(input.employeeSessions)
+    ? input.employeeSessions
+      .map((session) => normalizeEmployeeSession(session))
+      .filter((session) => session.id && session.employeeId)
+    : [];
+  const loginGuards = normalizeLoginGuards(input.loginGuards);
+  const securityEvents = Array.isArray(input.securityEvents)
+    ? input.securityEvents
+      .map((event) => normalizeSecurityEvent(event))
+      .filter((event) => event.type && event.outcome)
+      .slice(0, SECURITY_EVENT_LIMIT)
+    : [];
+
+  return {
+    admin,
+    hr: admin,
+    adminSessions,
+    hrSessions: adminSessions,
+    webmaster,
+    webmasterSessions,
+    employees,
+    employeeSessions,
+    loginGuards,
+    securityEvents
   };
 }
 
@@ -392,17 +251,455 @@ async function writeFileAtomic(filePath, data) {
   await rename(tempFile, filePath);
 }
 
+function parseCookies(value) {
+  const cookies = {};
+
+  for (const entry of String(value || "").split(";")) {
+    const [rawName, ...rawValueParts] = entry.split("=");
+    const name = String(rawName || "").trim();
+
+    if (!name) {
+      continue;
+    }
+
+    cookies[name] = decodeURIComponent(rawValueParts.join("=").trim());
+  }
+
+  return cookies;
+}
+
+function publicEmployeeRecord(employee, sessions = []) {
+  const activeSessions = sessions.filter((session) => !session.revokedAt && new Date(session.expiresAt).getTime() > Date.now()).length;
+
+  return {
+    id: employee.id,
+    name: employee.name,
+    username: employee.username,
+    active: employee.active !== false,
+    sessionVersion: employee.sessionVersion || 0,
+    activeSessions,
+    lastLoginAt: employee.lastLoginAt || "",
+    createdAt: employee.createdAt || "",
+    updatedAt: employee.updatedAt || "",
+    disabledAt: employee.disabledAt || ""
+  };
+}
+
+function runtimeSnapshot(state, initializedAt) {
+  const admin = state?.hr || state?.admin || {};
+  const webmaster = state?.webmaster || {};
+  const adminConfigured = Boolean(admin.passwordSalt && admin.passwordHash);
+  const webmasterConfigured = Boolean(webmaster.passwordSalt && webmaster.passwordHash);
+  const employees = Array.isArray(state?.employees) ? state.employees : [];
+  const adminSessions = Array.isArray(state?.hrSessions) ? state.hrSessions : Array.isArray(state?.adminSessions) ? state.adminSessions : [];
+  const webmasterSessions = Array.isArray(state?.webmasterSessions) ? state.webmasterSessions : [];
+  const employeeSessions = Array.isArray(state?.employeeSessions) ? state.employeeSessions : [];
+  const activeEmployees = employees.filter((employee) => employee.active !== false).length;
+  const adminSummary = {
+    enabled: adminConfigured,
+    access: adminConfigured ? 'password' : 'setup-required',
+    updatedAt: admin.updatedAt || initializedAt || nowIso(),
+    activeSessions: adminSessions.filter((session) => !session.revokedAt && new Date(session.expiresAt).getTime() > Date.now()).length
+  };
+
+  return {
+    admin: adminSummary,
+    hr: adminSummary,
+    webmaster: {
+      enabled: webmasterConfigured,
+      access: webmasterConfigured ? 'password' : 'hr-provisioned',
+      updatedAt: webmaster.updatedAt || initializedAt || nowIso(),
+      activeSessions: webmasterSessions.filter((session) => !session.revokedAt && new Date(session.expiresAt).getTime() > Date.now()).length
+    },
+    accessModel: adminConfigured || webmasterConfigured || employees.length ? 'managed-accounts' : 'open',
+    employees: {
+      total: employees.length,
+      active: activeEmployees,
+      inactive: Math.max(0, employees.length - activeEmployees),
+      sessions: employeeSessions.filter((session) => !session.revokedAt && new Date(session.expiresAt).getTime() > Date.now()).length
+    }
+  };
+}
+
+function isSessionExpired(session) {
+  const expiresAt = new Date(session?.expiresAt || 0).getTime();
+  return !expiresAt || expiresAt <= Date.now();
+}
+
+function createEmployeeSession(employee, userAgent = "") {
+  const createdAt = nowIso();
+
+  return {
+    id: crypto.randomBytes(32).toString("hex"),
+    employeeId: employee.id,
+    sessionVersion: Number(employee.sessionVersion || 0),
+    createdAt,
+    updatedAt: createdAt,
+    expiresAt: new Date(Date.now() + EMPLOYEE_SESSION_TTL_MS).toISOString(),
+    revokedAt: "",
+    userAgent: cleanText(userAgent, 240)
+  };
+}
+
+function createAdminSession(userAgent = "") {
+  const createdAt = nowIso();
+
+  return {
+    id: crypto.randomBytes(32).toString("hex"),
+    createdAt,
+    updatedAt: createdAt,
+    expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS).toISOString(),
+    revokedAt: "",
+    csrfToken: crypto.randomBytes(24).toString("hex"),
+    userAgent: cleanText(userAgent, 240)
+  };
+}
+
+function toTimestamp(value) {
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function formatDurationMs(durationMs) {
+  const totalSeconds = Math.max(1, Math.ceil(Number(durationMs || 0) / 1000));
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
+  }
+
+  const totalMinutes = Math.ceil(totalSeconds / 60);
+  return `${totalMinutes} minute${totalMinutes === 1 ? "" : "s"}`;
+}
+
+function activeGuardUntil(entry) {
+  return Math.max(toTimestamp(entry?.backoffUntil), toTimestamp(entry?.lockUntil));
+}
+
+function resetLoginGuardEntry(entry) {
+  entry.failureCount = 0;
+  entry.firstFailureAt = "";
+  entry.lastFailureAt = "";
+  entry.backoffUntil = "";
+  entry.lockUntil = "";
+  return entry;
+}
+
+function refreshLoginGuardEntry(entry, nowMs = Date.now()) {
+  if (!entry) {
+    return entry;
+  }
+
+  if (activeGuardUntil(entry) > nowMs) {
+    return entry;
+  }
+
+  const lastFailureAt = toTimestamp(entry.lastFailureAt);
+
+  if (lastFailureAt && nowMs - lastFailureAt <= LOGIN_FAILURE_WINDOW_MS) {
+    return entry;
+  }
+
+  return resetLoginGuardEntry(entry);
+}
+
+function pruneLoginGuardEntries(entries, nowMs = Date.now()) {
+  return entries
+    .map((entry) => refreshLoginGuardEntry(entry, nowMs))
+    .filter((entry) => {
+      if (!entry.key) {
+        return false;
+      }
+
+      const touchedAt = Math.max(
+        toTimestamp(entry.firstFailureAt),
+        toTimestamp(entry.lastFailureAt),
+        toTimestamp(entry.backoffUntil),
+        toTimestamp(entry.lockUntil)
+      );
+
+      return entry.failureCount > 0 || touchedAt > nowMs - LOGIN_GUARD_RETENTION_MS;
+    });
+}
+
+function ensureLoginGuards(data) {
+  data.loginGuards = normalizeLoginGuards(data.loginGuards);
+  return data.loginGuards;
+}
+
+function pruneLoginControls(data, nowMs = Date.now()) {
+  const loginGuards = ensureLoginGuards(data);
+  loginGuards.hr.byIp = pruneLoginGuardEntries(loginGuards.hr.byIp, nowMs);
+  loginGuards.hr.byAccount = pruneLoginGuardEntries(loginGuards.hr.byAccount, nowMs);
+  loginGuards.webmaster.byIp = pruneLoginGuardEntries(loginGuards.webmaster.byIp, nowMs);
+  loginGuards.webmaster.byAccount = pruneLoginGuardEntries(loginGuards.webmaster.byAccount, nowMs);
+  loginGuards.employee.byIp = pruneLoginGuardEntries(loginGuards.employee.byIp, nowMs);
+  loginGuards.employee.byAccount = pruneLoginGuardEntries(loginGuards.employee.byAccount, nowMs);
+  data.securityEvents = Array.isArray(data.securityEvents) ? data.securityEvents.slice(0, SECURITY_EVENT_LIMIT) : [];
+  return loginGuards;
+}
+
+function findOrCreateLoginGuard(entries, key) {
+  const normalizedKey = normalizeSecurityKey(key);
+  let entry = entries.find((candidate) => candidate.key === normalizedKey);
+
+  if (!entry) {
+    entry = normalizeLoginGuardEntry({ key: normalizedKey });
+    entries.push(entry);
+  }
+
+  return entry;
+}
+
+function describeLoginGuardBlock(entry, nowMs = Date.now()) {
+  if (!entry) {
+    return null;
+  }
+
+  refreshLoginGuardEntry(entry, nowMs);
+
+  const lockUntil = toTimestamp(entry.lockUntil);
+
+  if (lockUntil > nowMs) {
+    return {
+      mode: "lockout",
+      blockedUntil: lockUntil,
+      failureCount: Number(entry.failureCount || 0)
+    };
+  }
+
+  const backoffUntil = toTimestamp(entry.backoffUntil);
+
+  if (backoffUntil > nowMs) {
+    return {
+      mode: "backoff",
+      blockedUntil: backoffUntil,
+      failureCount: Number(entry.failureCount || 0)
+    };
+  }
+
+  return null;
+}
+
+function selectLongerBlock(left, right) {
+  if (!left) {
+    return right || null;
+  }
+
+  if (!right) {
+    return left;
+  }
+
+  return left.blockedUntil >= right.blockedUntil ? left : right;
+}
+
+function updateLoginGuardFailure(entry, nowMs = Date.now()) {
+  refreshLoginGuardEntry(entry, nowMs);
+  const nextCount = Number(entry.failureCount || 0) + 1;
+  const nowText = new Date(nowMs).toISOString();
+  const backoffMs = nextCount >= LOGIN_BACKOFF_START_FAILURE
+    ? Math.min(LOGIN_BACKOFF_MAX_MS, LOGIN_BACKOFF_BASE_MS * (2 ** (nextCount - LOGIN_BACKOFF_START_FAILURE)))
+    : 0;
+  const lockoutMs = nextCount >= LOGIN_LOCKOUT_START_FAILURE
+    ? Math.min(LOGIN_LOCKOUT_MAX_MS, LOGIN_LOCKOUT_STEP_MS * (nextCount - LOGIN_LOCKOUT_START_FAILURE + 1))
+    : 0;
+
+  entry.failureCount = nextCount;
+  entry.firstFailureAt = entry.firstFailureAt || nowText;
+  entry.lastFailureAt = nowText;
+  entry.backoffUntil = backoffMs ? new Date(nowMs + backoffMs).toISOString() : "";
+  entry.lockUntil = lockoutMs ? new Date(nowMs + lockoutMs).toISOString() : "";
+
+  return describeLoginGuardBlock(entry, nowMs);
+}
+
+function clearLoginGuards(bucket, accountKey, sourceIp) {
+  const normalizedAccountKey = normalizeSecurityKey(accountKey);
+  const normalizedSourceIp = normalizeSecurityKey(sourceIp);
+  bucket.byAccount = bucket.byAccount.filter((entry) => entry.key !== normalizedAccountKey);
+  bucket.byIp = bucket.byIp.filter((entry) => entry.key !== normalizedSourceIp);
+}
+
+function createSecurityEvent(input = {}) {
+  return normalizeSecurityEvent({
+    id: crypto.randomUUID(),
+    createdAt: nowIso(),
+    ...input
+  });
+}
+
+function appendSecurityEvent(data, event) {
+  const current = Array.isArray(data.securityEvents) ? data.securityEvents : [];
+  data.securityEvents = [event, ...current].slice(0, SECURITY_EVENT_LIMIT);
+  return event;
+}
+
+function createLoginAttemptState(data, actor, accountKey, clientIp) {
+  const nowMs = Date.now();
+  const loginGuards = pruneLoginControls(data, nowMs);
+  const bucket = actor === 'employee'
+    ? loginGuards.employee
+    : actor === 'webmaster'
+      ? loginGuards.webmaster
+      : loginGuards.hr;
+  const normalizedAccountKey = actor === 'employee'
+    ? (normalizeUsername(accountKey) || 'unknown')
+    : actor === 'webmaster'
+      ? 'webmaster'
+      : 'hr';
+  const normalizedSourceIp = normalizeSecurityKey(clientIp);
+  const ipGuard = bucket.byIp.find((entry) => entry.key === normalizedSourceIp);
+  const accountGuard = bucket.byAccount.find((entry) => entry.key === normalizedAccountKey);
+
+  return {
+    actor,
+    nowMs,
+    bucket,
+    accountKey: normalizedAccountKey,
+    sourceIp: normalizedSourceIp,
+    block: selectLongerBlock(
+      describeLoginGuardBlock(ipGuard, nowMs),
+      describeLoginGuardBlock(accountGuard, nowMs)
+    )
+  };
+}
+
+function loginThrottleMessage(block) {
+  const retryIn = formatDurationMs(Math.max(1000, Number(block?.blockedUntil || 0) - Date.now()));
+  return block?.mode === "lockout"
+    ? `Too many failed sign-in attempts. Access is temporarily locked. Try again in ${retryIn}.`
+    : `Too many failed sign-in attempts. Please wait ${retryIn} before trying again.`;
+}
+
+function createFailedAttemptResult(data, attempt, errorMessage, detail, userAgent, statusCode = 400) {
+  const ipGuard = findOrCreateLoginGuard(attempt.bucket.byIp, attempt.sourceIp);
+  const accountGuard = findOrCreateLoginGuard(attempt.bucket.byAccount, attempt.accountKey);
+  const ipBlock = updateLoginGuardFailure(ipGuard, attempt.nowMs);
+  const accountBlock = updateLoginGuardFailure(accountGuard, attempt.nowMs);
+  const activeBlock = selectLongerBlock(ipBlock, accountBlock);
+  const event = appendSecurityEvent(data, createSecurityEvent({
+    type: `${attempt.actor}_login_failed`,
+    actor: attempt.actor,
+    accountKey: attempt.accountKey,
+    sourceIp: attempt.sourceIp,
+    outcome: activeBlock ? activeBlock.mode : "denied",
+    detail,
+    userAgent
+  }));
+
+  return {
+    ok: false,
+    statusCode,
+    error: errorMessage,
+    event
+  };
+}
+
+function createThrottledAttemptResult(data, attempt, userAgent) {
+  const event = appendSecurityEvent(data, createSecurityEvent({
+    type: `${attempt.actor}_login_throttled`,
+    actor: attempt.actor,
+    accountKey: attempt.accountKey,
+    sourceIp: attempt.sourceIp,
+    outcome: attempt.block?.mode || "blocked",
+    detail: "retry-later",
+    userAgent
+  }));
+
+  return {
+    ok: false,
+    statusCode: 429,
+    error: loginThrottleMessage(attempt.block),
+    event
+  };
+}
+
+function logSecurityEvent(event) {
+  if (!event) {
+    return;
+  }
+
+  console.warn([
+    "[security]",
+    event.type || "event",
+    `outcome=${event.outcome || "unknown"}`,
+    event.actor ? `actor=${event.actor}` : "",
+    event.accountKey ? `account=${event.accountKey}` : "",
+    event.sourceIp ? `ip=${event.sourceIp}` : "",
+    event.detail ? `detail=${event.detail}` : ""
+  ].filter(Boolean).join(" "));
+}
+
+function employeeAccessResponse(employee, session) {
+  return {
+    authorized: true,
+    employee: {
+      id: employee.id,
+      name: employee.name,
+      username: employee.username
+    },
+    sessionExpiresAt: session.expiresAt
+  };
+}
+
+function validateEmployeePassword(password) {
+  if (String(password || "").length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+}
+
+function validateAdminPassword(password) {
+  if (String(password || "").length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`Admin password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+}
+
+function adminAccessResponse(session) {
+  return {
+    authorized: true,
+    setupRequired: false,
+    sessionExpiresAt: session.expiresAt,
+    csrfToken: session.csrfToken
+  };
+}
+
+function findValidRoleSession(sessions, sessionId) {
+  if (!sessionId) {
+    return null;
+  }
+
+  const session = sessions.find((entry) => entry.id === sessionId);
+
+  if (!session || session.revokedAt || isSessionExpired(session)) {
+    return null;
+  }
+
+  return session;
+}
+
+function activeCookieValue(req = {}, names = []) {
+  const cookies = parseCookies(req.headers?.cookie || '');
+
+  for (const name of names) {
+    if (cookies[name]) {
+      return cookies[name];
+    }
+  }
+
+  return '';
+}
+
+function findValidAdminSession(data, sessionId) {
+  return findValidRoleSession(data.adminSessions, sessionId);
+}
+
+export { normalizeSecurityState };
+
 export function createSecurityStore({ dataFile } = {}) {
   const backend = dataFile ? "file" : "memory";
-  const rateLimiter = createRateLimiter();
   let initPromise = null;
   let writeQueue = Promise.resolve();
-  let adminCredential = null;
-  let sessionSecret = null;
-  let credentialVersion = "";
-  let bootstrapHrPin = "";
-  let initializedAt = "";
   let memoryState = normalizeSecurityState();
+  let initializedAt = "";
 
   async function readStoredState() {
     if (!dataFile) {
@@ -444,15 +741,7 @@ export function createSecurityStore({ dataFile } = {}) {
   async function init() {
     if (!initPromise) {
       initPromise = Promise.resolve().then(async () => {
-        const credential = resolveConfiguredCredential();
-        const secret = resolveSessionSecret();
-
-        adminCredential = credential;
-        sessionSecret = secret;
-        credentialVersion = credentialVersionFor(credential.value);
-        bootstrapHrPin = credential.bootstrapPin || "";
         initializedAt = nowIso();
-
         return readStoredState();
       });
     }
@@ -460,55 +749,18 @@ export function createSecurityStore({ dataFile } = {}) {
     return initPromise;
   }
 
-  function ensureInitialized() {
-    if (!adminCredential || !sessionSecret) {
-      throw new Error("Security store has not been initialized.");
-    }
-  }
-
-  function getBootstrapHrPin() {
-    return bootstrapHrPin;
-  }
-
-  function getSecret() {
-    ensureInitialized();
-    return sessionSecret.value;
-  }
-
-  async function flushQueue() {
-    await writeQueue.catch(() => {});
-  }
-
-  function runtimeSnapshot(storedState = normalizeSecurityState()) {
-    return {
-      admin: {
-        enabled: true,
-        credentialSource: adminCredential.source,
-        sessionSecretSource: sessionSecret.source,
-        sessionTtlSeconds: ADMIN_SESSION_TTL_SECONDS,
-        updatedAt: initializedAt || nowIso()
-      },
-      hrPin: {
-        enabled: true,
-        version: 1,
-        updatedAt: initializedAt || nowIso()
-      },
-      webmaster: storedState.webmaster
-    };
-  }
-
   async function readData() {
     await init();
-    await flushQueue();
-    return runtimeSnapshot(await readStoredState());
+    const data = await readStoredState();
+    return runtimeSnapshot(data, initializedAt);
   }
 
   async function writeData(data) {
     await init();
 
     const next = writeQueue.then(async () => {
-      const storedState = await writeStoredState(data);
-      return runtimeSnapshot(storedState);
+      const stored = await writeStoredState(data);
+      return runtimeSnapshot(stored, initializedAt);
     });
 
     writeQueue = next.catch(() => {});
@@ -521,246 +773,575 @@ export function createSecurityStore({ dataFile } = {}) {
     const next = writeQueue.then(async () => {
       const data = await readStoredState();
       const result = await mutator(data);
-      await writeStoredState(data);
-      return result;
+      const stored = await writeStoredState(data);
+      return {
+        result,
+        snapshot: runtimeSnapshot(stored, initializedAt)
+      };
     });
 
     writeQueue = next.catch(() => {});
     return next;
   }
 
-  function readSessionPayload(req, cookieNames) {
-    ensureInitialized();
+  async function readSecurityState() {
+    await init();
+    return readStoredState();
+  }
 
-    for (const cookieName of cookieNames) {
-      const cookie = readCookieValue(req, cookieName);
+  async function checkHrAccess(req = {}) {
+    await init();
+    const data = await readStoredState();
+    const adminConfigured = Boolean(data.admin.passwordSalt && data.admin.passwordHash);
 
-      if (!cookie) {
-        continue;
-      }
-
-      const payload = verifySessionToken(sessionSecret.value, cookie);
-
-      if (payload) {
-        return payload;
-      }
+    if (!adminConfigured) {
+      return {
+        authorized: false,
+        setupRequired: true,
+        sessionExpiresAt: '',
+        csrfToken: ''
+      };
     }
 
-    return null;
-  }
+    const cookieNames = getAccessCookieNames();
+    const session = findValidAdminSession(data, activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]));
 
-  function hrSessionPayloadFromRequest(req) {
-    return readSessionPayload(req, [HR_SESSION_COOKIE, LEGACY_ADMIN_SESSION_COOKIE]);
-  }
-
-  function webmasterSessionPayloadFromRequest(req) {
-    return readSessionPayload(req, [WEBMASTER_SESSION_COOKIE]);
-  }
-
-  async function checkHrAccess(req) {
-    await init();
-
-    const payload = hrSessionPayloadFromRequest(req);
-    const sessionExpiresAt = cleanText(payload?.expiresAt, 40);
-    const csrfToken = cleanText(payload?.csrfToken, 128);
-    const authorized = Boolean(
-      payload &&
-      payload.scope === "admin" &&
-      payload.version === credentialVersion &&
-      csrfToken
-    );
-
-    return {
-      authorized,
-      pinRequired: true,
-      pinVersion: 1,
-      pinUpdatedAt: initializedAt,
-      sessionExpiresAt: authorized ? sessionExpiresAt : "",
-      csrfToken: authorized ? csrfToken : "",
-      credentialManaged: true
-    };
-  }
-
-  async function unlockHrAccess(req, credentialInput) {
-    await init();
-    rateLimiter.assertAllowed(req, "admin-login");
-
-    if (!credentialMatches(credentialInput, adminCredential.value)) {
-      rateLimiter.recordFailure(req, "admin-login");
-      const error = new Error("A valid admin access code is required.");
-      error.statusCode = 403;
-      throw error;
+    if (!session) {
+      return {
+        authorized: false,
+        setupRequired: false,
+        sessionExpiresAt: '',
+        csrfToken: ''
+      };
     }
 
-    rateLimiter.recordSuccess(req, "admin-login");
-
-    const expiresAt = new Date(Date.now() + ADMIN_SESSION_TTL_SECONDS * 1000).toISOString();
-    const csrfToken = crypto.randomBytes(24).toString("base64url");
-    const setCookie = createSessionCookie(req, HR_SESSION_COOKIE, sessionSecret.value, {
-      scope: "admin",
-      version: credentialVersion,
-      csrfToken,
-      expiresAt
-    }, ADMIN_SESSION_TTL_SECONDS);
-
-    return {
-      authorized: true,
-      pinRequired: true,
-      pinVersion: 1,
-      pinUpdatedAt: initializedAt,
-      sessionExpiresAt: expiresAt,
-      csrfToken,
-      credentialManaged: true,
-      setCookie
-    };
+    return adminAccessResponse(session);
   }
 
-  async function lockHrAccess(req) {
+  async function checkWebmasterAccess(req = {}) {
     await init();
-    const secure = isSecureRequest(req);
-
-    return {
-      authorized: false,
-      setCookie: [
-        clearCookieHeader(HR_SESSION_COOKIE, { secure }),
-        clearCookieHeader(LEGACY_ADMIN_SESSION_COOKIE, { secure })
-      ]
-    };
-  }
-
-  async function issueHrPin() {
-    const error = new Error("Admin credentials are managed by environment variables and cannot be rotated from the browser.");
-    error.statusCode = 410;
-    throw error;
-  }
-
-  async function clearHrPin() {
-    const error = new Error("Admin credentials are managed by environment variables and cannot be disabled from the browser.");
-    error.statusCode = 410;
-    throw error;
-  }
-
-  async function checkWebmasterAccess(req) {
-    await init();
-
-    const [hrAccess, storedState] = await Promise.all([
-      checkHrAccess(req),
-      readStoredState()
-    ]);
-    const approval = normalizeWebmasterApproval(storedState.webmaster);
-    const payload = webmasterSessionPayloadFromRequest(req);
-    const sessionExpiresAt = cleanText(payload?.expiresAt, 40);
-    const csrfToken = cleanText(payload?.csrfToken, 128);
-    const authorized = Boolean(
-      approval &&
-      payload &&
-      payload.scope === "webmaster" &&
-      cleanText(payload.approvalId, 128) === approval.id &&
-      csrfToken
-    );
-
-    return {
-      authorized,
-      hrAuthorized: hrAccess.authorized,
-      browserBound: Boolean(approval),
-      approvedBrowser: publicWebmasterApproval(approval),
-      sessionExpiresAt: authorized ? sessionExpiresAt : "",
-      csrfToken: authorized ? csrfToken : ""
-    };
-  }
-
-  async function approveWebmasterAccess(req, browserInput = {}) {
-    await init();
-
+    const data = await readStoredState();
     const hrAccess = await checkHrAccess(req);
+    const webmasterConfigured = Boolean(data.webmaster.passwordSalt && data.webmaster.passwordHash);
 
-    if (!hrAccess.authorized) {
-      const error = new Error("Admin access is required.");
-      error.statusCode = 401;
-      throw error;
+    if (!webmasterConfigured) {
+      return {
+        authorized: false,
+        setupRequired: true,
+        hrAuthorized: Boolean(hrAccess.authorized),
+        sessionExpiresAt: '',
+        csrfToken: ''
+      };
     }
 
-    const approval = normalizeWebmasterApproval({
-      id: crypto.randomUUID(),
-      label: cleanText(browserInput.label, 80),
-      browser: cleanText(browserInput.browser, 80),
-      platform: cleanText(browserInput.platform, 80),
-      userAgent: cleanUserAgent(browserInput.userAgent || requestUserAgent(req)),
-      userAgentHash: userAgentHashFor(requestUserAgent(req) || browserInput.userAgent),
-      updatedAt: nowIso()
-    });
+    const cookieNames = getAccessCookieNames();
+    const session = findValidRoleSession(data.webmasterSessions, activeCookieValue(req, [cookieNames.webmaster]));
 
-    await updateData((data) => {
-      data.webmaster = approval;
-      return approval;
-    });
-
-    const expiresAt = new Date(Date.now() + WEBMASTER_SESSION_TTL_SECONDS * 1000).toISOString();
-    const csrfToken = crypto.randomBytes(24).toString("base64url");
-    const setCookie = createSessionCookie(req, WEBMASTER_SESSION_COOKIE, sessionSecret.value, {
-      scope: "webmaster",
-      approvalId: approval.id,
-      userAgentHash: approval.userAgentHash,
-      csrfToken,
-      expiresAt
-    }, WEBMASTER_SESSION_TTL_SECONDS);
+    if (!session) {
+      return {
+        authorized: false,
+        setupRequired: false,
+        hrAuthorized: Boolean(hrAccess.authorized),
+        sessionExpiresAt: '',
+        csrfToken: ''
+      };
+    }
 
     return {
-      authorized: true,
-      hrAuthorized: true,
-      browserBound: true,
-      approvedBrowser: publicWebmasterApproval(approval),
-      sessionExpiresAt: expiresAt,
-      csrfToken,
-      setCookie
+      ...adminAccessResponse(session),
+      hrAuthorized: Boolean(hrAccess.authorized)
     };
   }
 
-  async function lockWebmasterAccess(req) {
+  async function checkEmployeeAccess(req = {}) {
     await init();
+    const data = await readStoredState();
+    const cookieNames = getAccessCookieNames();
+    const sessionId = parseCookies(req.headers?.cookie || "")[cookieNames.employee];
 
-    await updateData((data) => {
-      data.webmaster = null;
-      return null;
+    if (!sessionId) {
+      return {
+        authorized: false,
+        sessionExpiresAt: "",
+        employee: null
+      };
+    }
+
+    const session = data.employeeSessions.find((entry) => entry.id === sessionId);
+
+    if (!session || session.revokedAt || isSessionExpired(session)) {
+      return {
+        authorized: false,
+        sessionExpiresAt: "",
+        employee: null
+      };
+    }
+
+    const employee = data.employees.find((entry) => entry.id === session.employeeId);
+
+    if (!employee || employee.active === false || Number(employee.sessionVersion || 0) !== Number(session.sessionVersion || 0)) {
+      return {
+        authorized: false,
+        sessionExpiresAt: "",
+        employee: null
+      };
+    }
+
+    return employeeAccessResponse(employee, session);
+  }
+
+  async function authenticateEmployee({ username, password, userAgent = "", clientIp = "" } = {}) {
+    const normalizedUsername = normalizeUsername(username);
+    const passwordText = String(password || "");
+
+    if (!normalizedUsername || !passwordText) {
+      throw new Error("Username and password are required.");
+    }
+
+    return updateData((data) => {
+      const attempt = createLoginAttemptState(data, "employee", normalizedUsername, clientIp);
+
+      if (attempt.block) {
+        return createThrottledAttemptResult(data, attempt, userAgent);
+      }
+
+      const employee = data.employees.find((entry) => entry.username === normalizedUsername);
+
+      if (!employee || employee.active === false) {
+        return createFailedAttemptResult(data, attempt, "Invalid username or password.", employee ? "inactive-account" : "unknown-username", userAgent);
+      }
+
+      if (!verifyPassword(passwordText, employee.passwordSalt, employee.passwordHash)) {
+        return createFailedAttemptResult(data, attempt, "Invalid username or password.", "invalid-password", userAgent);
+      }
+
+      clearLoginGuards(attempt.bucket, normalizedUsername, clientIp);
+      const session = createEmployeeSession(employee, userAgent);
+      employee.lastLoginAt = nowIso();
+      employee.updatedAt = employee.lastLoginAt;
+      data.employeeSessions = [
+        session,
+        ...data.employeeSessions.filter((entry) => entry.id !== session.id && !isSessionExpired(entry) && !entry.revokedAt)
+      ];
+
+      return {
+        ok: true,
+        session,
+        employee: publicEmployeeRecord(employee, data.employeeSessions)
+      };
+    }).then(({ result }) => {
+      if (!result.ok) {
+        logSecurityEvent(result.event);
+        const error = new Error(result.error);
+        error.statusCode = result.statusCode;
+        throw error;
+      }
+
+      return {
+        ...employeeAccessResponse(
+          {
+            id: result.employee.id,
+            name: result.employee.name,
+            username: result.employee.username
+          },
+          result.session
+        ),
+        sessionId: result.session.id
+      };
     });
+  }
 
+  async function setupAdminAccess({ password, userAgent = "" } = {}) {
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      if (data.admin.passwordSalt && data.admin.passwordHash) {
+        throw new Error("Admin access is already configured.");
+      }
+
+      const nextPassword = createPasswordHash(password);
+      const session = createAdminSession(userAgent);
+      data.admin = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: nowIso()
+      };
+      data.adminSessions = [session];
+      data.hr = { ...data.admin };
+      data.hrSessions = data.adminSessions;
+      return { session };
+    }).then(({ result }) => ({
+      ...adminAccessResponse(result.session),
+      sessionId: result.session.id
+    }));
+  }
+
+  async function authenticateAdmin({ password, userAgent = '', clientIp = '' } = {}) {
+    const passwordText = String(password || '');
+
+    if (!passwordText) {
+      throw new Error('Password is required.');
+    }
+
+    return updateData((data) => {
+      const attempt = createLoginAttemptState(data, 'hr', 'hr', clientIp);
+
+      if (attempt.block) {
+        return createThrottledAttemptResult(data, attempt, userAgent);
+      }
+
+      if (!data.admin.passwordSalt || !data.admin.passwordHash) {
+        throw new Error('Admin access has not been configured.');
+      }
+
+      if (!verifyPassword(passwordText, data.admin.passwordSalt, data.admin.passwordHash)) {
+        return createFailedAttemptResult(data, attempt, 'Invalid password.', 'invalid-password', userAgent);
+      }
+
+      clearLoginGuards(attempt.bucket, 'hr', clientIp);
+      const session = createAdminSession(userAgent);
+      data.admin.updatedAt = nowIso();
+      data.adminSessions = [
+        session,
+        ...data.adminSessions.filter((entry) => entry.id !== session.id && !isSessionExpired(entry) && !entry.revokedAt)
+      ];
+      data.hr = { ...data.admin };
+      data.hrSessions = data.adminSessions;
+      return {
+        ok: true,
+        session
+      };
+    }).then(({ result }) => {
+      if (!result.ok) {
+        logSecurityEvent(result.event);
+        const error = new Error(result.error);
+        error.statusCode = result.statusCode;
+        throw error;
+      }
+
+      return {
+        ...adminAccessResponse(result.session),
+        sessionId: result.session.id
+      };
+    });
+  }
+
+  async function setupWebmasterAccess({ password, userAgent = '' } = {}) {
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      if (data.webmaster.passwordSalt && data.webmaster.passwordHash) {
+        throw new Error('Webmaster access is already configured.');
+      }
+
+      const nextPassword = createPasswordHash(password);
+      const session = createAdminSession(userAgent);
+      data.webmaster = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: nowIso()
+      };
+      data.webmasterSessions = [session];
+      return { session };
+    }).then(({ result }) => ({
+      ...adminAccessResponse(result.session),
+      sessionId: result.session.id
+    }));
+  }
+
+  async function authenticateWebmaster({ password, userAgent = '', clientIp = '' } = {}) {
+    const passwordText = String(password || '');
+
+    if (!passwordText) {
+      throw new Error('Password is required.');
+    }
+
+    return updateData((data) => {
+      const attempt = createLoginAttemptState(data, 'webmaster', 'webmaster', clientIp);
+
+      if (attempt.block) {
+        return createThrottledAttemptResult(data, attempt, userAgent);
+      }
+
+      if (!data.webmaster.passwordSalt || !data.webmaster.passwordHash) {
+        throw new Error('Webmaster access has not been configured.');
+      }
+
+      if (!verifyPassword(passwordText, data.webmaster.passwordSalt, data.webmaster.passwordHash)) {
+        return createFailedAttemptResult(data, attempt, 'Invalid password.', 'invalid-password', userAgent);
+      }
+
+      clearLoginGuards(attempt.bucket, 'webmaster', clientIp);
+      const session = createAdminSession(userAgent);
+      data.webmaster.updatedAt = nowIso();
+      data.webmasterSessions = [
+        session,
+        ...data.webmasterSessions.filter((entry) => entry.id !== session.id && !isSessionExpired(entry) && !entry.revokedAt)
+      ];
+      return {
+        ok: true,
+        session
+      };
+    }).then(({ result }) => {
+      if (!result.ok) {
+        logSecurityEvent(result.event);
+        const error = new Error(result.error);
+        error.statusCode = result.statusCode;
+        throw error;
+      }
+
+      return {
+        ...adminAccessResponse(result.session),
+        sessionId: result.session.id
+      };
+    });
+  }
+
+  async function logoutAdmin(req = {}) {
+    await init();
+    const cookieNames = getAccessCookieNames();
+    const sessionId = activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]);
+
+    if (!sessionId) {
+      return { removed: false };
+    }
+
+    return updateData((data) => {
+      const session = data.adminSessions.find((entry) => entry.id === sessionId);
+
+      if (!session) {
+        return { removed: false };
+      }
+
+      session.revokedAt = nowIso();
+      session.updatedAt = session.revokedAt;
+      data.hrSessions = data.adminSessions;
+      return { removed: true };
+    }).then(({ result }) => result);
+  }
+
+  async function logoutWebmaster(req = {}) {
+    await init();
+    const cookieNames = getAccessCookieNames();
+    const sessionId = activeCookieValue(req, [cookieNames.webmaster]);
+
+    if (!sessionId) {
+      return { removed: false };
+    }
+
+    return updateData((data) => {
+      const session = data.webmasterSessions.find((entry) => entry.id === sessionId);
+
+      if (!session) {
+        return { removed: false };
+      }
+
+      session.revokedAt = nowIso();
+      session.updatedAt = session.revokedAt;
+      return { removed: true };
+    }).then(({ result }) => result);
+  }
+
+  async function logoutEmployee(req = {}) {
+    await init();
+    const cookieNames = getAccessCookieNames();
+    const sessionId = parseCookies(req.headers?.cookie || "")[cookieNames.employee];
+
+    if (!sessionId) {
+      return { removed: false };
+    }
+
+    return updateData((data) => {
+      const session = data.employeeSessions.find((entry) => entry.id === sessionId);
+
+      if (!session) {
+        return { removed: false };
+      }
+
+      session.revokedAt = nowIso();
+      session.updatedAt = session.revokedAt;
+      return { removed: true };
+    }).then(({ result }) => result);
+  }
+
+  async function listSecurityEvents({ limit = 100 } = {}) {
+    await init();
+    const data = await readStoredState();
+    const max = Math.max(1, Math.min(200, Number(limit) || 100));
     return {
-      authorized: false,
-      hrAuthorized: false,
-      browserBound: false,
-      approvedBrowser: null,
-      sessionExpiresAt: "",
-      csrfToken: "",
-      setCookie: clearCookieHeader(WEBMASTER_SESSION_COOKIE, {
-        secure: isSecureRequest(req)
-      })
+      events: Array.isArray(data.securityEvents) ? data.securityEvents.slice(0, max) : []
     };
   }
 
-  function assertRateLimit(req, bucket) {
-    rateLimiter.assertAllowed(req, bucket);
+  async function listEmployees() {
+    const data = await readSecurityState();
+    return data.employees
+      .map((employee) => publicEmployeeRecord(employee, data.employeeSessions.filter((session) => session.employeeId === employee.id)))
+      .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
   }
 
-  function recordRateLimitFailure(req, bucket) {
-    rateLimiter.recordFailure(req, bucket);
+  async function createEmployeeAccount({ name, username, password } = {}) {
+    const employeeName = cleanText(name, 120);
+    const employeeUsername = normalizeUsername(username);
+
+    if (!employeeName) {
+      throw new Error("Employee name is required.");
+    }
+
+    if (!employeeUsername) {
+      throw new Error("Username is required.");
+    }
+
+    validateEmployeePassword(password);
+
+    return updateData((data) => {
+      const duplicate = data.employees.some((employee) => employee.username === employeeUsername);
+
+      if (duplicate) {
+        throw new Error("That username is already in use.");
+      }
+
+      const passwordHash = createPasswordHash(password);
+      const createdAt = nowIso();
+      const employee = normalizeEmployee({
+        id: crypto.randomUUID(),
+        name: employeeName,
+        username: employeeUsername,
+        passwordSalt: passwordHash.salt,
+        passwordHash: passwordHash.hash,
+        active: true,
+        sessionVersion: 0,
+        lastLoginAt: "",
+        createdAt,
+        updatedAt: createdAt,
+        disabledAt: ""
+      });
+
+      data.employees.unshift(employee);
+      return employee;
+    }).then(({ result, snapshot }) => ({
+      employee: publicEmployeeRecord(result, []),
+      snapshot
+    }));
   }
 
-  function recordRateLimitSuccess(req, bucket) {
-    rateLimiter.recordSuccess(req, bucket);
+  async function setEmployeeActive(employeeId, active) {
+    const targetId = cleanText(employeeId, 80);
+
+    if (!targetId) {
+      throw new Error("Employee id is required.");
+    }
+
+    return updateData((data) => {
+      const employee = data.employees.find((entry) => entry.id === targetId);
+
+      if (!employee) {
+        throw new Error("Employee not found.");
+      }
+
+      const nextActive = Boolean(active);
+      employee.active = nextActive;
+      employee.updatedAt = nowIso();
+      employee.disabledAt = nextActive ? "" : employee.updatedAt;
+      employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
+
+      data.employeeSessions = data.employeeSessions.map((session) => (
+        session.employeeId === employee.id
+          ? {
+              ...session,
+              revokedAt: session.revokedAt || employee.updatedAt,
+              updatedAt: employee.updatedAt
+            }
+          : session
+      ));
+
+      return employee;
+    }).then(({ result, snapshot }) => ({
+      employee: publicEmployeeRecord(result, []),
+      snapshot
+    }));
   }
 
-  function verifyCsrf(req, auth) {
-    const expected = cleanText(auth?.csrfToken, 128);
-    const provided = cleanText(req?.headers?.["x-csrf-token"], 128);
-    return Boolean(expected && provided && timingSafeStringEqual(expected, provided));
+  async function resetEmployeePassword(employeeId, password) {
+    const targetId = cleanText(employeeId, 80);
+
+    if (!targetId) {
+      throw new Error("Employee id is required.");
+    }
+
+    validateEmployeePassword(password);
+
+    return updateData((data) => {
+      const employee = data.employees.find((entry) => entry.id === targetId);
+
+      if (!employee) {
+        throw new Error("Employee not found.");
+      }
+
+      const nextPassword = createPasswordHash(password);
+      employee.passwordSalt = nextPassword.salt;
+      employee.passwordHash = nextPassword.hash;
+      employee.updatedAt = nowIso();
+      employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
+
+      data.employeeSessions = data.employeeSessions.map((session) => (
+        session.employeeId === employee.id
+          ? {
+              ...session,
+              revokedAt: session.revokedAt || employee.updatedAt,
+              updatedAt: employee.updatedAt
+            }
+          : session
+      ));
+
+      return employee;
+    }).then(({ result, snapshot }) => ({
+      employee: publicEmployeeRecord(result, []),
+      snapshot
+    }));
+  }
+
+  async function revokeEmployeeSessions(employeeId) {
+    const targetId = cleanText(employeeId, 80);
+
+    if (!targetId) {
+      throw new Error("Employee id is required.");
+    }
+
+    return updateData((data) => {
+      const employee = data.employees.find((entry) => entry.id === targetId);
+
+      if (!employee) {
+        throw new Error("Employee not found.");
+      }
+
+      const revokedAt = nowIso();
+      employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
+      employee.updatedAt = revokedAt;
+      data.employeeSessions = data.employeeSessions.map((session) => (
+        session.employeeId === employee.id
+          ? {
+              ...session,
+              revokedAt: session.revokedAt || revokedAt,
+              updatedAt: revokedAt
+            }
+          : session
+      ));
+
+      return employee;
+    }).then(({ result, snapshot }) => ({
+      employee: publicEmployeeRecord(result, []),
+      snapshot
+    }));
   }
 
   function getAccessCookieNames() {
     return {
-      admin: HR_SESSION_COOKIE,
-      hr: HR_SESSION_COOKIE,
-      legacyHr: LEGACY_ADMIN_SESSION_COOKIE,
-      webmaster: WEBMASTER_SESSION_COOKIE
+      admin: "palziv_hr_auth",
+      hr: "palziv_hr_auth",
+      legacyHr: "palziv_admin_auth",
+      webmaster: "palziv_webmaster_auth",
+      employee: "palziv_employee_auth"
     };
   }
 
@@ -772,35 +1353,27 @@ export function createSecurityStore({ dataFile } = {}) {
     backend,
     init,
     readData,
+    readSecurityState,
     writeData,
     updateData,
     close,
-    getBootstrapHrPin,
-    getSecret,
     getAccessCookieNames,
+    setupAdminAccess,
+    setupWebmasterAccess,
+    authenticateAdmin,
+    authenticateWebmaster,
+    logoutAdmin,
+    logoutWebmaster,
     checkHrAccess,
-    unlockHrAccess,
-    lockHrAccess,
-    issueHrPin,
-    clearHrPin,
     checkWebmasterAccess,
-    approveWebmasterAccess,
-    lockWebmasterAccess,
-    assertRateLimit,
-    recordRateLimitFailure,
-    recordRateLimitSuccess,
-    verifyCsrf
+    checkEmployeeAccess,
+    authenticateEmployee,
+    logoutEmployee,
+    listSecurityEvents,
+    listEmployees,
+    createEmployeeAccount,
+    setEmployeeActive,
+    resetEmployeePassword,
+    revokeEmployeeSessions
   };
 }
-
-export {
-  cleanText,
-  createCookieHeader,
-  formatAccessPin,
-  generateAccessPin,
-  normalizeAccessPinText,
-  parseCookies,
-  readCookieValue,
-  signSessionToken,
-  verifySessionToken
-};

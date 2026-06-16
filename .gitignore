@@ -2,6 +2,9 @@ node_modules/
 .env
 *.log
 artifacts/
+/.codex/
+security-scans/
 data/push.json
+data/security.json
 data/analytics.json
 data/*.tmp

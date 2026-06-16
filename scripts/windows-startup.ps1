@@ -3,6 +3,9 @@ param(
   [int]$Port = 3116,
   [string]$ProjectRoot,
   [string]$CloudflaredServiceName = "Cloudflared",
+  [string]$PublicBaseUrl,
+  [string]$CloudflaredConfigPath,
+  [string]$TrustedProxyAddresses = "",
   [switch]$SkipCloudflared
 )
 
@@ -26,6 +29,84 @@ function Ensure-Directory {
   if (-not (Test-Path $Path)) {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
   }
+}
+
+function Get-CloudflaredConfigCandidates {
+  param([string]$ExplicitConfigPath)
+
+  $candidates = @()
+
+  if ($ExplicitConfigPath) {
+    $candidates += $ExplicitConfigPath
+  }
+
+  if ($env:USERPROFILE) {
+    $candidates += (Join-Path $env:USERPROFILE ".cloudflared\config.yml")
+  }
+
+  if ($env:WINDIR) {
+    $candidates += (Join-Path $env:WINDIR "System32\config\systemprofile\.cloudflared\config.yml")
+  }
+
+  return $candidates |
+    Where-Object { $_ } |
+    Select-Object -Unique
+}
+
+function Resolve-PublicBaseUrl {
+  param(
+    [string]$ExplicitPublicBaseUrl,
+    [string]$ExplicitConfigPath
+  )
+
+  if ($ExplicitPublicBaseUrl) {
+    $trimmed = $ExplicitPublicBaseUrl.Trim().TrimEnd('/')
+    $parsed = $null
+
+    if (-not [Uri]::TryCreate($trimmed, [UriKind]::Absolute, [ref]$parsed)) {
+      throw "PublicBaseUrl must be a valid absolute URL."
+    }
+
+    if ($parsed.Scheme -notin @("http", "https")) {
+      throw "PublicBaseUrl must use http or https."
+    }
+
+    return $parsed.GetLeftPart([UriPartial]::Authority)
+  }
+
+  foreach ($configPath in (Get-CloudflaredConfigCandidates -ExplicitConfigPath $ExplicitConfigPath)) {
+    if (-not (Test-Path $configPath)) {
+      continue
+    }
+
+    $configText = Get-Content -LiteralPath $configPath -Raw
+    $matches = [regex]::Matches($configText, '(?m)^\s*hostname:\s*(.+)$')
+    if (-not $matches.Count) {
+      continue
+    }
+
+    $hostnames = @(
+      foreach ($match in $matches) {
+        $host = $match.Groups[1].Value.Trim()
+        if ($host) {
+          $host
+        }
+      }
+    ) | Select-Object -Unique
+
+    if (-not $hostnames.Count) {
+      continue
+    }
+
+    $preferredHost = $hostnames | Where-Object { $_ -notmatch '^www\.' } | Select-Object -First 1
+    if (-not $preferredHost) {
+      $preferredHost = $hostnames | Select-Object -First 1
+    }
+
+    return "https://$preferredHost"
+  }
+
+  throw "Could not determine PUBLIC_BASE_URL. Pass -PublicBaseUrl explicitly or provide a cloudflared config with hostname entries."
 }
 
 function Get-PortListeners {
@@ -176,7 +257,9 @@ function Start-BoardApp {
   param(
     [string]$Root,
     [int]$TargetPort,
-    [string]$LogDirectory
+    [string]$LogDirectory,
+    [string]$ResolvedPublicBaseUrl,
+    [string]$ResolvedTrustedProxyAddresses
   )
 
   if (Test-BoardHealth -TargetPort $TargetPort) {
@@ -207,7 +290,16 @@ function Start-BoardApp {
   $nodePath = Resolve-NodeExecutable
   $serverFile = Join-Path $Root "server.js"
   $previousPort = $env:PORT
+  $previousPublicBaseUrl = $env:PUBLIC_BASE_URL
+  $previousTrustedProxyAddresses = $env:TRUST_PROXY_ADDRESSES
   $env:PORT = "$TargetPort"
+  $env:PUBLIC_BASE_URL = $ResolvedPublicBaseUrl
+
+  if ($ResolvedTrustedProxyAddresses) {
+    $env:TRUST_PROXY_ADDRESSES = $ResolvedTrustedProxyAddresses
+  } else {
+    Remove-Item Env:TRUST_PROXY_ADDRESSES -ErrorAction SilentlyContinue
+  }
 
   $stdout = Join-Path $LogDirectory "board-app.out.log"
   $stderr = Join-Path $LogDirectory "board-app.err.log"
@@ -229,9 +321,22 @@ function Start-BoardApp {
     } else {
       $env:PORT = $previousPort
     }
+
+    if ([string]::IsNullOrEmpty($previousPublicBaseUrl)) {
+      Remove-Item Env:PUBLIC_BASE_URL -ErrorAction SilentlyContinue
+    } else {
+      $env:PUBLIC_BASE_URL = $previousPublicBaseUrl
+    }
+
+    if ([string]::IsNullOrEmpty($previousTrustedProxyAddresses)) {
+      Remove-Item Env:TRUST_PROXY_ADDRESSES -ErrorAction SilentlyContinue
+    } else {
+      $env:TRUST_PROXY_ADDRESSES = $previousTrustedProxyAddresses
+    }
   }
 
   Write-Host "Started board app on port ${TargetPort}."
+  Write-Host "Public origin: $ResolvedPublicBaseUrl"
   Write-Host "App logs: $stdout"
   Write-Host "App errors: $stderr"
 }
@@ -256,14 +361,19 @@ function Get-CloudflaredTunnelId {
 function Start-CloudflaredTunnelProcess {
   param(
     [string]$Root,
-    [string]$LogDirectory
+    [string]$LogDirectory,
+    [string]$ConfigPath
   )
 
-  $configPath = Join-Path $env:USERPROFILE ".cloudflared\config.yml"
-  $tunnelId = Get-CloudflaredTunnelId -ConfigPath $configPath
+  $candidateConfig = $ConfigPath
+  if (-not $candidateConfig) {
+    $candidateConfig = (Get-CloudflaredConfigCandidates -ExplicitConfigPath $null | Select-Object -First 1)
+  }
+
+  $tunnelId = Get-CloudflaredTunnelId -ConfigPath $candidateConfig
 
   if (-not $tunnelId) {
-    Write-Warning "cloudflared fallback skipped because the tunnel config was not found at $configPath."
+    Write-Warning "cloudflared fallback skipped because the tunnel config was not found at $candidateConfig."
     return
   }
 
@@ -287,7 +397,8 @@ function Ensure-CloudflaredService {
   param(
     [string]$ServiceName,
     [string]$Root,
-    [string]$LogDirectory
+    [string]$LogDirectory,
+    [string]$ConfigPath
   )
 
   $cloudflaredProcess = Get-CloudflaredProcesses | Select-Object -First 1
@@ -301,7 +412,7 @@ function Ensure-CloudflaredService {
   } catch {
     Write-Warning "cloudflared service '$ServiceName' was not found."
     Write-Warning "Falling back to a direct cloudflared process."
-    Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory
+    Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory -ConfigPath $ConfigPath
     return
   }
 
@@ -311,7 +422,7 @@ function Ensure-CloudflaredService {
     } catch {
       Write-Warning "cloudflared service '$ServiceName' could not be started."
       Write-Warning "Falling back to a direct cloudflared process."
-      Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory
+      Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory -ConfigPath $ConfigPath
       return
     }
   }
@@ -325,7 +436,7 @@ function Ensure-CloudflaredService {
 
     Write-Warning "cloudflared service '$ServiceName' is still not running."
     Write-Warning "Falling back to a direct cloudflared process."
-    Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory
+    Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory -ConfigPath $ConfigPath
     return
   }
 
@@ -341,13 +452,14 @@ Write-Host "Project root: $ProjectRoot"
 Set-Location $ProjectRoot
 $logDirectory = Join-Path $ProjectRoot "logs"
 Ensure-Directory -Path $logDirectory
+$resolvedPublicBaseUrl = Resolve-PublicBaseUrl -ExplicitPublicBaseUrl $PublicBaseUrl -ExplicitConfigPath $CloudflaredConfigPath
 
 Write-Step "Start the board app"
-Start-BoardApp -Root $ProjectRoot -TargetPort $Port -LogDirectory $logDirectory
+Start-BoardApp -Root $ProjectRoot -TargetPort $Port -LogDirectory $logDirectory -ResolvedPublicBaseUrl $resolvedPublicBaseUrl -ResolvedTrustedProxyAddresses $TrustedProxyAddresses
 
 if (-not $SkipCloudflared) {
   Write-Step "Start cloudflared"
-  Ensure-CloudflaredService -ServiceName $CloudflaredServiceName -Root $ProjectRoot -LogDirectory $logDirectory
+  Ensure-CloudflaredService -ServiceName $CloudflaredServiceName -Root $ProjectRoot -LogDirectory $logDirectory -ConfigPath $CloudflaredConfigPath
 }
 
 Write-Step "Recovery summary"
@@ -355,4 +467,5 @@ Write-Host "Launcher: http://localhost:$Port/palzivalerts"
 Write-Host "Employee feed: http://localhost:$Port/palzivalerts/employee"
 Write-Host "HR board: http://localhost:$Port/palzivalerts/hr"
 Write-Host "Webmaster board: http://localhost:$Port/palzivalerts/webmaster"
+Write-Host "Public origin: $resolvedPublicBaseUrl"
 Write-Host "If the tunnel service is installed and running, it will bridge the same local port to your public hostname."

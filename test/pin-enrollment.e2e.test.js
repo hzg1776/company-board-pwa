@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, copyFile, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+
+import { createSecurityStore } from "../security.js";
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
@@ -13,8 +15,6 @@ const CHROME_CANDIDATES = [
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Users\\admin\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe"
 ].filter(Boolean);
-
-const DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -94,19 +94,14 @@ async function waitForHttpOk(url, timeoutMs = 15_000) {
 }
 
 async function startBoardServer({ port, tempDir }) {
-  const repoRoot = process.cwd();
-  const dataFile = path.join(tempDir, "board.json");
-  const pushDataFile = path.join(tempDir, "push.json");
-  const securityDataFile = path.join(tempDir, "security.json");
   const child = spawn(process.execPath, ["server.js"], {
-    cwd: repoRoot,
+    cwd: process.cwd(),
     env: {
       ...process.env,
       PORT: String(port),
-      HR_PIN: "1234-5678",
-      DATA_FILE: dataFile,
-      PUSH_DATA_FILE: pushDataFile,
-      SECURITY_DATA_FILE: securityDataFile
+      DATA_FILE: path.join(tempDir, "board.json"),
+      PUSH_DATA_FILE: path.join(tempDir, "push.json"),
+      SECURITY_DATA_FILE: path.join(tempDir, "security.json")
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -363,14 +358,6 @@ async function navigate(session, url) {
   await loadEvent;
 }
 
-async function setDesktopBrowserIdentity(session) {
-  await session.send("Emulation.setUserAgentOverride", {
-    userAgent: DESKTOP_USER_AGENT,
-    platform: "Win32",
-    acceptLanguage: "en-US,en;q=0.9"
-  });
-}
-
 async function cleanupProcess(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) {
     return;
@@ -387,6 +374,28 @@ async function cleanupProcess(child) {
   });
 }
 
+async function provisionManagedAccess(tempDir, options = {}) {
+  const store = createSecurityStore({
+    dataFile: path.join(tempDir, "security.json")
+  });
+  await store.init();
+
+  if (options.adminPassword) {
+    await store.setupAdminAccess({
+      password: options.adminPassword,
+      userAgent: "e2e"
+    });
+  }
+
+  if (options.employeeUsername && options.employeePassword) {
+    await store.createEmployeeAccount({
+      name: options.employeeName || options.employeeUsername,
+      username: options.employeeUsername,
+      password: options.employeePassword
+    });
+  }
+}
+
 const chromePath = await findChromeExecutable();
 
 test(
@@ -396,7 +405,12 @@ test(
     timeout: 120_000
   },
   async (t) => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-pin-e2e-"));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-open-e2e-"));
+    await provisionManagedAccess(tempDir, {
+      employeeName: "Test Employee",
+      employeeUsername: "test.employee",
+      employeePassword: "EmployeePass1!"
+    });
     const serverPort = await findFreePort();
     const server = await startBoardServer({
       port: serverPort,
@@ -422,69 +436,32 @@ test(
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
 
-    await navigate(session, `${appOrigin}/palzivalerts/hr`);
+    await navigate(session, `${appOrigin}/palzivalerts/employee`);
     await waitForCondition(session, "document.readyState === 'complete'");
+    await waitForCondition(session, "Boolean(document.querySelector('[data-employee-login-form]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const form = document.querySelector('[data-employee-login-form]');
+        const username = form?.querySelector('input[name="username"]');
+        const password = form?.querySelector('input[name="password"]');
 
-    const setupState = await evaluateExpression(session, `
-      (async () => {
-        const unlockResponse = await fetch('/api/hr/unlock', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pin: '1234-5678' })
-        });
-
-        if (!unlockResponse.ok) {
-          throw new Error('Failed to unlock HR.');
+        if (!form || !username || !password) {
+          throw new Error('Employee login form is missing required fields.');
         }
 
-        const unlockData = await unlockResponse.json();
-
-        const approveResponse = await fetch('/api/webmaster/approve', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': String(unlockData.csrfToken || '')
-          },
-          body: JSON.stringify({
-            label: 'Desktop Chrome',
-            browser: 'Chrome',
-            platform: 'Windows',
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
-          })
-        });
-
-        if (!approveResponse.ok) {
-          throw new Error('Failed to approve webmaster access.');
-        }
-
-        const approveData = await approveResponse.json();
-
-        const issueResponse = await fetch('/api/push/pin', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': String(approveData.csrfToken || '')
-          },
-          body: JSON.stringify({})
-        });
-
-        if (!issueResponse.ok) {
-          throw new Error('Failed to issue a push PIN.');
-        }
-
-        return await issueResponse.json();
+        username.value = 'test.employee';
+        password.value = 'EmployeePass1!';
+        form.requestSubmit();
+        return true;
       })()
     `);
-
-    assert.match(String(setupState.pin || ""), /^\d{4}-\d{4}$/);
-
-    await navigate(session, `${appOrigin}/palzivalerts/employee`);
-    await waitForCondition(session, "Boolean(document.querySelector('[data-device-setup-form] input[name=\"accessPin\"]'))");
+    await waitForCondition(
+      session,
+      "Boolean(document.querySelector('[data-device-setup-form]')) && !document.querySelector('[data-device-setup-form] input[name=\"accessPin\"]')"
+    );
 
     const permissionState = await evaluateExpression(session, "Notification.permission");
     assert.equal(permissionState, "granted");
-
-    const pinLiteral = JSON.stringify(String(setupState.pin || ""));
 
     const pushConfigRequestPromise = session.waitForEvent(
       "Network.requestWillBeSent",
@@ -495,36 +472,41 @@ test(
       (() => {
         const form = document.querySelector('[data-device-setup-form]');
         const employeeField = form?.querySelector('input[name="employeeName"]');
-        const pinField = form?.querySelector('input[name="accessPin"]');
 
-        if (!form || !employeeField || !pinField) {
+        if (!form || !employeeField) {
           throw new Error('Employee setup form is missing required fields.');
         }
 
+        if (form.querySelector('input[name="accessPin"]')) {
+          throw new Error('Legacy enrollment field should not render.');
+        }
+
         employeeField.value = 'Test Employee';
-        pinField.value = ${pinLiteral};
         form.requestSubmit();
         return true;
       })()
     `);
 
     const pushConfigRequest = await pushConfigRequestPromise;
-
     assert.ok(String(pushConfigRequest.params.request.url).includes("/api/push/config"));
 
     const pageText = await evaluateExpression(session, "document.body.innerText");
+    assert.ok(!String(pageText).includes("Access PIN"));
     assert.ok(!String(pageText).includes("Saved the employee name."));
   }
 );
 
 test(
-  "hr unlock and webmaster approval complete the admin browser flow",
+  "hr and webmaster routes require management login and then unlock cleanly",
   {
     skip: chromePath ? false : "Chrome executable not found.",
     timeout: 120_000
   },
   async (t) => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-admin-e2e-"));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-admin-open-e2e-"));
+    await provisionManagedAccess(tempDir, {
+      adminPassword: "ManagerSecret1!"
+    });
     const serverPort = await findFreePort();
     const server = await startBoardServer({
       port: serverPort,
@@ -545,82 +527,55 @@ test(
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
 
-    await setDesktopBrowserIdentity(session);
     await navigate(session, `${appOrigin}/palzivalerts/hr`);
-    await waitForCondition(session, "Boolean(document.querySelector('[data-hr-unlock-form]'))");
-
-    const userAgent = await evaluateExpression(session, "navigator.userAgent");
-    assert.match(String(userAgent || ""), /Windows NT/);
-
-    const hrUnlockRequestPromise = session.waitForEvent(
-      "Network.requestWillBeSent",
-      (message) => String(message.params?.request?.url || "").includes("/api/hr/unlock")
-    );
-
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
     await evaluateExpression(session, `
       (() => {
-        const form = document.querySelector('[data-hr-unlock-form]');
-        const pinField = form?.querySelector('input[name="pin"]');
-        const submitButton = form?.querySelector('button[type="submit"]');
+        const form = document.querySelector('[data-admin-auth-form]');
+        const password = form?.querySelector('input[name="password"]');
 
-        if (!form || !pinField || !submitButton) {
-          throw new Error('HR unlock form is missing required fields.');
+        if (!form || !password) {
+          throw new Error('Admin login form is missing required fields.');
         }
 
-        pinField.value = '1234-5678';
-        submitButton.click();
+        password.value = 'ManagerSecret1!';
+        form.requestSubmit();
         return true;
       })()
     `);
-
-    const hrUnlockRequest = await hrUnlockRequestPromise;
-    assert.ok(String(hrUnlockRequest.params.request.url).includes("/api/hr/unlock"));
     await waitForCondition(session, "document.body.innerText.includes('HR control center')");
 
-    const hrText = await evaluateExpression(session, "document.body.innerText");
-    assert.ok(String(hrText).includes("HR control center"));
+    const hrScreen = await evaluateExpression(session, `
+      ({
+        hasAuthForm: Boolean(document.querySelector('[data-admin-auth-form]')),
+        text: document.body.innerText
+      })
+    `);
 
-    await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
-    await waitForCondition(session, "Boolean(document.querySelector('[data-approve-webmaster-browser]'))");
+    assert.equal(hrScreen.hasAuthForm, false);
+    assert.ok(String(hrScreen.text).includes("HR control center"));
 
-    const approveRequestPromise = session.waitForEvent(
-      "Network.requestWillBeSent",
-      (message) => String(message.params?.request?.url || "").includes("/api/webmaster/approve")
-    );
-
-    await evaluateExpression(session, `
-      (() => {
-        const button = document.querySelector('[data-approve-webmaster-browser]');
-
-        if (!button) {
-          throw new Error('Webmaster approval button is missing.');
-        }
-
-        button.click();
-        return true;
+    const hrStatus = await evaluateExpression(session, `
+      (async () => {
+        const response = await fetch('/api/hr/check');
+        return await response.json();
       })()
     `);
 
-    const approveRequest = await approveRequestPromise;
-    assert.ok(String(approveRequest.params.request.url).includes("/api/webmaster/approve"));
-    try {
-      await waitForCondition(session, "document.body.innerText.includes('Webmaster overview')");
-    } catch (error) {
-      const pageText = await evaluateExpression(session, "document.body.innerText");
-      throw new Error(`${error.message}\n\nPage text after approve:\n${pageText}`);
-    }
+    assert.equal(Boolean(hrStatus.authorized), true);
 
-    const dashboardText = await evaluateExpression(session, "document.body.innerText");
-    assert.ok(String(dashboardText).includes("Webmaster overview"));
+    await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
+    await waitForCondition(session, "document.body.innerText.includes('Webmaster overview')");
 
-    const cookies = await connection.send("Storage.getCookies", {
-      browserContextId: undefined
-    }).catch(() => null);
-    if (cookies?.cookies) {
-      const cookieNames = cookies.cookies.map((cookie) => cookie.name);
-      assert.ok(cookieNames.includes("palziv_hr_auth"));
-      assert.ok(cookieNames.includes("palziv_webmaster_auth"));
-    }
+    const webmasterScreen = await evaluateExpression(session, `
+      ({
+        hasAuthForm: Boolean(document.querySelector('[data-admin-auth-form]')),
+        text: document.body.innerText
+      })
+    `);
+
+    assert.equal(webmasterScreen.hasAuthForm, false);
+    assert.ok(String(webmasterScreen.text).includes("Webmaster overview"));
 
     const webmasterStatus = await evaluateExpression(session, `
       (async () => {
@@ -629,8 +584,7 @@ test(
       })()
     `);
 
-    assert.equal(Boolean(webmasterStatus.authorized), true, JSON.stringify(webmasterStatus));
+    assert.equal(Boolean(webmasterStatus.authorized), true);
     assert.equal(Boolean(webmasterStatus.hrAuthorized), true);
-    assert.equal(String(webmasterStatus.approvedBrowser?.label || ""), "Windows Chrome");
   }
 );

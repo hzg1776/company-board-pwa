@@ -1,26 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { createSecurityStore } from "../security.js";
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function cookiePair(setCookieHeader) {
-  return String(setCookieHeader || "").split(";")[0];
-}
-
-function responseSetCookies(response) {
-  if (typeof response.headers.getSetCookie === "function") {
-    return response.headers.getSetCookie();
-  }
-
-  const single = response.headers.get("set-cookie");
-  return single ? [single] : [];
 }
 
 async function findFreePort() {
@@ -70,8 +59,6 @@ async function startServer(tempDir, port) {
     env: {
       ...process.env,
       PORT: String(port),
-      HR_PIN: "1234-5678",
-      SESSION_SECRET: "abcdef0123456789abcdef0123456789",
       DATA_FILE: path.join(tempDir, "board.json"),
       PUSH_DATA_FILE: path.join(tempDir, "push.json"),
       ANALYTICS_DATA_FILE: path.join(tempDir, "analytics.json"),
@@ -107,142 +94,232 @@ async function stopServer(server) {
   });
 }
 
-test("server enforces same-origin and csrf on privileged mutations", async (t) => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-security-"));
+function readSetCookie(response) {
+  const value = response.headers.get("set-cookie") || "";
+  return value.split(";")[0];
+}
+
+test("server protects board reads and revokes disabled employees", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-managed-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const employeeResult = await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  await writeFile(path.join(tempDir, "push.json"), `${JSON.stringify({
+    subscriptions: [
+      {
+        endpoint: "https://push.example.com/endpoint/legacy-anonymous",
+        expirationTime: null,
+        keys: {
+          p256dh: "legacy-public-key",
+          auth: "legacy-auth-key"
+        },
+        deviceId: "legacy-anonymous-device",
+        label: "Legacy anonymous device",
+        browser: "Chrome",
+        platform: "Windows",
+        authorized: true
+      }
+    ]
+  }, null, 2)}\n`, "utf8");
+
   const port = await findFreePort();
-  const approvedUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/137.0.0.0 Safari/537.36";
-  let server = await startServer(tempDir, port);
+  const server = await startServer(tempDir, port);
 
   t.after(async () => {
     await stopServer(server);
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  const crossSiteUnlock = await fetch(`${server.baseUrl}/api/hr/unlock`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Origin: "https://evil.example"
-    },
-    body: JSON.stringify({ pin: "1234-5678" })
-  });
-  assert.equal(crossSiteUnlock.status, 403);
+  const hrCheck = await fetch(`${server.baseUrl}/api/hr/check`);
+  assert.equal(hrCheck.status, 200);
+  const hrCheckBody = await hrCheck.json();
+  assert.equal(Boolean(hrCheckBody.authorized), false);
+  assert.equal(Boolean(hrCheckBody.setupRequired), false);
 
-  const unlockResponse = await fetch(`${server.baseUrl}/api/hr/unlock`, {
+  const adminLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Origin: server.baseUrl
     },
-    body: JSON.stringify({ pin: "1234-5678" })
+    body: JSON.stringify({
+      password: "ManagerSecret1!"
+    })
   });
-  assert.equal(unlockResponse.status, 200);
+  assert.equal(adminLogin.status, 200);
+  const adminBody = await adminLogin.json();
+  const adminCookie = readSetCookie(adminLogin);
+  assert.ok(adminCookie.includes("palziv_hr_auth="));
+  assert.ok(adminBody.csrfToken);
 
-  const unlockBody = await unlockResponse.json();
-  const hrCookie = cookiePair(responseSetCookies(unlockResponse)[0]);
-  assert.ok(hrCookie.startsWith("palziv_hr_auth="));
-  assert.ok(unlockBody.csrfToken);
-
-  const rejectedPost = await fetch(`${server.baseUrl}/api/posts`, {
+  const crossSitePost = await fetch(`${server.baseUrl}/api/posts`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Cookie: hrCookie
+      Origin: "https://evil.example",
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
     },
     body: JSON.stringify({
       type: "News",
       priority: "Normal",
-      title: "CSRF blocked",
-      body: "This request should be rejected.",
+      title: "Blocked cross-site post",
+      body: "This should be rejected.",
       audience: "All employees"
     })
   });
-  assert.equal(rejectedPost.status, 403);
+  assert.equal(crossSitePost.status, 403);
 
   const allowedPost = await fetch(`${server.baseUrl}/api/posts`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Cookie: hrCookie,
-      "X-CSRF-Token": unlockBody.csrfToken
+      Origin: server.baseUrl,
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
     },
     body: JSON.stringify({
       type: "News",
       priority: "Normal",
-      title: "CSRF allowed",
-      body: "This request should be accepted.",
+      title: "Allowed same-origin post",
+      body: "This should be accepted.",
       audience: "All employees"
     })
   });
   assert.equal(allowedPost.status, 201);
 
-  const rejectedWeather = await fetch(`${server.baseUrl}/api/weather`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Cookie: hrCookie
-    },
-    body: JSON.stringify({ location: "New York, NY" })
-  });
-  assert.equal(rejectedWeather.status, 403);
-
-  const approveResponse = await fetch(`${server.baseUrl}/api/webmaster/approve`, {
+  const employeeLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Cookie: hrCookie,
-      "X-CSRF-Token": unlockBody.csrfToken,
-      "User-Agent": approvedUserAgent
+      Origin: server.baseUrl
     },
     body: JSON.stringify({
-      label: "Office Chrome",
-      browser: "Chrome",
-      platform: "Windows",
-      userAgent: approvedUserAgent
+      username: "maria.lopez",
+      password: "EmployeePass1!"
     })
   });
-  assert.equal(approveResponse.status, 200);
+  assert.equal(employeeLogin.status, 200);
+  const employeeCookie = readSetCookie(employeeLogin);
+  assert.ok(employeeCookie.includes("palziv_employee_auth="));
 
-  const approveBody = await approveResponse.json();
-  const webmasterCookie = cookiePair(responseSetCookies(approveResponse)[0]);
-  assert.ok(webmasterCookie.startsWith("palziv_webmaster_auth="));
-  assert.ok(approveBody.csrfToken);
-
-  const rejectedPin = await fetch(`${server.baseUrl}/api/push/pin`, {
-    method: "POST",
+  const employeePosts = await fetch(`${server.baseUrl}/api/posts`, {
     headers: {
-      "Content-Type": "application/json",
-      Cookie: webmasterCookie,
-      "User-Agent": approvedUserAgent
-    },
-    body: JSON.stringify({})
-  });
-  assert.equal(rejectedPin.status, 403);
-
-  const allowedPin = await fetch(`${server.baseUrl}/api/push/pin`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Cookie: webmasterCookie,
-      "User-Agent": approvedUserAgent,
-      "X-CSRF-Token": approveBody.csrfToken
-    },
-    body: JSON.stringify({})
-  });
-  assert.equal(allowedPin.status, 201);
-
-  await stopServer(server);
-  server = await startServer(tempDir, await findFreePort());
-
-  const persistedApproval = await fetch(`${server.baseUrl}/api/webmaster/check`, {
-    headers: {
-      Cookie: webmasterCookie,
-      "User-Agent": approvedUserAgent
+      Cookie: employeeCookie
     }
   });
-  assert.equal(persistedApproval.status, 200);
+  assert.equal(employeePosts.status, 200);
 
-  const persistedApprovalBody = await persistedApproval.json();
-  assert.equal(Boolean(persistedApprovalBody.authorized), true);
-  assert.equal(String(persistedApprovalBody.approvedBrowser?.label || ""), "Office Chrome");
+  const allowedSubscribe = await fetch(`${server.baseUrl}/api/push/subscribe`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: employeeCookie
+    },
+    body: JSON.stringify({
+      subscription: {
+        endpoint: "https://push.example.com/endpoint/allowed",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key",
+          auth: "sample-auth-key"
+        }
+      },
+      deviceId: "allowed-device",
+      label: "Maria phone",
+      browser: "Chrome",
+      platform: "Windows"
+    })
+  });
+  assert.equal(allowedSubscribe.status, 201);
+
+  const deniedAdminSubscribe = await fetch(`${server.baseUrl}/api/push/subscribe`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: adminCookie
+    },
+    body: JSON.stringify({
+      subscription: {
+        endpoint: "https://push.example.com/endpoint/admin-denied",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key",
+          auth: "sample-auth-key"
+        }
+      },
+      deviceId: "admin-denied-device",
+      label: "Admin device",
+      browser: "Chrome",
+      platform: "Windows"
+    })
+  });
+  assert.equal(deniedAdminSubscribe.status, 403);
+
+  const disableEmployee = await fetch(`${server.baseUrl}/api/employees/${employeeResult.employee.id}/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
+    },
+    body: JSON.stringify({
+      active: false
+    })
+  });
+  assert.equal(disableEmployee.status, 200);
+
+  const revokedEmployeePosts = await fetch(`${server.baseUrl}/api/posts`, {
+    headers: {
+      Cookie: employeeCookie
+    }
+  });
+  assert.equal(revokedEmployeePosts.status, 401);
+
+  const pushStatus = await fetch(`${server.baseUrl}/api/push/status`, {
+    headers: {
+      Cookie: adminCookie
+    }
+  });
+  assert.equal(pushStatus.status, 200);
+  const pushBody = await pushStatus.json();
+  assert.equal(Number(pushBody.subscriptions), 2);
+  assert.equal(Number(pushBody.authorizedSubscriptions), 0);
+  assert.ok(pushBody.devices.some((device) => device.accessState === "Unbound"));
+
+  const removedHrRoute = await fetch(`${server.baseUrl}/api/hr/unlock`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(removedHrRoute.status, 404);
+
+  const removedPushRoute = await fetch(`${server.baseUrl}/api/push/pin`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(removedPushRoute.status, 404);
 });

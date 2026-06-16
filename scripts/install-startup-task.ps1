@@ -34,11 +34,47 @@ function New-BoardTaskAction {
   param(
     [string]$ScriptPath,
     [string]$Root,
-    [int]$Port
+    [int]$Port,
+    [string]$PublicBaseUrl,
+    [string]$ConfigPath
   )
 
-  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Port $Port -ProjectRoot `"$Root`""
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Port $Port -ProjectRoot `"$Root`" -PublicBaseUrl `"$PublicBaseUrl`" -CloudflaredConfigPath `"$ConfigPath`""
   return New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
+}
+
+function Get-CloudflaredPublicBaseUrl {
+  param([string]$ConfigPath)
+
+  if (-not (Test-Path $ConfigPath)) {
+    throw "Cloudflared config not found: $ConfigPath"
+  }
+
+  $configText = Get-Content -LiteralPath $ConfigPath -Raw
+  $matches = [regex]::Matches($configText, '(?m)^\s*hostname:\s*(.+)$')
+  if (-not $matches.Count) {
+    throw "Cloudflared config is missing hostname entries: $ConfigPath"
+  }
+
+  $hostnames = @(
+    foreach ($match in $matches) {
+      $host = $match.Groups[1].Value.Trim()
+      if ($host) {
+        $host
+      }
+    }
+  ) | Select-Object -Unique
+
+  if (-not $hostnames.Count) {
+    throw "Cloudflared config did not contain any usable hostnames: $ConfigPath"
+  }
+
+  $preferredHost = $hostnames | Where-Object { $_ -notmatch '^www\.' } | Select-Object -First 1
+  if (-not $preferredHost) {
+    $preferredHost = $hostnames | Select-Object -First 1
+  }
+
+  return "https://$preferredHost"
 }
 
 function Configure-CloudflaredServiceRecovery {
@@ -56,19 +92,23 @@ function Configure-CloudflaredServiceRecovery {
   }
 }
 
-$startupAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port
 $startupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$publicBaseUrl = Get-CloudflaredPublicBaseUrl -ConfigPath $CloudflaredConfigPath
 
 if (Test-IsAdministrator) {
   $startupTrigger = New-ScheduledTaskTrigger -AtStartup
   $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
   $modeLabel = "startup as SYSTEM"
+  $taskConfigPath = Join-Path $env:WINDIR "System32\config\systemprofile\.cloudflared\config.yml"
 } else {
   $startupTrigger = New-ScheduledTaskTrigger -AtLogOn
   $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
   $modeLabel = "logon as $currentUser"
+  $taskConfigPath = $CloudflaredConfigPath
 }
+
+$startupAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port -PublicBaseUrl $publicBaseUrl -ConfigPath $taskConfigPath
 
 Register-ScheduledTask -TaskName $TaskName -Action $startupAction -Trigger $startupTrigger -Principal $principal -Settings $startupSettings -Force | Out-Null
 
@@ -76,10 +116,11 @@ $task = Get-ScheduledTask -TaskName $TaskName
 Write-Host "Registered scheduled task: $($task.TaskName)"
 Write-Host "Mode: $modeLabel"
 Write-Host "Launches: $startupScript"
+Write-Host "Public origin: $publicBaseUrl"
 
 if (Test-IsAdministrator) {
   $recoveryTaskName = "$TaskName Recovery"
-  $recoveryAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port
+  $recoveryAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port -PublicBaseUrl $publicBaseUrl -ConfigPath $taskConfigPath
   $recoveryTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
 
   Register-ScheduledTask -TaskName $recoveryTaskName -Action $recoveryAction -Trigger $recoveryTrigger -Principal $principal -Settings $startupSettings -Force | Out-Null

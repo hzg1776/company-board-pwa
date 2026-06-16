@@ -6,125 +6,74 @@ import test from "node:test";
 
 import { createSecurityStore } from "../security.js";
 
-function cookiePair(setCookieHeader) {
-  return String(setCookieHeader || "").split(";")[0];
-}
-
-test("createSecurityStore persists browser approval and binds it to the approved browser", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-"));
+test("createSecurityStore provisions admin and revokes disabled employee access", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-managed-"));
   const dataFile = path.join(tempDir, "security.json");
-  const previousAdminPassword = process.env.ADMIN_PASSWORD;
-  const previousHrPin = process.env.HR_PIN;
-  const previousSessionSecret = process.env.SESSION_SECRET;
-  const approvedUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/137.0.0.0 Safari/537.36";
-
-  delete process.env.ADMIN_PASSWORD;
-  delete process.env.HR_PIN;
-  process.env.SESSION_SECRET = "0123456789abcdef0123456789abcdef";
 
   try {
-    const firstStore = createSecurityStore({ dataFile });
-    await firstStore.init();
+    const store = createSecurityStore({ dataFile });
+    await store.init();
 
-    const bootstrapPin = firstStore.getBootstrapHrPin();
-    assert.match(bootstrapPin, /^\d{4}-\d{4}$/);
+    const initialHrAccess = await store.checkHrAccess({ headers: {} });
+    assert.deepEqual(initialHrAccess, {
+      authorized: false,
+      setupRequired: true,
+      sessionExpiresAt: "",
+      csrfToken: ""
+    });
 
-    const lockedHr = await firstStore.checkHrAccess({ headers: {} });
-    assert.equal(lockedHr.authorized, false);
-    assert.equal(lockedHr.pinRequired, true);
+    const adminSetup = await store.setupAdminAccess({
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(adminSetup.authorized), true);
+    assert.ok(adminSetup.sessionId);
+    assert.ok(adminSetup.csrfToken);
 
-    const unlockedHr = await firstStore.unlockHrAccess({ headers: {} }, bootstrapPin);
-    assert.equal(unlockedHr.authorized, true);
-    assert.match(unlockedHr.setCookie, /^palziv_hr_auth=/);
-    assert.ok(unlockedHr.csrfToken);
-
-    const hrCookie = cookiePair(unlockedHr.setCookie);
-    const unlockedStatus = await firstStore.checkHrAccess({ headers: { cookie: hrCookie } });
-    assert.equal(unlockedStatus.authorized, true);
-    assert.equal(unlockedStatus.pinVersion, 1);
-
-    const approved = await firstStore.approveWebmasterAccess(
-      {
-        headers: {
-          cookie: hrCookie,
-          "user-agent": approvedUserAgent
-        }
-      },
-      {
-        label: "Office Chrome",
-        browser: "Chrome",
-        platform: "Windows",
-        userAgent: approvedUserAgent
-      }
-    );
-
-    assert.equal(approved.authorized, true);
-    assert.match(approved.setCookie, /^palziv_webmaster_auth=/);
-    assert.ok(approved.csrfToken);
-
-    const webmasterCookie = cookiePair(approved.setCookie);
-    const webmasterStatus = await firstStore.checkWebmasterAccess({
+    const hrAccess = await store.checkHrAccess({
       headers: {
-        cookie: webmasterCookie,
-        "user-agent": approvedUserAgent
+        cookie: `palziv_hr_auth=${adminSetup.sessionId}`
       }
     });
-    assert.equal(webmasterStatus.authorized, true);
-    assert.equal(webmasterStatus.hrAuthorized, false);
-    assert.equal(webmasterStatus.approvedBrowser.label, "Office Chrome");
-    assert.equal(webmasterStatus.browserBound, true);
+    assert.equal(Boolean(hrAccess.authorized), true);
 
-    const restartedStore = createSecurityStore({ dataFile });
-    await restartedStore.init();
+    const employeeResult = await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    assert.equal(employeeResult.employee.username, "maria.lopez");
 
-    const persistedState = await restartedStore.readData();
-    assert.equal(persistedState.webmaster?.label, "Office Chrome");
+    const employeeLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(employeeLogin.authorized), true);
 
-    const persistedStatus = await restartedStore.checkWebmasterAccess({
+    const employeeAccess = await store.checkEmployeeAccess({
       headers: {
-        cookie: webmasterCookie,
-        "user-agent": approvedUserAgent
+        cookie: `palziv_employee_auth=${employeeLogin.sessionId}`
       }
     });
-    assert.equal(persistedStatus.authorized, true);
-    assert.equal(persistedStatus.approvedBrowser.label, "Office Chrome");
+    assert.equal(Boolean(employeeAccess.authorized), true);
+    assert.equal(employeeAccess.employee?.username, "maria.lopez");
 
-    const revoked = await restartedStore.lockWebmasterAccess({
+    await store.setEmployeeActive(employeeResult.employee.id, false);
+
+    const revokedAccess = await store.checkEmployeeAccess({
       headers: {
-        cookie: hrCookie,
-        "user-agent": approvedUserAgent
+        cookie: `palziv_employee_auth=${employeeLogin.sessionId}`
       }
     });
-    assert.equal(revoked.authorized, false);
-    assert.match(revoked.setCookie, /^palziv_webmaster_auth=/);
+    assert.equal(Boolean(revokedAccess.authorized), false);
 
-    const revokedStatus = await restartedStore.checkWebmasterAccess({
-      headers: {
-        cookie: webmasterCookie,
-        "user-agent": approvedUserAgent
-      }
-    });
-    assert.equal(revokedStatus.authorized, false);
-    assert.equal(revokedStatus.browserBound, false);
+    const snapshot = await store.readData();
+    assert.equal(snapshot.accessModel, "managed-accounts");
+    assert.equal(snapshot.admin.enabled, true);
+    assert.equal(snapshot.employees.active, 0);
+    assert.equal(snapshot.employees.inactive, 1);
   } finally {
-    if (previousAdminPassword === undefined) {
-      delete process.env.ADMIN_PASSWORD;
-    } else {
-      process.env.ADMIN_PASSWORD = previousAdminPassword;
-    }
-
-    if (previousHrPin === undefined) {
-      delete process.env.HR_PIN;
-    } else {
-      process.env.HR_PIN = previousHrPin;
-    }
-
-    if (previousSessionSecret === undefined) {
-      delete process.env.SESSION_SECRET;
-    } else {
-      process.env.SESSION_SECRET = previousSessionSecret;
-    }
-
     await rm(tempDir, { recursive: true, force: true });
   }
 });
