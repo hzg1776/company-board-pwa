@@ -677,6 +677,53 @@ function normalizedRequestOrigin(value) {
   }
 }
 
+function defaultPortForProtocol(protocol) {
+  return protocol === "https:" ? "443" : protocol === "http:" ? "80" : "";
+}
+
+function parsedOriginParts(value) {
+  try {
+    const url = new URL(String(value));
+    return {
+      protocol: url.protocol,
+      hostname: String(url.hostname || "").toLowerCase(),
+      port: String(url.port || defaultPortForProtocol(url.protocol))
+    };
+  } catch {
+    return null;
+  }
+}
+
+function equivalentTrustedOrigin(candidateOrigin, expectedOrigin) {
+  if (!candidateOrigin || !expectedOrigin) {
+    return false;
+  }
+
+  if (candidateOrigin === expectedOrigin) {
+    return true;
+  }
+
+  const candidate = parsedOriginParts(candidateOrigin);
+  const expected = parsedOriginParts(expectedOrigin);
+
+  if (!candidate || !expected) {
+    return false;
+  }
+
+  if (candidate.protocol !== expected.protocol || candidate.port !== expected.port) {
+    return false;
+  }
+
+  if (candidate.hostname === expected.hostname) {
+    return true;
+  }
+
+  const canonicalCandidateHost = candidate.hostname.replace(/^www\./, "");
+  const canonicalExpectedHost = expected.hostname.replace(/^www\./, "");
+
+  return canonicalCandidateHost === canonicalExpectedHost;
+}
+
 function isSameOriginRequest(req) {
   const expectedOrigin = normalizedRequestOrigin(appBaseUrl(req));
   const requestOrigins = [
@@ -689,7 +736,7 @@ function isSameOriginRequest(req) {
     return true;
   }
 
-  return requestOrigins.some((origin) => origin === expectedOrigin);
+  return requestOrigins.some((origin) => equivalentTrustedOrigin(origin, expectedOrigin));
 }
 
 function requireSameOrigin(req, res) {
