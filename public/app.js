@@ -2510,6 +2510,59 @@ function renderAdminSecurityPanel() {
   `;
 }
 
+function renderPrivilegedPasswordPanel(route) {
+  const role = route === "webmaster" ? "Webmaster" : "HR";
+
+  return `
+    <section class="panel-card" data-privileged-password-panel>
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} password</p>
+          <h3>Change the ${escapeHtml(role.toLowerCase())} password</h3>
+          <p>Saving a new password keeps this session active and signs out other active ${escapeHtml(role.toLowerCase())} sessions.</p>
+        </div>
+      </div>
+      <form class="auth-form" data-privileged-password-form data-role-route="${escapeHtml(route)}">
+        <div class="composer-grid">
+          <label class="field">
+            <span>Current password</span>
+            <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password" placeholder="Current ${escapeHtml(role.toLowerCase())} password">
+          </label>
+          <label class="field">
+            <span>New password</span>
+            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New ${escapeHtml(role.toLowerCase())} password">
+          </label>
+          <label class="field field-span-2">
+            <span>Confirm new password</span>
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+          </label>
+        </div>
+        <div class="auth-form-actions">
+          <button class="ghost-button" type="submit">${icon("lock")} Save new password</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function mountPrivilegedPasswordPanel(route) {
+  if (route !== "hr" && route !== "webmaster") {
+    return;
+  }
+
+  const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
+  if (!access.authorized) {
+    return;
+  }
+
+  const surface = app.querySelector(".panel-surface") || app.querySelector("main");
+  if (!surface || surface.querySelector("[data-privileged-password-panel]")) {
+    return;
+  }
+
+  surface.insertAdjacentHTML("afterbegin", renderPrivilegedPasswordPanel(route));
+}
+
 function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
@@ -3183,6 +3236,7 @@ function render() {
       : APP_DISPLAY_TITLE;
   const focusSnapshot = captureFocusSnapshot();
   app.innerHTML = pageMarkup;
+  mountPrivilegedPasswordPanel(route);
   restoreFocusSnapshot(focusSnapshot);
   syncEmployeeNameField();
   window.requestAnimationFrame(syncEmployeeNameField);
@@ -3497,6 +3551,53 @@ async function handleResetEmployeePasswordSubmit(event) {
   clearMessageSoon();
 }
 
+async function handlePrivilegedPasswordChangeSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const route = form.dataset.roleRoute === "webmaster" ? "webmaster" : "hr";
+  const role = route === "webmaster" ? "Webmaster" : "HR";
+  const data = Object.fromEntries(new FormData(form));
+
+  if (String(data.password || "") !== String(data.confirmPassword || "")) {
+    setMessage("New passwords do not match.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  try {
+    const result = await requestJson(route === "webmaster" ? "/api/webmaster/password" : "/api/hr/password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: data.currentPassword,
+        password: data.password
+      })
+    });
+    form.reset();
+
+    if (route === "webmaster") {
+      state.access.webmaster = {
+        ...state.access.webmaster,
+        ...result,
+        error: ""
+      };
+    } else {
+      state.access.hr = {
+        ...state.access.hr,
+        ...result,
+        error: ""
+      };
+    }
+
+    setMessage(`${role} password updated. Other active sessions were signed out.`, "success");
+  } catch (error) {
+    setMessage(error.message || `Could not update the ${role.toLowerCase()} password.`);
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleRevokeEmployeeSessionsSubmit(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
@@ -3705,6 +3806,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-admin-auth-form]")) {
     await handleAdminAuthSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-privileged-password-form]")) {
+    await handlePrivilegedPasswordChangeSubmit(event);
     return;
   }
 

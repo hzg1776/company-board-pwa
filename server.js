@@ -1016,6 +1016,21 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/hr/password") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.changeAdminPassword(req, {
+        currentPassword: body.currentPassword,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/webmaster/setup") {
       if (!(await requireHrMutationAccess(req, res))) return;
 
@@ -1066,6 +1081,22 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, { ok: true }, {
         "Set-Cookie": webmasterCookieHeader
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/password") {
+      if (!requireSameOrigin(req, res)) return;
+      if (!(await requireWebmasterAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.changeWebmasterPassword(req, {
+        currentPassword: body.currentPassword,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 200, result);
       return;
     }
 

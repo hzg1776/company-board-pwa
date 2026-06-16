@@ -692,6 +692,40 @@ function findValidAdminSession(data, sessionId) {
   return findValidRoleSession(data.adminSessions, sessionId);
 }
 
+function revokeOtherSessions(sessions, activeSessionId, changedAt) {
+  return sessions.map((session) => {
+    if (session.id === activeSessionId) {
+      return {
+        ...session,
+        updatedAt: changedAt,
+        revokedAt: ""
+      };
+    }
+
+    if (session.revokedAt || isSessionExpired(session)) {
+      return session;
+    }
+
+    return {
+      ...session,
+      revokedAt: changedAt,
+      updatedAt: changedAt
+    };
+  });
+}
+
+function clearRoleLoginGuards(data, actor) {
+  const loginGuards = ensureLoginGuards(data);
+  const bucket = actor === "webmaster"
+    ? loginGuards.webmaster
+    : actor === "employee"
+      ? loginGuards.employee
+      : loginGuards.hr;
+
+  bucket.byIp = [];
+  bucket.byAccount = [];
+}
+
 export { normalizeSecurityState };
 
 export function createSecurityStore({ dataFile } = {}) {
@@ -1262,6 +1296,132 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
+  async function changeAdminPassword(req = {}, { currentPassword, password, userAgent = "", clientIp = "" } = {}) {
+    const currentPasswordText = String(currentPassword || "");
+    const nextPasswordText = String(password || "");
+
+    if (!currentPasswordText) {
+      throw new Error("Current password is required.");
+    }
+
+    validateAdminPassword(nextPasswordText);
+
+    return updateData((data) => {
+      const cookieNames = getAccessCookieNames();
+      const activeSessionId = activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]);
+      const session = findValidAdminSession(data, activeSessionId);
+
+      if (!session) {
+        throw new Error("You must be signed in as HR.");
+      }
+
+      if (!data.admin.passwordSalt || !data.admin.passwordHash) {
+        throw new Error("Admin access has not been configured.");
+      }
+
+      if (!verifyPassword(currentPasswordText, data.admin.passwordSalt, data.admin.passwordHash)) {
+        throw new Error("Current password is incorrect.");
+      }
+
+      if (verifyPassword(nextPasswordText, data.admin.passwordSalt, data.admin.passwordHash)) {
+        throw new Error("Choose a new password.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(nextPasswordText);
+      const activeSession = {
+        ...session,
+        updatedAt: changedAt
+      };
+
+      data.admin = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      };
+      data.hr = { ...data.admin };
+      data.adminSessions = revokeOtherSessions(data.adminSessions, session.id, changedAt);
+      data.hrSessions = data.adminSessions;
+      clearRoleLoginGuards(data, "hr");
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "hr_password_changed",
+        actor: "hr",
+        accountKey: "hr",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "password-updated",
+        userAgent
+      }));
+
+      return { session: activeSession };
+    }).then(({ result }) => ({
+      ...adminAccessResponse(result.session),
+      sessionId: result.session.id
+    }));
+  }
+
+  async function changeWebmasterPassword(req = {}, { currentPassword, password, userAgent = "", clientIp = "" } = {}) {
+    const currentPasswordText = String(currentPassword || "");
+    const nextPasswordText = String(password || "");
+
+    if (!currentPasswordText) {
+      throw new Error("Current password is required.");
+    }
+
+    validateAdminPassword(nextPasswordText);
+
+    return updateData((data) => {
+      const cookieNames = getAccessCookieNames();
+      const activeSessionId = activeCookieValue(req, [cookieNames.webmaster]);
+      const session = findValidRoleSession(data.webmasterSessions, activeSessionId);
+
+      if (!session) {
+        throw new Error("You must be signed in as Webmaster.");
+      }
+
+      if (!data.webmaster.passwordSalt || !data.webmaster.passwordHash) {
+        throw new Error("Webmaster access has not been configured.");
+      }
+
+      if (!verifyPassword(currentPasswordText, data.webmaster.passwordSalt, data.webmaster.passwordHash)) {
+        throw new Error("Current password is incorrect.");
+      }
+
+      if (verifyPassword(nextPasswordText, data.webmaster.passwordSalt, data.webmaster.passwordHash)) {
+        throw new Error("Choose a new password.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(nextPasswordText);
+      const activeSession = {
+        ...session,
+        updatedAt: changedAt
+      };
+
+      data.webmaster = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      };
+      data.webmasterSessions = revokeOtherSessions(data.webmasterSessions, session.id, changedAt);
+      clearRoleLoginGuards(data, "webmaster");
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_password_changed",
+        actor: "webmaster",
+        accountKey: "webmaster",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "password-updated",
+        userAgent
+      }));
+
+      return { session: activeSession };
+    }).then(({ result }) => ({
+      ...adminAccessResponse(result.session),
+      sessionId: result.session.id
+    }));
+  }
+
   async function resetEmployeePassword(employeeId, password) {
     const targetId = cleanText(employeeId, 80);
 
@@ -1373,6 +1533,8 @@ export function createSecurityStore({ dataFile } = {}) {
     listEmployees,
     createEmployeeAccount,
     setEmployeeActive,
+    changeAdminPassword,
+    changeWebmasterPassword,
     resetEmployeePassword,
     revokeEmployeeSessions
   };
