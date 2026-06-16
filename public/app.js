@@ -150,7 +150,8 @@ const adminTabs = [
   { id: "alerts", label: "Alerts", icon: "bell" },
   { id: "history", label: "History", icon: "board" },
   { id: "security", label: "Security", icon: "alert" },
-  { id: "share", label: "Access", icon: "users" }
+  { id: "share", label: "Access", icon: "users" },
+  { id: "settings", label: "Settings", icon: "lock" }
 ];
 const employeeFeedFilters = ["All", "Urgent", "Important", "Normal", "News", "Weather", "Safety", "Shift", "HR"];
 const webmasterTabs = [
@@ -158,7 +159,8 @@ const webmasterTabs = [
   { id: "traffic", label: "Traffic", icon: "refresh" },
   { id: "system", label: "System", icon: "monitor" },
   { id: "content", label: "Content", icon: "board" },
-  { id: "codex", label: "Codex", icon: "clipboard" }
+  { id: "codex", label: "Codex", icon: "clipboard" },
+  { id: "settings", label: "Settings", icon: "lock" }
 ];
 const EMPLOYEE_REFRESH_MS = 60_000;
 
@@ -895,12 +897,17 @@ function isStateChangingMethod(method) {
 function csrfTokenForPath(pathname) {
   const route = new URL(String(pathname || "/"), window.location.origin).pathname;
 
-  if (route === "/api/push/test" || route === "/api/webmaster/logout") {
+  if (
+    route === "/api/push/test" ||
+    route === "/api/webmaster/logout" ||
+    route === "/api/webmaster/password"
+  ) {
     return String(state.access.webmaster?.csrfToken || "");
   }
 
   if (
     route === "/api/hr/logout" ||
+    route === "/api/hr/password" ||
     route === "/api/webmaster/setup" ||
     route === "/api/employees" ||
     route.startsWith("/api/employees/") ||
@@ -2510,21 +2517,59 @@ function renderAdminSecurityPanel() {
   `;
 }
 
+function renderRoleSettingsHero(route) {
+  const role = route === "webmaster" ? "Webmaster" : "HR";
+  const passwordStatus = state.passwordChangeStatus?.[route] || null;
+
+  return `
+    <section class="panel-card settings-hero-card">
+      <div class="settings-hero-grid">
+        <div class="settings-hero-copy">
+          <p class="eyebrow">${icon("lock")} Settings</p>
+          <h2>${escapeHtml(role)} account settings</h2>
+          <p>${escapeHtml(
+            route === "webmaster"
+              ? "Keep diagnostics and system review in the operational tabs. Use this space for identity, credential, and account maintenance."
+              : "Keep publishing and employee operations in the working tabs. Use this space only for HR account and credential maintenance."
+          )}</p>
+        </div>
+        <div class="settings-chip-grid" aria-label="${escapeHtml(role)} settings summary">
+          <div class="settings-chip">
+            <span>Surface</span>
+            <strong>Settings only</strong>
+            <small>Sensitive controls stay out of the daily workflow.</small>
+          </div>
+          <div class="settings-chip">
+            <span>Session rule</span>
+            <strong>Contained</strong>
+            <small>Other active ${escapeHtml(role.toLowerCase())} sessions are signed out after a password change.</small>
+          </div>
+          <div class="settings-chip">
+            <span>Last password change</span>
+            <strong>${escapeHtml(passwordStatus ? formatDate(passwordStatus.changedAt) : "Not changed in this session")}</strong>
+            <small>${escapeHtml(passwordStatus ? "Verified in the current session." : "No local confirmation yet.")}</small>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderPrivilegedPasswordPanel(route) {
   const role = route === "webmaster" ? "Webmaster" : "HR";
   const passwordStatus = state.passwordChangeStatus?.[route] || null;
 
   return `
-    <section class="panel-card" data-privileged-password-panel>
+    <section class="panel-card settings-credential-card" data-privileged-password-panel>
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} password</p>
+          <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} credentials</p>
           <h3>Change the ${escapeHtml(role.toLowerCase())} password</h3>
-          <p>Saving a new password keeps this session active and signs out other active ${escapeHtml(role.toLowerCase())} sessions.</p>
+          <p>Use this only for account maintenance. Saving a new password keeps this session active and signs out other active ${escapeHtml(role.toLowerCase())} sessions.</p>
         </div>
       </div>
       ${passwordStatus ? `
-      <div class="status-display">
+      <div class="status-display settings-status-card">
         <span>Last password changed</span>
         <strong>${escapeHtml(formatDate(passwordStatus.changedAt))}</strong>
         <small>${escapeHtml(passwordStatus.otherSessionsSignedOut ? "Other active sessions were signed out immediately." : "Session status unchanged.")}</small>
@@ -2553,22 +2598,70 @@ function renderPrivilegedPasswordPanel(route) {
   `;
 }
 
-function mountPrivilegedPasswordPanel(route) {
-  if (route !== "hr" && route !== "webmaster") {
-    return;
-  }
+function renderAdminSettingsPanel() {
+  return `
+    <section class="panel-stack settings-shell">
+      ${renderRoleSettingsHero("hr")}
 
-  const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
-  if (!access.authorized) {
-    return;
-  }
+      <section class="panel-card settings-context-card">
+        <div class="panel-title panel-title-wide">
+          <div>
+            <p class="eyebrow">${icon("check")} Design boundary</p>
+            <h3>Account controls are intentionally separated</h3>
+            <p>This settings tab isolates low-frequency security actions from the high-frequency work of publishing, alerts, weather updates, and employee access management.</p>
+          </div>
+        </div>
 
-  const surface = app.querySelector(".panel-surface") || app.querySelector("main");
-  if (!surface || surface.querySelector("[data-privileged-password-panel]")) {
-    return;
-  }
+        <div class="settings-context-grid">
+          <div class="settings-context-item">
+            <span>Primary workflow</span>
+            <strong>Publish, alert, manage employees</strong>
+            <small>Operational work stays in the main tabs.</small>
+          </div>
+          <div class="settings-context-item">
+            <span>Security workflow</span>
+            <strong>Explicit settings-only action</strong>
+            <small>Credential changes are deliberate, not ambient.</small>
+          </div>
+        </div>
+      </section>
 
-  surface.insertAdjacentHTML("afterbegin", renderPrivilegedPasswordPanel(route));
+      ${renderPrivilegedPasswordPanel("hr")}
+    </section>
+  `;
+}
+
+function renderWebmasterSettingsPanel() {
+  return `
+    <section class="panel-stack settings-shell">
+      ${renderRoleSettingsHero("webmaster")}
+
+      <section class="panel-card settings-context-card">
+        <div class="panel-title panel-title-wide">
+          <div>
+            <p class="eyebrow">${icon("monitor")} Control boundary</p>
+            <h3>Keep diagnostics separate from credentials</h3>
+            <p>The webmaster console should feel analytical and calm. Credential changes belong in a separate settings surface so operators do not treat security actions like routine navigation.</p>
+          </div>
+        </div>
+
+        <div class="settings-context-grid">
+          <div class="settings-context-item">
+            <span>Operational tabs</span>
+            <strong>Overview, traffic, system, content</strong>
+            <small>System review remains uncluttered and fast to scan.</small>
+          </div>
+          <div class="settings-context-item">
+            <span>Credential action</span>
+            <strong>Isolated under settings</strong>
+            <small>Changing the webmaster password signs out other active webmaster sessions immediately.</small>
+          </div>
+        </div>
+      </section>
+
+      ${renderPrivilegedPasswordPanel("webmaster")}
+    </section>
+  `;
 }
 
 function renderAdminAccessPanel() {
@@ -3087,7 +3180,9 @@ function renderWebmaster() {
                 ? renderWebmasterSystemPanel()
                 : activeWebmasterTab === "content"
                   ? renderWebmasterContentPanel()
-                  : renderWebmasterCodexPanel()
+                  : activeWebmasterTab === "codex"
+                    ? renderWebmasterCodexPanel()
+                    : renderWebmasterSettingsPanel()
         }
       </section>
     </main>
@@ -3137,7 +3232,9 @@ function renderAdmin() {
                   ? renderAdminHistoryPanel()
                   : activeAdminTab === "security"
                     ? renderAdminSecurityPanel()
-                    : renderAdminAccessPanel()
+                    : activeAdminTab === "share"
+                      ? renderAdminAccessPanel()
+                      : renderAdminSettingsPanel()
         }
       </section>
     </main>
@@ -3244,7 +3341,6 @@ function render() {
       : APP_DISPLAY_TITLE;
   const focusSnapshot = captureFocusSnapshot();
   app.innerHTML = pageMarkup;
-  mountPrivilegedPasswordPanel(route);
   restoreFocusSnapshot(focusSnapshot);
   syncEmployeeNameField();
   window.requestAnimationFrame(syncEmployeeNameField);
