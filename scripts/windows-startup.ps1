@@ -80,16 +80,16 @@ function Resolve-PublicBaseUrl {
     }
 
     $configText = Get-Content -LiteralPath $configPath -Raw
-    $matches = [regex]::Matches($configText, '(?m)^\s*hostname:\s*(.+)$')
+    $matches = [regex]::Matches($configText, '(?m)^\s*-\s*hostname:\s*(.+)$')
     if (-not $matches.Count) {
       continue
     }
 
     $hostnames = @(
       foreach ($match in $matches) {
-        $host = $match.Groups[1].Value.Trim()
-        if ($host) {
-          $host
+        $entryHost = $match.Groups[1].Value.Trim()
+        if ($entryHost) {
+          $entryHost
         }
       }
     ) | Select-Object -Unique

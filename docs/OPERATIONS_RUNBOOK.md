@@ -10,6 +10,7 @@ This runbook is the day-to-day operating guide for the live pilot deployment of 
 - Public URL: `https://itotexpress.com`
 - Reverse proxy: Cloudflare Tunnel
 - App startup: scheduled tasks
+- Tunnel watchdog: scheduled task every 1 minute
 - Data storage: local JSON files in `data/`
 
 ## Required Configuration
@@ -46,6 +47,14 @@ Expected:
 - `/palzivalerts/employee` returns `200`
 - `/palzivalerts/hr` returns `200`
 - `/palzivalerts/webmaster` returns `200`
+
+Automatic tunnel recovery:
+
+- the watchdog checks local origin health against public health every minute
+- if local origin is healthy but public health is failing, it restarts `cloudflared`
+- it writes to `logs\tunnel-watchdog.log`
+- it writes Windows Application Event Log entries under source `CompanyBoardPWA`
+- if `AlertWebhookUrl` is configured in the watchdog task, it also posts a JSON alert payload
 
 ## Before Any Release
 
@@ -116,6 +125,7 @@ See [ROLLBACK.md](C:/Users/admin/Documents/Codex/Project-A/docs/ROLLBACK.md).
 - application stderr log
 - Windows Task Scheduler last run result
 - Cloudflare tunnel/service status
+- watchdog log and watchdog state
 
 ## Pilot Support Workflow
 

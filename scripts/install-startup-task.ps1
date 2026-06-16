@@ -4,7 +4,8 @@ param(
   [string]$ProjectRoot,
   [int]$Port = 3116,
   [string]$CloudflaredServiceName = "Cloudflared",
-  [string]$CloudflaredConfigPath
+  [string]$CloudflaredConfigPath,
+  [string]$AlertWebhookUrl = $env:OPS_ALERT_WEBHOOK_URL
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +19,11 @@ if (-not $ProjectRoot) {
 $startupScript = Join-Path $ProjectRoot "scripts\windows-startup.ps1"
 if (-not (Test-Path $startupScript)) {
   throw "Startup script not found: $startupScript"
+}
+
+$watchdogScript = Join-Path $ProjectRoot "scripts\tunnel-watchdog.ps1"
+if (-not (Test-Path $watchdogScript)) {
+  throw "Watchdog script not found: $watchdogScript"
 }
 
 if (-not $CloudflaredConfigPath) {
@@ -43,6 +49,24 @@ function New-BoardTaskAction {
   return New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
 }
 
+function New-WatchdogTaskAction {
+  param(
+    [string]$ScriptPath,
+    [string]$Root,
+    [string]$PublicBaseUrl,
+    [int]$Port,
+    [string]$ServiceName,
+    [string]$WebhookUrl
+  )
+
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ProjectRoot `"$Root`" -PublicBaseUrl `"$PublicBaseUrl`" -LocalPort $Port -CloudflaredServiceName `"$ServiceName`""
+  if ($WebhookUrl) {
+    $arguments += " -AlertWebhookUrl `"$WebhookUrl`""
+  }
+
+  return New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
+}
+
 function Get-CloudflaredPublicBaseUrl {
   param([string]$ConfigPath)
 
@@ -51,16 +75,16 @@ function Get-CloudflaredPublicBaseUrl {
   }
 
   $configText = Get-Content -LiteralPath $ConfigPath -Raw
-  $matches = [regex]::Matches($configText, '(?m)^\s*hostname:\s*(.+)$')
+  $matches = [regex]::Matches($configText, '(?m)^\s*-\s*hostname:\s*(.+)$')
   if (-not $matches.Count) {
     throw "Cloudflared config is missing hostname entries: $ConfigPath"
   }
 
   $hostnames = @(
     foreach ($match in $matches) {
-      $host = $match.Groups[1].Value.Trim()
-      if ($host) {
-        $host
+      $entryHost = $match.Groups[1].Value.Trim()
+      if ($entryHost) {
+        $entryHost
       }
     }
   ) | Select-Object -Unique
@@ -128,8 +152,18 @@ if (Test-IsAdministrator) {
   $recoveryTask = Get-ScheduledTask -TaskName $recoveryTaskName
   Write-Host "Registered scheduled task: $($recoveryTask.TaskName)"
   Write-Host "Mode: self-heal every 5 minutes"
+
+  $watchdogTaskName = "$TaskName Tunnel Watchdog"
+  $watchdogAction = New-WatchdogTaskAction -ScriptPath $watchdogScript -Root $ProjectRoot -PublicBaseUrl $publicBaseUrl -Port $Port -ServiceName $CloudflaredServiceName -WebhookUrl $AlertWebhookUrl
+  $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+
+  Register-ScheduledTask -TaskName $watchdogTaskName -Action $watchdogAction -Trigger $watchdogTrigger -Principal $principal -Settings $startupSettings -Force | Out-Null
+
+  $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName
+  Write-Host "Registered scheduled task: $($watchdogTask.TaskName)"
+  Write-Host "Mode: tunnel watchdog every 1 minute"
 } else {
-  Write-Warning "Run this script as Administrator to install the recurring recovery task that self-heals after reboot."
+  Write-Warning "Run this script as Administrator to install the recurring recovery and tunnel watchdog tasks."
 }
 
 function Resolve-CloudflaredExecutable {
