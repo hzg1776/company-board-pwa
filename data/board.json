@@ -76,10 +76,10 @@
   "weather": {
     "location": "27549",
     "resolvedName": "Louisburg, North Carolina, United States",
-    "condition": "Partly cloudy",
-    "temperature": "81°F",
-    "impact": "Changing conditions may affect outdoor work.",
-    "level": "Watch",
-    "updatedAt": "2026-06-15T00:02:58.238Z"
+    "condition": "Clear sky",
+    "temperature": "85°F",
+    "impact": "Normal operations.",
+    "level": "Clear",
+    "updatedAt": "2026-06-17T15:31:38.817Z"
   }
 }

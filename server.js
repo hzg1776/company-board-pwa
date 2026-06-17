@@ -1539,6 +1539,39 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/push/subscribe-failure") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const boardAccess = await requireBoardReadAccess(req, res);
+
+      if (!boardAccess) {
+        return;
+      }
+
+      if (boardAccess.role !== "employee") {
+        sendError(res, 403, "Push enrollment failure logging is only available from the employee board.");
+        return;
+      }
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.recordPushSubscriptionFailure({
+        employeeId: boardAccess.employee.id,
+        username: boardAccess.employee.username,
+        browser: cleanText(body.browser, 60),
+        platform: cleanText(body.platform, 60),
+        step: cleanText(body.step, 80),
+        errorMessage: cleanText(body.errorMessage, 240),
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 201, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/push/unsubscribe") {
       if (!requireSameOrigin(req, res)) return;
 

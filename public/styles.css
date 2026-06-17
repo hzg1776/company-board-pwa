@@ -1440,93 +1440,6 @@ body[data-route="launcher"] {
   justify-self: center;
 }
 
-.employee-setup-dropdown {
-  gap: 0;
-}
-
-.employee-setup-dropdown > summary {
-  list-style: none;
-  cursor: pointer;
-}
-
-.employee-setup-dropdown > summary::-webkit-details-marker {
-  display: none;
-}
-
-.employee-setup-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.employee-setup-summary-copy {
-  min-width: 0;
-}
-
-.employee-setup-summary-copy h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 1.18rem;
-  line-height: 1.15;
-}
-
-.employee-setup-summary-copy p {
-  margin: 5px 0 0;
-  color: var(--muted);
-  line-height: 1.35;
-}
-
-.employee-setup-summary-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.employee-setup-summary:focus-visible {
-  outline: 2px solid var(--steel);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-
-.employee-setup-summary-caret {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(229, 234, 238, 0.95)),
-    repeating-linear-gradient(135deg, rgba(36, 49, 58, 0.015) 0 8px, rgba(36, 49, 58, 0.008) 8px 16px);
-  color: var(--muted);
-  transition: transform 0.18s ease, background-color 0.18s ease;
-}
-
-.employee-setup-summary-caret::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 7px;
-  height: 7px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translateY(-1px) rotate(45deg);
-}
-
-.employee-setup-dropdown[open] .employee-setup-summary-caret::before {
-  transform: translateY(1px) rotate(-135deg);
-}
-
-.employee-setup-body {
-  display: grid;
-  gap: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
 .employee-shell .employee-banner {
   width: min(760px, 100%);
   justify-self: center;
@@ -3043,14 +2956,6 @@ body[data-route="launcher"] {
   .feed-item {
     padding: 14px;
     border-radius: 18px;
-  }
-
-  .employee-setup-summary {
-    flex-direction: column;
-  }
-
-  .employee-setup-summary-meta {
-    align-self: flex-start;
   }
 
   .feed-head {

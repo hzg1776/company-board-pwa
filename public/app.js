@@ -1659,12 +1659,38 @@ async function syncPushState() {
 }
 
 async function enablePushAlerts(profile = state.deviceProfile) {
+  const browser = browserNameFromUserAgent();
+  const platform = platformNameFromUserAgent();
+  let failureStep = "unknown";
+
+  async function reportPushSubscribeFailure(error, step) {
+    const errorMessage = error instanceof Error ? error.message : String(error || "Unknown error");
+
+    try {
+      await requestJson("/api/push/subscribe-failure", {
+        method: "POST",
+        body: JSON.stringify({
+          browser,
+          platform,
+          step,
+          errorMessage
+        })
+      });
+    } catch {
+      // Ignore logging failures so the original subscribe failure remains visible.
+    }
+  }
+
   if (!supportsPushNotifications()) {
-    throw new Error("This browser does not support push alerts.");
+    const error = new Error("This browser does not support push alerts.");
+    await reportPushSubscribeFailure(error, "unsupported-browser");
+    throw error;
   }
 
   if (Notification.permission === "denied") {
-    throw new Error("Notification access is turned off for this site.");
+    const error = new Error("Notification access is turned off for this site.");
+    await reportPushSubscribeFailure(error, "permission-blocked");
+    throw error;
   }
 
   state.push.busy = true;
@@ -1672,21 +1698,23 @@ async function enablePushAlerts(profile = state.deviceProfile) {
   let pushError = null;
 
   try {
+    failureStep = "request-permission";
     const permission = await Notification.requestPermission();
 
     if (permission !== "granted") {
       throw new Error("Notification permission was not granted.");
     }
 
-    const [{ publicKey }, registration] = await Promise.all([
-      requestJson("/api/push/config"),
-      navigator.serviceWorker.ready
-    ]);
+    failureStep = "load-push-config";
+    const { publicKey } = await requestJson("/api/push/config");
+    failureStep = "service-worker-ready";
+    const registration = await navigator.serviceWorker.ready;
 
     let subscription = await registration.pushManager.getSubscription();
     let createdSubscription = false;
 
     if (!subscription) {
+      failureStep = "browser-subscribe";
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey)
@@ -1695,14 +1723,15 @@ async function enablePushAlerts(profile = state.deviceProfile) {
     }
 
     try {
+      failureStep = "server-enroll";
       await requestJson("/api/push/subscribe", {
         method: "POST",
         body: JSON.stringify({
           subscription: typeof subscription.toJSON === "function" ? subscription.toJSON() : subscription,
           deviceId: profile.deviceId,
           label: profile.employeeName || profile.label,
-          browser: browserNameFromUserAgent(),
-          platform: platformNameFromUserAgent(),
+          browser,
+          platform,
           userAgent: navigator.userAgent,
           createdAt: profile.updatedAt || nowIso(),
           updatedAt: nowIso()
@@ -1727,6 +1756,7 @@ async function enablePushAlerts(profile = state.deviceProfile) {
     setMessage("Subscribed this device to push alerts.", "success");
   } catch (error) {
     pushError = error instanceof Error ? error : new Error("Could not subscribe this device.");
+    await reportPushSubscribeFailure(pushError, failureStep);
     state.push.error = formatPushError(pushError, "Could not subscribe this device.");
     throw pushError;
   } finally {
@@ -2567,10 +2597,6 @@ function renderEmployee() {
 
   return `
     <main class="page-shell employee-shell">
-      ${renderAppUpdateBanner()}
-      ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
-      ${renderEmployeeSubscriptionBanner(setup)}
-
       <section class="employee-brand-banner" aria-label="Palziv brand banner">
         <div class="employee-brand-banner-head">
           <div class="employee-brand-banner-copy">
@@ -2580,6 +2606,10 @@ function renderEmployee() {
           </div>
         </div>
       </section>
+
+      ${renderAppUpdateBanner()}
+      ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
+      ${renderEmployeeSubscriptionBanner(setup)}
 
       <section class="feed-shell feed-shell-quiet feed-shell-bare" aria-label="Latest updates feed">
         <div class="feed-list feed-list-quiet">
@@ -4132,45 +4162,6 @@ async function handlePrivilegedPasswordChangeSubmit(event) {
   clearMessageSoon();
 }
 
-async function handleHrRecoverySubmit(event) {
-  event.preventDefault();
-  const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
-
-  if (String(data.password || "") !== String(data.confirmPassword || "")) {
-    setMessage("New passwords must match.");
-    render();
-    clearMessageSoon();
-    return;
-  }
-
-  try {
-    const result = await requestJson("/api/hr/recover", {
-      method: "POST",
-      body: JSON.stringify({
-        code: data.code,
-        password: data.password
-      })
-    });
-    form.reset();
-    state.authRecovery.hr = false;
-    state.access.hr = {
-      ...state.access.hr,
-      ...result,
-      authorized: true,
-      setupRequired: false,
-      error: ""
-    };
-    setMessage("HR access recovered.", "success");
-    await hydrateRoute();
-  } catch (error) {
-    setMessage(error.message || "Could not recover HR access.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
 async function handleHrMasterRecoverySubmit(event) {
   event.preventDefault();
   const form = event.target;
@@ -4204,23 +4195,6 @@ async function handleHrMasterRecoverySubmit(event) {
     await hydrateRoute();
   } catch (error) {
     setMessage(error.message || "Could not recover HR access.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
-async function handleHrRecoveryRequestSubmit(event) {
-  event.preventDefault();
-
-  try {
-    const result = await requestJson("/api/hr/recovery/request", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-    setMessage(`Recovery code sent to ${result.destination}.`, "success");
-  } catch (error) {
-    setMessage(error.message || "Could not send the recovery code.");
   }
 
   render();
@@ -4510,18 +4484,8 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (event.target.matches("[data-hr-recovery-form]")) {
-    await handleHrRecoverySubmit(event);
-    return;
-  }
-
   if (event.target.matches("[data-hr-master-recovery-form]")) {
     await handleHrMasterRecoverySubmit(event);
-    return;
-  }
-
-  if (event.target.matches("[data-hr-recovery-request-form]")) {
-    await handleHrRecoveryRequestSubmit(event);
     return;
   }
 

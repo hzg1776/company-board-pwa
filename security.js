@@ -192,7 +192,12 @@ function normalizeSecurityEvent(input = {}) {
     sourceIp: normalizeSecurityKey(input.sourceIp),
     outcome: cleanText(input.outcome, 40),
     detail: cleanText(input.detail, 200),
-    userAgent: cleanText(input.userAgent, 240)
+    userAgent: cleanText(input.userAgent, 240),
+    employeeId: cleanText(input.employeeId, 80),
+    browser: cleanText(input.browser, 60),
+    platform: cleanText(input.platform, 60),
+    step: cleanText(input.step, 80),
+    errorMessage: cleanText(input.errorMessage, 240)
   };
 }
 
@@ -643,7 +648,11 @@ function logSecurityEvent(event) {
     `outcome=${event.outcome || "unknown"}`,
     event.actor ? `actor=${event.actor}` : "",
     event.accountKey ? `account=${event.accountKey}` : "",
+    event.employeeId ? `employeeId=${event.employeeId}` : "",
     event.sourceIp ? `ip=${event.sourceIp}` : "",
+    event.browser ? `browser=${event.browser}` : "",
+    event.platform ? `platform=${event.platform}` : "",
+    event.step ? `step=${event.step}` : "",
     event.detail ? `detail=${event.detail}` : ""
   ].filter(Boolean).join(" "));
 }
@@ -1228,6 +1237,41 @@ export function createSecurityStore({ dataFile } = {}) {
     };
   }
 
+  async function recordPushSubscriptionFailure({
+    employeeId = "",
+    username = "",
+    browser = "",
+    platform = "",
+    step = "",
+    errorMessage = "",
+    userAgent = "",
+    clientIp = ""
+  } = {}) {
+    const normalizedEmployeeId = cleanText(employeeId, 80);
+    const normalizedUsername = normalizeUsername(username);
+    const normalizedStep = cleanText(step, 80) || "unknown";
+    const normalizedErrorMessage = cleanText(errorMessage, 240) || "unknown";
+
+    return updateData((data) => {
+      const event = appendSecurityEvent(data, createSecurityEvent({
+        type: "employee_push_subscribe_failed",
+        actor: "employee",
+        accountKey: normalizedUsername || normalizedEmployeeId || "employee",
+        employeeId: normalizedEmployeeId,
+        sourceIp: clientIp,
+        outcome: "denied",
+        detail: `${normalizedStep}: ${normalizedErrorMessage}`.slice(0, 200),
+        step: normalizedStep,
+        errorMessage: normalizedErrorMessage,
+        browser,
+        platform,
+        userAgent
+      }));
+      logSecurityEvent(event);
+      return { event };
+    }).then(({ result }) => result);
+  }
+
   async function listEmployees() {
     const data = await readSecurityState();
     return data.employees
@@ -1756,6 +1800,7 @@ export function createSecurityStore({ dataFile } = {}) {
     authenticateEmployee,
     logoutEmployee,
     listSecurityEvents,
+    recordPushSubscriptionFailure,
     listEmployees,
     createEmployeeAccount,
     setEmployeeActive,
