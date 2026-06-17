@@ -1399,14 +1399,15 @@ async function handleApi(req, res, url) {
       if (!(await requireWebmasterMutationAccess(req, res))) return;
 
       const body = await readJsonBody(req);
+      const testId = `push-test-${Date.now()}`;
       const notification = {
-        id: "push-test",
+        id: testId,
         title: cleanText(body.title, 80) || "Palziv test push",
         body: cleanText(body.body ?? body.message, 280) || "This is a delivery check for the current device.",
         type: "Test",
         priority: "Normal",
-        url: normalizeRelativePath(body.url, appPath("hr")),
-        tag: cleanText(body.tag, 120) || "palziv-test-push",
+        url: normalizeRelativePath(body.url, appPath("employee")),
+        tag: cleanText(body.tag, 120) || testId,
         requireInteraction: true,
         createdAt: nowIso()
       };

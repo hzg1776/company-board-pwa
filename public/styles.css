@@ -575,11 +575,76 @@ svg {
   justify-content: flex-end;
 }
 
+.employee-layout {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.employee-content-stack {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.employee-menu-rail {
+  position: sticky;
+  top: 102px;
+  display: grid;
+  gap: 10px;
+  align-self: start;
+}
+
+.employee-menu-button {
+  width: 58px;
+  min-height: 58px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 240, 243, 0.98)),
+    repeating-linear-gradient(135deg, rgba(36, 49, 58, 0.018) 0 8px, rgba(36, 49, 58, 0.008) 8px 16px);
+  color: var(--steel);
+  box-shadow: var(--notice-shadow);
+}
+
+.employee-menu-button.active {
+  background:
+    linear-gradient(180deg, rgba(34, 48, 58, 0.98), rgba(24, 33, 40, 0.98)),
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0 8px, rgba(255, 255, 255, 0.01) 8px 16px);
+  border-color: rgba(20, 26, 31, 0.6);
+  color: #fff;
+}
+
+.employee-menu-button.alerts-ready {
+  border-color: rgba(72, 102, 84, 0.34);
+  color: var(--ok);
+}
+
+.employee-menu-button.danger {
+  color: var(--danger);
+}
+
+.employee-menu-button:focus-visible {
+  outline: 2px solid var(--cool);
+  outline-offset: 3px;
+}
+
+.employee-menu-button .icon {
+  width: 22px;
+  height: 22px;
+}
+
 .feed-shell {
   display: grid;
   gap: 12px;
   width: 100%;
   justify-items: center;
+}
+
+.feed-shell-stream {
+  justify-items: stretch;
 }
 
 .feed-intro {
@@ -590,6 +655,12 @@ svg {
   padding: 2px 2px 0;
   width: min(760px, 100%);
   text-align: center;
+}
+
+.feed-intro-stream {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
 }
 
 .feed-intro h2 {
@@ -650,6 +721,15 @@ svg {
   gap: 12px;
   width: min(760px, 100%);
   margin-inline: auto;
+}
+
+.feed-list-stream {
+  width: 100%;
+}
+
+.employee-aux-section {
+  display: grid;
+  gap: 14px;
 }
 
 .feed-item {
@@ -1225,6 +1305,33 @@ svg {
   gap: 12px;
 }
 
+.push-health-note {
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.push-health-note.success {
+  border-color: rgba(72, 102, 84, 0.26);
+  background: rgba(72, 102, 84, 0.08);
+  color: var(--ok);
+}
+
+.push-health-note.warning {
+  border-color: rgba(224, 122, 18, 0.26);
+  background: rgba(224, 122, 18, 0.1);
+  color: var(--safety);
+}
+
+.push-roster-panel {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+
 .employee-alert-panel {
   display: grid;
   gap: 14px;
@@ -1334,6 +1441,75 @@ svg {
   gap: 12px;
 }
 
+.device-subscription-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 240, 243, 0.98)),
+    repeating-linear-gradient(135deg, rgba(36, 49, 58, 0.018) 0 8px, rgba(36, 49, 58, 0.008) 8px 16px);
+  box-shadow: var(--notice-shadow);
+}
+
+.device-subscription-card.success {
+  border-color: rgba(72, 102, 84, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(232, 239, 233, 0.98)),
+    repeating-linear-gradient(135deg, rgba(72, 102, 84, 0.025) 0 8px, rgba(72, 102, 84, 0.008) 8px 16px);
+}
+
+.device-subscription-card.warning {
+  border-color: rgba(224, 122, 18, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 239, 227, 0.98)),
+    repeating-linear-gradient(135deg, rgba(224, 122, 18, 0.025) 0 8px, rgba(224, 122, 18, 0.008) 8px 16px);
+}
+
+.device-subscription-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.device-subscription-copy {
+  min-width: 0;
+}
+
+.device-subscription-copy h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.device-subscription-copy p:not(.eyebrow) {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.42;
+}
+
+.device-subscription-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.device-subscription-note {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.device-subscription-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .device-setup-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1410,6 +1586,38 @@ svg {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 243, 241, 0.98)),
     repeating-linear-gradient(135deg, rgba(160, 62, 44, 0.03) 0 8px, rgba(160, 62, 44, 0.01) 8px 16px);
+}
+
+.push-metric-button {
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 240, 243, 0.98)),
+    repeating-linear-gradient(135deg, rgba(36, 49, 58, 0.018) 0 8px, rgba(36, 49, 58, 0.008) 8px 16px);
+  box-shadow: var(--notice-shadow);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.push-metric-button:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 14px 26px rgba(17, 24, 28, 0.12);
+}
+
+.push-metric-button.selected {
+  border-color: rgba(45, 99, 114, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(221, 232, 236, 0.99)),
+    repeating-linear-gradient(135deg, rgba(45, 99, 114, 0.03) 0 8px, rgba(45, 99, 114, 0.012) 8px 16px);
+  box-shadow: 0 16px 28px rgba(45, 99, 114, 0.14);
+}
+
+.push-metric-button:focus-visible {
+  outline: 2px solid var(--cool);
+  outline-offset: 3px;
 }
 
 .device-row-head {
@@ -1703,6 +1911,19 @@ svg {
     grid-template-columns: 1fr;
   }
 
+  .employee-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-menu-rail {
+    position: static;
+    grid-auto-flow: column;
+    grid-auto-columns: 58px;
+    justify-content: start;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
   .command-strip {
     grid-template-columns: 1fr;
   }
@@ -1780,6 +2001,10 @@ svg {
   .device-setup-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .device-subscription-head {
+    flex-direction: column;
   }
 
   .device-setup-actions .button,
@@ -2656,6 +2881,14 @@ svg {
   .feed-intro {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .feed-intro-stream {
+    justify-content: flex-start;
+  }
+
+  .employee-menu-rail {
+    grid-auto-columns: 54px;
   }
 
   .feed-item {

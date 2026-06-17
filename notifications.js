@@ -117,6 +117,10 @@ function dedupeSubscriptions(subscriptions) {
   return [...map.values()];
 }
 
+function hasEmployeeBinding(subscription) {
+  return Boolean(cleanText(subscription?.employeeId, 80));
+}
+
 function normalizeVapidKeys(input) {
   const publicKey = cleanText(input?.publicKey, 512);
   const privateKey = cleanText(input?.privateKey, 512);
@@ -144,7 +148,11 @@ export function normalizeNotificationState(input) {
   }
 
   const subscriptions = Array.isArray(input.subscriptions)
-    ? dedupeSubscriptions(input.subscriptions.map((subscription) => normalizeSubscription(subscription)).filter(Boolean))
+    ? dedupeSubscriptions(
+        input.subscriptions
+          .map((subscription) => normalizeSubscription(subscription))
+          .filter((subscription) => subscription && hasEmployeeBinding(subscription))
+      )
     : [];
 
   return {
@@ -197,10 +205,6 @@ function isRecoverableSubscriptionError(error) {
   const message = cleanText(error?.message || "", 200).toLowerCase();
 
   return statusCode === 404 || statusCode === 410 || message.includes("not found") || message.includes("gone");
-}
-
-function hasEmployeeBinding(subscription) {
-  return Boolean(cleanText(subscription?.employeeId, 80));
 }
 
 function isSubscriptionAuthorized(subscription) {
@@ -374,6 +378,22 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
         delivered += 1;
         return;
       }
+
+      const subscription = activeSubscriptions[index];
+      console.error("[push] delivery failed", {
+        employeeId: subscription?.employeeId || "",
+        username: subscription?.username || "",
+        label: subscription?.label || "",
+        endpointHost: (() => {
+          try {
+            return new URL(String(subscription?.endpoint || "")).host;
+          } catch {
+            return "";
+          }
+        })(),
+        statusCode: Number(result.reason?.statusCode || result.reason?.status || 0) || null,
+        message: cleanText(result.reason?.message || result.reason?.body || "", 240)
+      });
 
       if (isRecoverableSubscriptionError(result.reason)) {
         invalidEndpoints.push(activeSubscriptions[index].endpoint);

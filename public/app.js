@@ -141,6 +141,7 @@ const historyFilters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "
 let activeAdminTab = "publish";
 let activeWebmasterTab = "overview";
 let activeHistoryFilter = "All";
+let activePushRosterFilter = "active";
 let employeeFeedSearch = "";
 let employeeFeedFilter = "All";
 let employeeFeedRenderTimer = 0;
@@ -1315,16 +1316,119 @@ function formatPushError(error, fallback) {
   return message || fallback;
 }
 
+function currentPushDeviceRecord() {
+  const endpoint = String(state.push.endpoint || "").trim();
+
+  if (!endpoint) {
+    return null;
+  }
+
+  const devices = Array.isArray(state.pushStatus.devices) ? state.pushStatus.devices : [];
+  return devices.find((device) => String(device.endpoint || "").trim() === endpoint) || null;
+}
+
+function buildCurrentPushDeviceState() {
+  const supported = supportsPushNotifications();
+  const permission = state.push.permission;
+  const subscribed = Boolean(state.push.subscribed);
+  const device = currentPushDeviceRecord();
+  const accessState = String(device?.accessState || "").trim();
+  const active = Boolean(device?.authorized);
+  const permissionLabel = !supported
+    ? "Unavailable"
+    : permission === "granted"
+      ? "Allowed"
+      : permission === "denied"
+        ? "Blocked"
+        : "Prompt required";
+  let badge = "Not subscribed";
+  let title = "This device is not enrolled";
+  let detail = "Urgent alerts will skip this browser until you subscribe it here.";
+  let hint = "HR test alerts only reach devices marked Active.";
+  let tone = "warning";
+
+  if (!supported) {
+    badge = isIosDevice() ? "Install required" : "Unavailable";
+    title = isIosDevice() ? "This iPhone still needs the installed web app" : "This browser cannot receive push alerts";
+    detail = isIosDevice()
+      ? "Open this site in Safari, add it to the Home Screen, then reopen the installed app before subscribing."
+      : "Open the portal in a push-capable browser to receive urgent alerts on this device.";
+    hint = "Without browser push support, HR test alerts will never reach this device.";
+    tone = "warning";
+  } else if (permission === "denied") {
+    badge = "Blocked";
+    title = "Notifications are turned off for this site";
+    detail = "This browser denied notification access, so the server cannot deliver urgent alerts here.";
+    hint = "Re-enable notifications in browser settings, then refresh push setup from this device.";
+    tone = "warning";
+  } else if (!subscribed) {
+    badge = "Not subscribed";
+    title = "This device still needs to subscribe";
+    detail = "Push is available here, but this browser has not been enrolled for alerts yet.";
+    hint = "Use the subscribe button below. HR test alerts will skip this device until it is Active.";
+    tone = "warning";
+  } else if (!device) {
+    badge = "Needs refresh";
+    title = "Push is on, but the portal has not confirmed this device";
+    detail = "This browser already has a push subscription, but the server does not yet recognize it as an active delivery target.";
+    hint = "Tap Refresh push setup so this signed-in employee session can register the device properly.";
+    tone = "warning";
+  } else if (active) {
+    badge = "Active";
+    title = "This device should receive urgent alerts";
+    detail = "The browser subscription and the portal roster agree: this device is active for HR test alerts.";
+    hint = "If a future test still does not appear, check system notification settings on this device.";
+    tone = "success";
+  } else if (accessState === "Revoked") {
+    badge = "Revoked";
+    title = "This device was removed from delivery";
+    detail = "A subscription still exists in the browser, but the server marked it as revoked and will skip it.";
+    hint = "Tap Refresh push setup to re-enroll this device for urgent alerts.";
+    tone = "warning";
+  } else {
+    badge = accessState || "Needs refresh";
+    title = "This device is subscribed but not active";
+    detail = "The browser is enrolled, but the server will still skip this device until its registration is refreshed from the current employee session.";
+    hint = "Tap Refresh push setup. HR test alerts only reach devices marked Active.";
+    tone = "warning";
+  }
+
+  const serverLabel = active ? "Active" : accessState || (subscribed ? "Not confirmed" : "Off");
+  const lastUpdatedLabel = device?.updatedAt
+    ? `Last confirmed ${formatDate(device.updatedAt)}`
+    : active
+      ? "No confirmation time recorded"
+      : "No server confirmation recorded yet";
+
+  return {
+    supported,
+    permission,
+    permissionLabel,
+    subscribed,
+    device,
+    accessState,
+    active,
+    badge,
+    title,
+    detail,
+    hint,
+    tone,
+    serverLabel,
+    lastUpdatedLabel
+  };
+}
+
 function buildEmployeeSetupState() {
   const employeeName = String(
     state.deviceProfile.employeeName ||
     state.deviceProfile.label ||
     ""
   ).trim();
-  const pushSupported = supportsPushNotifications();
-  const pushSubscribed = Boolean(state.push.subscribed);
-  const pushPermission = state.push.permission;
-  const pushReady = pushSupported && pushPermission === "granted" && pushSubscribed;
+  const currentPush = buildCurrentPushDeviceState();
+  const pushSupported = currentPush.supported;
+  const pushSubscribed = currentPush.subscribed;
+  const pushPermission = currentPush.permission;
+  const pushReady = currentPush.active;
   let nextStep = {
     title: "Save the employee name",
     detail: "Enter the employee's name so the roster shows exactly who subscribed.",
@@ -1355,10 +1459,24 @@ function buildEmployeeSetupState() {
       detail: "This browser can receive web push. Enter the employee name, then tap subscribe to finish setup.",
       action: "push"
     };
+  } else if (!currentPush.device) {
+    nextStep = {
+      title: "Refresh push setup",
+      detail: "This browser asked for push access, but the portal has not confirmed this device yet. Refresh setup so tests can reach it.",
+      action: "push"
+    };
+  } else if (!pushReady) {
+    nextStep = {
+      title: currentPush.accessState === "Revoked" ? "Re-enroll this device" : "Refresh push setup",
+      detail: currentPush.accessState === "Revoked"
+        ? "This device was removed from alert delivery. Refresh setup to enroll it again."
+        : "This browser is subscribed, but the server will still skip it until you refresh setup from this session.",
+      action: "push"
+    };
   } else if (pushReady) {
     nextStep = {
       title: "This device is ready",
-      detail: "Push is on and the device is enrolled.",
+      detail: "Push is on and this device is active for urgent alerts.",
       action: "profile"
     };
   }
@@ -1384,8 +1502,14 @@ function buildEmployeeSetupState() {
     },
     {
       title: "Web push",
-      value: pushSupported ? (pushReady ? "Ready" : pushPermission === "denied" ? "Blocked" : "Available") : "Unavailable",
-      detail: pushSupported ? "Subscribe this browser to receive push alerts." : "This browser cannot use web push.",
+      value: pushSupported
+        ? (pushReady ? "Active" : pushPermission === "denied" ? "Blocked" : pushSubscribed ? currentPush.serverLabel : "Available")
+        : "Unavailable",
+      detail: pushReady
+        ? "This device is eligible for HR test alerts."
+        : pushSupported
+          ? "Subscribe this browser and keep it Active so urgent alerts can reach this device."
+          : "This browser cannot use web push.",
       complete: pushReady
     }
   ];
@@ -1397,6 +1521,7 @@ function buildEmployeeSetupState() {
     pushPermission,
     busy: Boolean(state.push.busy),
     ready: Boolean(employeeName) && pushReady,
+    currentPush,
     nextStep,
     primaryAction,
     checklist
@@ -1434,6 +1559,7 @@ async function syncPushState() {
   state.push.permission = supported && "Notification" in window ? Notification.permission : "unsupported";
   state.push.ready = false;
   state.push.error = "";
+  state.push.endpoint = "";
 
   if (!supported) {
     state.push.subscribed = false;
@@ -1444,9 +1570,11 @@ async function syncPushState() {
     const registration = await navigator.serviceWorker.ready;
     const subscription = await registration.pushManager.getSubscription();
     state.push.subscribed = Boolean(subscription);
+    state.push.endpoint = subscription?.endpoint || "";
     state.push.ready = true;
   } catch (error) {
     state.push.subscribed = false;
+    state.push.endpoint = "";
     state.push.error = error instanceof Error ? error.message : "Could not read notification state.";
   }
 
@@ -1483,27 +1611,41 @@ async function enablePushAlerts(profile = state.deviceProfile) {
     ]);
 
     let subscription = await registration.pushManager.getSubscription();
+    let createdSubscription = false;
 
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey)
       });
+      createdSubscription = true;
     }
 
-    await requestJson("/api/push/subscribe", {
-      method: "POST",
-      body: JSON.stringify({
-        subscription: typeof subscription.toJSON === "function" ? subscription.toJSON() : subscription,
-        deviceId: profile.deviceId,
-        label: profile.employeeName || profile.label,
-        browser: browserNameFromUserAgent(),
-        platform: platformNameFromUserAgent(),
-        userAgent: navigator.userAgent,
-        createdAt: profile.updatedAt || nowIso(),
-        updatedAt: nowIso()
+    try {
+      await requestJson("/api/push/subscribe", {
+        method: "POST",
+        body: JSON.stringify({
+          subscription: typeof subscription.toJSON === "function" ? subscription.toJSON() : subscription,
+          deviceId: profile.deviceId,
+          label: profile.employeeName || profile.label,
+          browser: browserNameFromUserAgent(),
+          platform: platformNameFromUserAgent(),
+          userAgent: navigator.userAgent,
+          createdAt: profile.updatedAt || nowIso(),
+          updatedAt: nowIso()
+        })
       })
-    });
+    } catch (error) {
+      if (createdSubscription && subscription && typeof subscription.unsubscribe === "function") {
+        try {
+          await subscription.unsubscribe();
+        } catch {
+          // Ignore cleanup failures after a rejected enrollment attempt.
+        }
+      }
+
+      throw error;
+    }
 
     state.push.permission = permission;
     state.push.subscribed = true;
@@ -1516,6 +1658,7 @@ async function enablePushAlerts(profile = state.deviceProfile) {
     throw pushError;
   } finally {
     state.push.busy = false;
+    await loadPushStatus();
     await syncPushState();
     if (pushError) {
       state.push.error = formatPushError(pushError, "Could not subscribe this device.");
@@ -1555,6 +1698,7 @@ async function disablePushAlerts() {
     throw pushError;
   } finally {
     state.push.busy = false;
+    await loadPushStatus();
     await syncPushState();
     if (pushError) {
       state.push.error = formatPushError(pushError, "Could not turn off alerts.");
@@ -1582,26 +1726,28 @@ async function sendTestPush() {
     const skipped = Number(result.skipped || 0);
 
     if (total <= 0) {
-      setMessage("No subscribed devices were available for the test push.", "warning");
+      setMessage("No devices are enrolled for push yet. Subscribe at least one phone or browser first.", "warning");
     } else if (authorized <= 0) {
-      setMessage("No subscribed devices were available for the test push.", "warning");
+      setMessage(`Found ${total} enrolled device${total === 1 ? "" : "s"}, but none are Active yet. Employees need to reopen the portal and refresh alerts on their device.`, "warning");
+    } else if (delivered <= 0) {
+      setMessage(`Found ${authorized} Active device${authorized === 1 ? "" : "s"}, but none confirmed delivery. Reopen the portal on the target device and refresh push setup there.`, "warning");
     } else if (skipped > 0 && removed > 0) {
       setMessage(
-        `Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} skipped and ${removed} stale subscription${removed === 1 ? "" : "s"} were removed.`,
+        `Test push reached ${delivered}/${authorized} Active device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} still need attention and ${removed} stale subscription${removed === 1 ? "" : "s"} were removed.`,
         "success"
       );
     } else if (skipped > 0) {
       setMessage(
-        `Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}; ${skipped} device${skipped === 1 ? "" : "s"} skipped.`,
+        `Test push reached ${delivered}/${authorized} Active device${authorized === 1 ? "" : "s"}; ${skipped} enrolled device${skipped === 1 ? "" : "s"} still need refresh.`,
         "success"
       );
     } else if (removed > 0) {
       setMessage(
-        `Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}; ${removed} stale subscription${removed === 1 ? "" : "s"} removed.`,
+        `Test push reached ${delivered}/${authorized} Active device${authorized === 1 ? "" : "s"}; ${removed} stale subscription${removed === 1 ? "" : "s"} were removed.`,
         "success"
       );
     } else {
-      setMessage(`Test push sent to ${delivered}/${authorized} subscribed device${authorized === 1 ? "" : "s"}.`, "success");
+      setMessage(`Test push reached ${delivered}/${authorized} Active device${authorized === 1 ? "" : "s"}.`, "success");
     }
 
     state.push.error = "";
@@ -1673,6 +1819,31 @@ function renderTestPushControl() {
   return `<button class="ghost-button" type="button" data-send-test-push>${icon("send")} Send test push</button>`;
 }
 
+function renderCurrentPushStatusCard(currentPush) {
+  const badgeClass = currentPush.tone === "success" ? "success" : "warning";
+  const badgeIcon = currentPush.tone === "success" ? icon("check") : icon("alert");
+
+  return `
+    <article class="device-subscription-card ${currentPush.tone}">
+      <div class="device-subscription-head">
+        <div class="device-subscription-copy">
+          <p class="eyebrow">${icon("bell")} This device</p>
+          <h3>${escapeHtml(currentPush.title)}</h3>
+          <p>${escapeHtml(currentPush.detail)}</p>
+        </div>
+        <span class="status-chip ${badgeClass}">${badgeIcon} ${escapeHtml(currentPush.badge)}</span>
+      </div>
+      <div class="device-subscription-facts">
+        <span class="status-chip muted">${icon("lock")} Permission ${escapeHtml(currentPush.permissionLabel)}</span>
+        <span class="status-chip muted">${icon("check")} Server ${escapeHtml(currentPush.serverLabel)}</span>
+        ${currentPush.device?.label ? `<span class="status-chip muted">${icon("users")} ${escapeHtml(currentPush.device.label)}</span>` : ""}
+      </div>
+      <p class="device-subscription-note">${escapeHtml(currentPush.hint)}</p>
+      <small class="device-subscription-meta">${escapeHtml(currentPush.lastUpdatedLabel)}</small>
+    </article>
+  `;
+}
+
 function renderDeviceChecklistItem(item) {
   return `
     <article class="device-setup-step ${item.complete ? "complete" : "missing"}">
@@ -1696,21 +1867,25 @@ function renderEmployeeSetupWizard() {
     ? (isIosDevice()
       ? "Open Safari, use Share -> Add to Home Screen, then reopen the installed app to enable push."
       : "Open the portal in a push-capable browser to subscribe this device.")
-    : setup.pushPermission === "denied"
+  : setup.pushPermission === "denied"
       ? "Enter the employee name, re-enable notifications in browser settings, then return here to subscribe."
+      : setup.currentPush.subscribed && !setup.currentPush.active
+        ? "This browser already has push permission, but the portal will still skip it until you refresh push setup from this signed-in session."
       : setup.nextStep.action === "push"
         ? "Enter the employee name, then tap subscribe to finish setup on this device."
         : "Save the employee name to keep this device easy to identify.";
   const statusText = busy
     ? "Working..."
     : setup.ready
-      ? "Ready"
+      ? "Active"
       : !setup.pushSupported
         ? (isIosDevice() ? "Install required" : "No push support")
         : setup.pushPermission === "denied"
           ? "Push blocked"
-          : setup.nextStep.action === "push"
-            ? "Subscribe"
+          : setup.currentPush.subscribed
+            ? "Needs refresh"
+            : setup.nextStep.action === "push"
+              ? "Subscribe"
             : "Web push";
 
   const titleMarkup = `
@@ -1722,6 +1897,8 @@ function renderEmployeeSetupWizard() {
   `;
 
   const bodyContent = `
+    ${renderCurrentPushStatusCard(setup.currentPush)}
+
     <form class="device-setup-form" data-device-setup-form>
       <div class="device-setup-grid">
         <label class="field full">
@@ -1812,12 +1989,53 @@ function renderNotificationDeviceRoster(devices = [], emptyLabel = "No devices e
 }
 
 function renderAdminPushActions() {
+  return `<p class="panel-copy">Employee devices enroll from the employee portal. Use the roster below to monitor which accounts are Active and which still need cleanup.</p>`;
+}
+
+function renderWebmasterPushActions() {
   return `
     <div class="employee-alert-actions admin-alert-actions">
-      ${renderAlertControls()}
       ${renderTestPushControl()}
     </div>
   `;
+}
+
+function filterPushRosterDevices(filter) {
+  const devices = Array.isArray(state.pushStatus.devices) ? state.pushStatus.devices : [];
+
+  if (filter === "attention") {
+    return devices.filter((device) => !device.authorized);
+  }
+
+  if (filter === "all") {
+    return devices;
+  }
+
+  return devices.filter((device) => device.authorized);
+}
+
+function pushRosterTitle(filter, count) {
+  if (filter === "attention") {
+    return `${count} device${count === 1 ? "" : "s"} needing attention`;
+  }
+
+  if (filter === "all") {
+    return `${count} enrolled device${count === 1 ? "" : "s"}`;
+  }
+
+  return `${count} active device${count === 1 ? "" : "s"}`;
+}
+
+function pushRosterEmptyLabel(filter) {
+  if (filter === "attention") {
+    return "No devices currently need attention.";
+  }
+
+  if (filter === "all") {
+    return "No devices enrolled yet.";
+  }
+
+  return "No devices are Active yet.";
 }
 
 function hasLegacyWeatherSnapshot(weather) {
@@ -1977,47 +2195,6 @@ function renderFeedItem(post) {
   `;
 }
 
-function renderEmployeeFeedToolbar(totalCount, visibleCount) {
-  const search = String(employeeFeedSearch || "");
-  const filter = String(employeeFeedFilter || "All");
-  const active = Boolean(search.trim() || filter !== "All");
-
-  return `
-    <div class="feed-toolbar" role="search" aria-label="Filter and search employee updates">
-      <label class="field inline feed-search-field">
-        <span>${icon("search")} Search</span>
-        <input
-          type="search"
-          name="feed-search"
-          value="${escapeHtml(search)}"
-          placeholder="Search titles, text, or type"
-          data-employee-feed-search
-        >
-      </label>
-
-      <label class="field inline feed-filter-field">
-        <span>${icon("filter")} Filter</span>
-        <select name="feed-filter" data-employee-feed-filter>
-          ${employeeFeedFilters
-            .map(
-              (option) => `
-                <option value="${escapeHtml(option)}" ${option === filter ? "selected" : ""}>
-                  ${escapeHtml(option)}
-                </option>
-              `
-            )
-            .join("")}
-        </select>
-      </label>
-
-      <div class="feed-toolbar-meta">
-        <span class="sync-pill">${escapeHtml(active ? `${visibleCount} of ${totalCount}` : `${totalCount}`)} updates</span>
-        ${active ? '<button class="ghost-button feed-toolbar-clear" type="button" data-clear-employee-feed-filters>Clear</button>' : ""}
-      </div>
-    </div>
-  `;
-}
-
 function renderEmployeeSharePanel() {
   const employeeLink = `${window.location.origin}${routePath("employee")}`;
 
@@ -2040,13 +2217,47 @@ function renderEmployeeSharePanel() {
   `;
 }
 
+function renderEmployeeMenuRail() {
+  const currentPush = buildCurrentPushDeviceState();
+
+  return `
+    <aside class="employee-menu-rail" aria-label="Employee menu">
+      <button class="employee-menu-button active" type="button" data-employee-panel-target="employee-feed" aria-label="Latest updates" title="Latest updates">
+        ${icon("news")}
+      </button>
+      <button class="employee-menu-button ${currentPush.active ? "alerts-ready" : ""}" type="button" data-employee-panel-target="employee-device-setup" aria-label="Alert setup" title="${escapeHtml(currentPush.active ? "Alerts active" : "Alert setup")}">
+        ${icon("bell")}
+      </button>
+      <button class="employee-menu-button" type="button" data-refresh aria-label="Refresh feed" title="Refresh feed">
+        ${icon("refresh")}
+      </button>
+      <button class="employee-menu-button" type="button" data-route="launcher" aria-label="Launcher" title="Launcher">
+        ${icon("home")}
+      </button>
+      <button class="employee-menu-button danger" type="button" data-employee-logout aria-label="Sign out" title="Sign out">
+        ${icon("lock")}
+      </button>
+    </aside>
+  `;
+}
+
 function renderAdminPushPanel() {
   const subscriptions = Number(state.pushStatus.subscriptions || 0);
   const activeSubscriptions = Number(state.pushStatus.authorizedSubscriptions ?? subscriptions);
+  const inactiveSubscriptions = Number(state.pushStatus.inactiveSubscriptions ?? Math.max(0, subscriptions - activeSubscriptions));
   const loaded = Boolean(state.pushStatus.loaded);
+  const rosterFilter = activePushRosterFilter === "attention" || activePushRosterFilter === "all" ? activePushRosterFilter : "active";
+  const rosterDevices = filterPushRosterDevices(rosterFilter);
   const readyCopy = state.pushStatus.supported
     ? "Push delivery is ready."
     : "Push delivery is unavailable on this server.";
+  const followUpCopy = !loaded
+    ? "Checking which devices can receive urgent alerts."
+    : inactiveSubscriptions > 0
+      ? `${inactiveSubscriptions} enrolled device${inactiveSubscriptions === 1 ? "" : "s"} still need refresh before HR tests can reach them.`
+      : activeSubscriptions > 0
+        ? "All enrolled devices are currently Active for HR test alerts."
+        : "No devices are Active yet. Employees still need to finish enrollment on their phone or browser.";
 
   return `
     <section class="tool-panel push-panel panel-card">
@@ -2054,24 +2265,38 @@ function renderAdminPushPanel() {
         <div>
           <p class="eyebrow">${icon("bell")} Alert delivery</p>
           <h2>${escapeHtml(loaded ? `${activeSubscriptions} active device${activeSubscriptions === 1 ? "" : "s"}` : "Loading alert status")}</h2>
-          <p>${escapeHtml(readyCopy)} Employees enable alerts once on each device, then urgent updates can reach everyone at once.</p>
+          <p>${escapeHtml(readyCopy)} Test alerts only reach devices marked Active.</p>
         </div>
       </div>
       <div class="push-metrics">
-        <div class="push-metric">
+        <button class="push-metric push-metric-button ${rosterFilter === "active" ? "selected" : ""}" type="button" data-push-roster-filter="active" aria-pressed="${rosterFilter === "active" ? "true" : "false"}">
           <strong>${escapeHtml(loaded ? String(activeSubscriptions) : "…")}</strong>
           <span>Active devices</span>
-        </div>
-        <div class="push-metric">
-          <strong>${escapeHtml(state.pushStatus.supported ? "Ready" : "Off")}</strong>
-          <span>Push status</span>
-        </div>
-        <div class="push-metric">
+        </button>
+        <button class="push-metric push-metric-button ${rosterFilter === "attention" ? "selected" : ""}" type="button" data-push-roster-filter="attention" aria-pressed="${rosterFilter === "attention" ? "true" : "false"}">
+          <strong>${escapeHtml(loaded ? String(inactiveSubscriptions) : "…")}</strong>
+          <span>Need attention</span>
+        </button>
+        <button class="push-metric push-metric-button ${rosterFilter === "all" ? "selected" : ""}" type="button" data-push-roster-filter="all" aria-pressed="${rosterFilter === "all" ? "true" : "false"}">
           <strong>${escapeHtml(loaded ? String(subscriptions) : "…")}</strong>
           <span>Total devices</span>
-        </div>
+        </button>
       </div>
+      <p class="push-health-note ${inactiveSubscriptions > 0 ? "warning" : "success"}">${escapeHtml(followUpCopy)}</p>
       ${renderAdminPushActions()}
+      <section class="push-roster-panel">
+        <div class="panel-title panel-title-wide">
+          <div>
+            <p class="eyebrow">${icon("users")} Device roster</p>
+            <h2>${escapeHtml(loaded ? pushRosterTitle(rosterFilter, rosterDevices.length) : "Loading enrolled devices")}</h2>
+            <p>Click the delivery totals above to switch between Active devices, cleanup work, and the full roster.</p>
+          </div>
+          <span class="status-chip muted">${icon("filter")} ${escapeHtml(rosterFilter === "attention" ? "Need attention" : rosterFilter === "all" ? "All devices" : "Active only")}</span>
+        </div>
+        ${loaded
+          ? renderNotificationDeviceRoster(rosterDevices, pushRosterEmptyLabel(rosterFilter))
+          : '<div class="empty-state compact">Loading enrolled devices...</div>'}
+      </section>
     </section>
   `;
 }
@@ -2109,6 +2334,8 @@ function renderAccessPinPanel() {
           <span>Push delivery</span>
         </div>
       </div>
+
+      ${renderWebmasterPushActions()}
 
       <p class="panel-copy">If a device needs cleanup, unsubscribe it from the roster or turn alerts off on that browser.</p>
     `
@@ -2283,8 +2510,7 @@ function renderEmployeeDirectoryPanel() {
 }
 
 function renderEmployee() {
-  const notices = filteredEmployeePosts();
-  const totalNotices = visiblePosts().length;
+  const notices = visiblePosts();
   const employeeName = state.access.employee.employee?.name || "Employee";
 
   return `
@@ -2293,35 +2519,40 @@ function renderEmployee() {
         ${brandBlock()}
         <div class="page-actions">
           <span class="sync-pill">${icon("users")} ${escapeHtml(employeeName)}</span>
-          <span class="sync-pill">${icon("news")} Latest feed</span>
-          <button class="ghost-button" type="button" data-employee-logout>${icon("lock")} Sign out</button>
         </div>
       </header>
 
       ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
-      <section class="feed-shell" aria-label="Latest updates feed">
-        <div class="feed-intro">
-          <div>
-            <p class="eyebrow">${icon("news")} Latest updates</p>
-            <h2>Latest from the portal</h2>
-            <p>Newest posts stay up top. Scroll down for the full feed.</p>
-          </div>
+      <div class="employee-layout">
+        ${renderEmployeeMenuRail()}
+
+        <div class="employee-content-stack">
+          <section class="feed-shell feed-shell-stream" id="employee-feed" aria-label="Latest updates feed">
+            <div class="feed-intro feed-intro-stream">
+              <div>
+                <p class="eyebrow">${icon("news")} Latest updates</p>
+                <h2>Latest from the portal</h2>
+                <p>Scroll the stream. Setup and account actions live in the menu rail.</p>
+              </div>
+              <span class="sync-pill">${escapeHtml(`${notices.length}`)} updates</span>
+            </div>
+
+            <div class="feed-list feed-list-stream">
+              ${
+                notices.length
+                  ? notices.map((post) => renderFeedItem(post)).join("")
+                  : `<div class="empty-state">No updates are live right now.</div>`
+              }
+            </div>
+          </section>
+
+          <section class="employee-aux-section" id="employee-device-setup">
+            ${renderEmployeeSetupWizard()}
+          </section>
         </div>
-
-        ${renderEmployeeFeedToolbar(totalNotices, notices.length)}
-
-        <div class="feed-list">
-          ${
-            notices.length
-              ? notices.map((post) => renderFeedItem(post)).join("")
-              : `<div class="empty-state">No updates match your search or filter.</div>`
-          }
-        </div>
-      </section>
-
-      ${renderEmployeeSetupWizard()}
+      </div>
     </main>
   `;
 }
@@ -2493,12 +2724,12 @@ function renderAdminAlertsPanel() {
         <div>
           <p class="eyebrow">${icon("bell")} Alert delivery</p>
           <h2>Delivery status</h2>
-          <p>Keep alert delivery simple: subscribe the device to push, then use test push to verify it receives alerts immediately.</p>
+          <p>HR monitors delivery here. Employees enroll from the employee portal, and Webmaster runs direct push diagnostics.</p>
         </div>
       </div>
       ${renderAdminPushPanel()}
       <div class="panel-card">
-        <p class="panel-copy">Important and urgent updates notify employees automatically through web push. Devices that subscribe here can receive alerts without any paid messaging service.</p>
+        <p class="panel-copy">Important and urgent updates notify employees automatically through web push. Use this roster to see which employee devices are Active and which need cleanup.</p>
       </div>
     </section>
   `;
@@ -3438,18 +3669,6 @@ function captureFocusSnapshot() {
     return null;
   }
 
-  if (active.matches("[data-employee-feed-search]")) {
-    return {
-      selector: "[data-employee-feed-search]",
-      start: active.selectionStart,
-      end: active.selectionEnd
-    };
-  }
-
-  if (active.matches("[data-employee-feed-filter]")) {
-    return { selector: "[data-employee-feed-filter]" };
-  }
-
   return null;
 }
 
@@ -3826,6 +4045,7 @@ document.addEventListener("click", async (event) => {
   if (target.closest("input, select, textarea, label")) return;
 
   const routeButton = target.closest("button[data-route], a[data-route], [role='button'][data-route]");
+  const employeePanelButton = target.closest("[data-employee-panel-target]");
   const tabButton = target.closest("[data-tab]");
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
@@ -3833,6 +4053,7 @@ document.addEventListener("click", async (event) => {
   const enableAlertsButton = target.closest("[data-enable-alerts]");
   const disableAlertsButton = target.closest("[data-disable-alerts]");
   const sendTestPushButton = target.closest("[data-send-test-push]");
+  const pushRosterFilterButton = target.closest("[data-push-roster-filter]");
   const webmasterDrilldownButton = target.closest("[data-webmaster-drilldown-tab]");
   const employeeLogoutButton = target.closest("[data-employee-logout]");
   const adminLogoutButton = target.closest("[data-admin-logout]");
@@ -3850,6 +4071,19 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (employeePanelButton) {
+    event.preventDefault();
+    const panelId = String(employeePanelButton.dataset.employeePanelTarget || "").trim();
+    const panel = panelId ? document.getElementById(panelId) : null;
+    if (panel) {
+      panel.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
+    return;
+  }
+
   if (tabButton) {
     event.preventDefault();
     if (tabButton.dataset.tabGroup === "hr") {
@@ -3857,6 +4091,13 @@ document.addEventListener("click", async (event) => {
     } else if (tabButton.dataset.tabGroup === "webmaster") {
       activeWebmasterTab = tabButton.dataset.tab || "overview";
     }
+    render();
+    return;
+  }
+
+  if (pushRosterFilterButton) {
+    event.preventDefault();
+    activePushRosterFilter = pushRosterFilterButton.dataset.pushRosterFilter || "active";
     render();
     return;
   }
@@ -4080,12 +4321,6 @@ app.addEventListener("submit", async (event) => {
 app.addEventListener("change", (event) => {
   if (!(event.target instanceof HTMLSelectElement)) return;
 
-  if (event.target.matches("[data-employee-feed-filter]")) {
-    employeeFeedFilter = event.target.value || "All";
-    render();
-    return;
-  }
-
   if (event.target.matches("[data-history-filter-select]")) {
     activeHistoryFilter = event.target.value;
     render();
@@ -4106,35 +4341,10 @@ app.addEventListener("change", (event) => {
 
 app.addEventListener("input", (event) => {
   if (!(event.target instanceof HTMLInputElement)) return;
-
-  if (event.target.matches("[data-employee-feed-search]")) {
-    employeeFeedSearch = event.target.value;
-    if (employeeFeedRenderTimer) {
-      window.clearTimeout(employeeFeedRenderTimer);
-    }
-
-    employeeFeedRenderTimer = window.setTimeout(() => {
-      employeeFeedRenderTimer = 0;
-      render();
-    }, 120);
-  }
 });
 
 app.addEventListener("click", (event) => {
   if (!(event.target instanceof HTMLElement)) return;
-
-  if (!event.target.matches("[data-clear-employee-feed-filters]")) {
-    return;
-  }
-
-  if (employeeFeedRenderTimer) {
-    window.clearTimeout(employeeFeedRenderTimer);
-    employeeFeedRenderTimer = 0;
-  }
-
-  employeeFeedSearch = "";
-  employeeFeedFilter = "All";
-  render();
 });
 
 app.addEventListener("toggle", (event) => {
