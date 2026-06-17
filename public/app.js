@@ -142,9 +142,6 @@ let activeAdminTab = "publish";
 let activeWebmasterTab = "overview";
 let activeHistoryFilter = "All";
 let activePushRosterFilter = "active";
-let employeeFeedSearch = "";
-let employeeFeedFilter = "All";
-let employeeFeedRenderTimer = 0;
 const adminTabs = [
   { id: "publish", label: "Publish", icon: "megaphone" },
   { id: "weather", label: "Weather", icon: "cloud" },
@@ -154,7 +151,6 @@ const adminTabs = [
   { id: "share", label: "Access", icon: "users" },
   { id: "settings", label: "Settings", icon: "lock" }
 ];
-const employeeFeedFilters = ["All", "Urgent", "Important", "Normal", "News", "Weather", "Safety", "Shift", "HR"];
 const webmasterTabs = [
   { id: "overview", label: "Overview", icon: "chart" },
   { id: "traffic", label: "Traffic", icon: "refresh" },
@@ -1858,7 +1854,7 @@ function renderDeviceChecklistItem(item) {
   `;
 }
 
-function renderEmployeeSetupWizard() {
+function renderEmployeeSetupWizard({ embedded = false } = {}) {
   const setup = buildEmployeeSetupState();
   const busy = setup.busy;
   const headlineTitle = setup.nextStep.title;
@@ -1890,7 +1886,7 @@ function renderEmployeeSetupWizard() {
 
   const titleMarkup = `
     <div class="employee-setup-summary-copy">
-      <p class="eyebrow">${icon("bell")} Device setup</p>
+      <p class="eyebrow">${embedded ? "Alert settings" : `${icon("bell")} Device setup`}</p>
       <h2>${escapeHtml(headlineTitle)}</h2>
       <p>${escapeHtml(headlineDetail)}</p>
     </div>
@@ -1922,6 +1918,18 @@ function renderEmployeeSetupWizard() {
 
     ${state.push.error ? `<p class="panel-copy employee-alert-error">${escapeHtml(state.push.error)}</p>` : ""}
   `;
+
+  if (embedded) {
+    return `
+      <section class="tool-panel panel-card employee-setup-panel employee-setup-embedded">
+        <div class="panel-title panel-title-wide">
+          ${titleMarkup}
+          <span class="sync-pill">${escapeHtml(statusText)}</span>
+        </div>
+        ${bodyContent}
+      </section>
+    `;
+  }
 
   if (setup.ready) {
     return `
@@ -2090,38 +2098,6 @@ function visiblePosts() {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-function filteredEmployeePosts() {
-  const query = String(employeeFeedSearch || "").trim().toLowerCase();
-  const filter = String(employeeFeedFilter || "All");
-
-  return visiblePosts().filter((post) => {
-    const matchesFilter = filter === "All"
-      ? true
-      : String(post.priority || "") === filter || String(post.type || "") === filter;
-
-    if (!matchesFilter) {
-      return false;
-    }
-
-    if (!query) {
-      return true;
-    }
-
-    const haystack = [
-      post.title,
-      post.body,
-      post.type,
-      post.priority,
-      post.audience
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-
-    return haystack.includes(query);
-  });
-}
-
 function historyPosts() {
   return [...state.posts]
     .filter((post) => {
@@ -2174,21 +2150,20 @@ function renderFeedItem(post) {
 
   return `
     <article class="feed-item priority-${safePriority}">
-      <div class="feed-avatar priority-${safePriority}" aria-hidden="true">
-        ${icon(typeIcon(post.type))}
-      </div>
       <div class="feed-main">
         <div class="feed-head">
           <div class="feed-head-copy">
-            <strong>${escapeHtml(feedTitle)}</strong>
             <span class="feed-type">${escapeHtml(feedType)}</span>
+            <strong>${escapeHtml(feedTitle)}</strong>
           </div>
           <time class="feed-time" datetime="${escapeHtml(createdAt)}">${escapeHtml(feedTime)}</time>
         </div>
+        ${(feedPriority !== "Normal" || post.notifyEmployees) ? `
         <div class="feed-badges">
-          <span class="priority-pill ${safePriority}">${escapeHtml(feedPriority)}</span>
-          ${post.notifyEmployees ? `<span class="sync-pill">${icon("bell")} Alert sent</span>` : ""}
+          ${feedPriority !== "Normal" ? `<span class="priority-pill ${safePriority}">${escapeHtml(feedPriority)}</span>` : ""}
+          ${post.notifyEmployees ? `<span class="sync-pill">Alert sent</span>` : ""}
         </div>
+        ` : ""}
         <p class="feed-body">${escapeHtml(feedBody)}</p>
       </div>
     </article>
@@ -2214,30 +2189,6 @@ function renderEmployeeSharePanel() {
         <a class="employee-link" href="${escapeHtml(routePath("employee"))}">${escapeHtml(employeeLink)}</a>
       </div>
     </section>
-  `;
-}
-
-function renderEmployeeMenuRail() {
-  const currentPush = buildCurrentPushDeviceState();
-
-  return `
-    <aside class="employee-menu-rail" aria-label="Employee menu">
-      <button class="employee-menu-button active" type="button" data-employee-panel-target="employee-feed" aria-label="Latest updates" title="Latest updates">
-        ${icon("news")}
-      </button>
-      <button class="employee-menu-button ${currentPush.active ? "alerts-ready" : ""}" type="button" data-employee-panel-target="employee-device-setup" aria-label="Alert setup" title="${escapeHtml(currentPush.active ? "Alerts active" : "Alert setup")}">
-        ${icon("bell")}
-      </button>
-      <button class="employee-menu-button" type="button" data-refresh aria-label="Refresh feed" title="Refresh feed">
-        ${icon("refresh")}
-      </button>
-      <button class="employee-menu-button" type="button" data-route="launcher" aria-label="Launcher" title="Launcher">
-        ${icon("home")}
-      </button>
-      <button class="employee-menu-button danger" type="button" data-employee-logout aria-label="Sign out" title="Sign out">
-        ${icon("lock")}
-      </button>
-    </aside>
   `;
 }
 
@@ -2511,48 +2462,31 @@ function renderEmployeeDirectoryPanel() {
 
 function renderEmployee() {
   const notices = visiblePosts();
-  const employeeName = state.access.employee.employee?.name || "Employee";
 
   return `
     <main class="page-shell employee-shell">
-      <header class="page-head">
-        ${brandBlock()}
-        <div class="page-actions">
-          <span class="sync-pill">${icon("users")} ${escapeHtml(employeeName)}</span>
-        </div>
-      </header>
-
       ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
-      <div class="employee-layout">
-        ${renderEmployeeMenuRail()}
-
-        <div class="employee-content-stack">
-          <section class="feed-shell feed-shell-stream" id="employee-feed" aria-label="Latest updates feed">
-            <div class="feed-intro feed-intro-stream">
-              <div>
-                <p class="eyebrow">${icon("news")} Latest updates</p>
-                <h2>Latest from the portal</h2>
-                <p>Scroll the stream. Setup and account actions live in the menu rail.</p>
-              </div>
-              <span class="sync-pill">${escapeHtml(`${notices.length}`)} updates</span>
-            </div>
-
-            <div class="feed-list feed-list-stream">
-              ${
-                notices.length
-                  ? notices.map((post) => renderFeedItem(post)).join("")
-                  : `<div class="empty-state">No updates are live right now.</div>`
-              }
-            </div>
-          </section>
-
-          <section class="employee-aux-section" id="employee-device-setup">
-            ${renderEmployeeSetupWizard()}
-          </section>
+      <section class="feed-shell feed-shell-quiet feed-shell-bare" aria-label="Latest updates feed">
+        <div class="feed-list feed-list-quiet">
+          ${
+            notices.length
+              ? notices.map((post) => renderFeedItem(post)).join("")
+              : `<div class="empty-state">No updates are live right now.</div>`
+          }
         </div>
-      </div>
+      </section>
+
+      <details class="employee-quiet-settings" data-employee-setup-dropdown ${state.employeeSetupOpen ? "open" : ""}>
+        <summary class="employee-quiet-settings-summary">Account</summary>
+        <div class="employee-quiet-settings-body">
+          <div class="employee-quiet-actions">
+            <button class="ghost-button employee-signout-button" type="button" data-employee-logout>Sign out</button>
+          </div>
+          ${renderEmployeeSetupWizard({ embedded: true })}
+        </div>
+      </details>
     </main>
   `;
 }
@@ -4045,7 +3979,6 @@ document.addEventListener("click", async (event) => {
   if (target.closest("input, select, textarea, label")) return;
 
   const routeButton = target.closest("button[data-route], a[data-route], [role='button'][data-route]");
-  const employeePanelButton = target.closest("[data-employee-panel-target]");
   const tabButton = target.closest("[data-tab]");
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
@@ -4068,19 +4001,6 @@ document.addEventListener("click", async (event) => {
   if (routeButton) {
     event.preventDefault();
     await routeTo(routeButton.dataset.route);
-    return;
-  }
-
-  if (employeePanelButton) {
-    event.preventDefault();
-    const panelId = String(employeePanelButton.dataset.employeePanelTarget || "").trim();
-    const panel = panelId ? document.getElementById(panelId) : null;
-    if (panel) {
-      panel.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-      });
-    }
     return;
   }
 
@@ -4337,14 +4257,6 @@ app.addEventListener("change", (event) => {
   if (checkbox instanceof HTMLInputElement) {
     checkbox.checked = event.target.value !== "Normal";
   }
-});
-
-app.addEventListener("input", (event) => {
-  if (!(event.target instanceof HTMLInputElement)) return;
-});
-
-app.addEventListener("click", (event) => {
-  if (!(event.target instanceof HTMLElement)) return;
 });
 
 app.addEventListener("toggle", (event) => {
