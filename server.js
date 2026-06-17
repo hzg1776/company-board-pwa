@@ -28,8 +28,14 @@ const PUSH_DATA_FILE = process.env.PUSH_DATA_FILE ? path.resolve(process.env.PUS
 const ANALYTICS_DATA_FILE = process.env.ANALYTICS_DATA_FILE ? path.resolve(process.env.ANALYTICS_DATA_FILE) : path.join(__dirname, "data", "analytics.json");
 const SECURITY_DATA_FILE = process.env.SECURITY_DATA_FILE ? path.resolve(process.env.SECURITY_DATA_FILE) : path.join(__dirname, "data", "security.json");
 const ADMIN_SETUP_TOKEN = String(process.env.ADMIN_SETUP_TOKEN || "");
+const ADMIN_RECOVERY_TOKEN = String(process.env.ADMIN_RECOVERY_TOKEN || process.env.ADMIN_SETUP_TOKEN || "");
+const ADMIN_DAILY_RECOVERY_SEED = String(process.env.ADMIN_DAILY_RECOVERY_SEED || "");
+const HR_RECOVERY_EMAIL = String(process.env.HR_RECOVERY_EMAIL || "");
+const RECOVERY_EMAIL_FROM = String(process.env.RECOVERY_EMAIL_FROM || process.env.EMAIL_FROM || "");
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "");
 const CONFIGURED_PUBLIC_BASE_URL = parseRequiredPublicBaseUrl(process.env.PUBLIC_BASE_URL);
 const TRUST_PROXY_ADDRESSES = parseTrustedProxyAddresses(process.env.TRUST_PROXY_ADDRESSES || "");
+const RECOVERY_TIME_ZONE = "America/New_York";
 const MAX_BODY_BYTES = 1_000_000;
 const EMPLOYEE_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const DEFAULT_SITE_CONFIG = Object.freeze({
@@ -124,14 +130,111 @@ function createHttpError(statusCode, message) {
   return error;
 }
 
-function matchesAdminSetupToken(value) {
-  if (!ADMIN_SETUP_TOKEN) {
+function timingSafeTextMatch(expectedValue, providedValue) {
+  const expectedText = String(expectedValue || "");
+  if (!expectedText) {
     return false;
   }
 
-  const expected = Buffer.from(ADMIN_SETUP_TOKEN, "utf8");
-  const provided = Buffer.from(String(value || ""), "utf8");
+  const expected = Buffer.from(expectedText, "utf8");
+  const provided = Buffer.from(String(providedValue || ""), "utf8");
   return expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
+}
+
+function recoveryDateStamp(baseDate = new Date(), dayOffset = 0) {
+  const shiftedDate = new Date(baseDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: RECOVERY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(shiftedDate);
+  const lookup = Object.fromEntries(parts.filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+  return `${lookup.year}${lookup.month}${lookup.day}`;
+}
+
+function buildDailyAdminRecoveryToken(baseDate = new Date(), dayOffset = 0) {
+  if (!ADMIN_DAILY_RECOVERY_SEED) {
+    return "";
+  }
+
+  const stamp = recoveryDateStamp(baseDate, dayOffset);
+  const digest = crypto
+    .createHmac("sha256", ADMIN_DAILY_RECOVERY_SEED)
+    .update(`palziv-admin-recovery:${stamp}`)
+    .digest("hex")
+    .toUpperCase()
+    .slice(0, 12);
+  const blocks = digest.match(/.{1,4}/g) || [digest];
+  return `PALZIV-${stamp.slice(2)}-${blocks.join("-")}`;
+}
+
+function matchesAdminSetupToken(value) {
+  return timingSafeTextMatch(ADMIN_SETUP_TOKEN, value);
+}
+
+function matchesAdminRecoveryToken(value) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) {
+    return false;
+  }
+
+  if (timingSafeTextMatch(ADMIN_RECOVERY_TOKEN, normalizedValue)) {
+    return true;
+  }
+
+  return [0, -1].some((dayOffset) => timingSafeTextMatch(buildDailyAdminRecoveryToken(new Date(), dayOffset), normalizedValue));
+}
+
+function maskEmailAddress(value) {
+  const email = cleanText(value, 200);
+  const [local, domain] = email.split("@");
+  if (!local || !domain) return "";
+  const visibleLocal = local.length <= 2 ? `${local[0] || ""}*` : `${local.slice(0, 2)}***`;
+  const [domainName, ...domainParts] = domain.split(".");
+  const visibleDomain = `${(domainName || "").slice(0, 1)}***`;
+  return `${visibleLocal}@${visibleDomain}${domainParts.length ? `.${domainParts.join(".")}` : ""}`;
+}
+
+async function sendRecoveryEmail({ to, code, expiresAt } = {}) {
+  if (!RESEND_API_KEY || !RECOVERY_EMAIL_FROM || !to) {
+    throw createHttpError(503, "Email recovery is not configured.");
+  }
+
+  const subject = `${displayBrandName(siteConfig)} HR recovery code`;
+  const expires = new Date(expiresAt || Date.now()).toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: RECOVERY_TIME_ZONE
+  });
+  const brandName = displayBrandName(siteConfig);
+  const text = [
+    `${brandName} HR recovery code`,
+    ``,
+    `Code: ${code}`,
+    `Expires: ${expires} Eastern Time`,
+    ``,
+    `If you did not request this, ignore this email.`
+  ].join("\n");
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: RECOVERY_EMAIL_FROM,
+      to: [to],
+      subject,
+      text,
+      html: `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#141a1f"><p><strong>${escapeHtml(brandName)}</strong> HR recovery code</p><p style="font-size:28px;font-weight:700;letter-spacing:0.08em">${escapeHtml(code)}</p><p>Expires: ${escapeHtml(expires)} Eastern Time</p><p>If you did not request this, ignore this email.</p></div>`
+    })
+  });
+
+  if (!response.ok) {
+    throw createHttpError(502, "Could not send the recovery email.");
+  }
 }
 
 function escapeHtml(value) {
@@ -1078,6 +1181,75 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/hr/recovery/request") {
+      if (!requireSameOrigin(req, res)) return;
+
+      if (!HR_RECOVERY_EMAIL || !RECOVERY_EMAIL_FROM || !RESEND_API_KEY) {
+        throw createHttpError(503, "Email recovery is not configured on the server.");
+      }
+
+      const result = await securityStore.issueHrRecoveryCode({
+        email: HR_RECOVERY_EMAIL,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      await sendRecoveryEmail({
+        to: HR_RECOVERY_EMAIL,
+        code: result.code,
+        expiresAt: result.expiresAt
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        sent: true,
+        destination: maskEmailAddress(HR_RECOVERY_EMAIL),
+        expiresAt: result.expiresAt
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/recover") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      let result;
+
+      if (cleanText(body.code, 32)) {
+        result = await securityStore.recoverAdminAccessByCode({
+          code: body.code,
+          password: body.password,
+          userAgent: req.headers["user-agent"],
+          clientIp: req.socket?.remoteAddress
+        });
+      } else {
+        if (!ADMIN_RECOVERY_TOKEN && !ADMIN_DAILY_RECOVERY_SEED) {
+          throw createHttpError(503, "HR recovery is disabled. Configure email recovery, ADMIN_RECOVERY_TOKEN, or ADMIN_DAILY_RECOVERY_SEED on the server first.");
+        }
+
+        if (!matchesAdminRecoveryToken(body.recoveryToken)) {
+          throw createHttpError(403, "Invalid recovery key.");
+        }
+
+        result = await securityStore.recoverAdminAccess({
+          password: body.password,
+          userAgent: req.headers["user-agent"],
+          clientIp: req.socket?.remoteAddress
+        });
+      }
+
+      sendJson(res, 200, result, {
+        "Set-Cookie": serializeCookie(cookieNames.hr, result.sessionId, {
+          path: "/",
+          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: isSecureRequest(req)
+        })
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/webmaster/setup") {
       if (!(await requireHrMutationAccess(req, res))) return;
 
@@ -1138,6 +1310,20 @@ async function handleApi(req, res, url) {
       const body = await readJsonBody(req);
       const result = await securityStore.changeWebmasterPassword(req, {
         currentPassword: body.currentPassword,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: req.socket?.remoteAddress
+      });
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/password/reset") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.resetWebmasterPasswordByHr(req, {
         password: body.password,
         userAgent: req.headers["user-agent"],
         clientIp: req.socket?.remoteAddress

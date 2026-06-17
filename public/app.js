@@ -243,6 +243,10 @@ const state = {
   },
   message: "",
   messageType: "",
+  authRecovery: {
+    hr: false,
+    webmaster: false
+  },
   employeeInstallGuideOpen: false,
   loading: true
 };
@@ -2391,8 +2395,15 @@ function renderAdminAuthGate(route) {
   const authError = access.error || state.message;
   const canSetup = route === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
   const setupBlocked = route === "webmaster" && access.setupRequired && !access.hrAuthorized;
+  const recoveryMode = route === "hr"
+    ? state.authRecovery.hr
+    : route === "webmaster"
+      ? state.authRecovery.webmaster
+      : false;
   const passwordLabel = route === "webmaster" ? "Webmaster password" : "Management password";
-  const heading = setupBlocked
+  const heading = recoveryMode
+    ? "Forgot password"
+    : setupBlocked
     ? "IT login unavailable"
     : canSetup
       ? `Set ${sectionTitle} password`
@@ -2402,7 +2413,41 @@ function renderAdminAuthGate(route) {
   return renderAuthFrame({
     title: heading,
     error: authError,
-    content: setupBlocked
+    content: recoveryMode
+      ? route === "hr"
+        ? `
+          <div class="auth-form auth-recovery-stack">
+            <p class="auth-inline-meta">Use today's master key to reset the HR password.</p>
+            <form class="auth-form" data-hr-master-recovery-form>
+              <label class="field">
+                <span>Master key</span>
+                <input name="recoveryToken" type="password" required autocomplete="one-time-code" placeholder="Today's master key">
+              </label>
+              <label class="field">
+                <span>New password</span>
+                <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New HR password">
+              </label>
+              <label class="field">
+                <span>Confirm new password</span>
+                <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+              </label>
+              <div class="auth-form-actions">
+                <button class="button" type="submit">Recover with master key</button>
+              </div>
+            </form>
+            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to sign in</button>
+          </div>
+        `
+        : `
+          <div class="auth-form auth-recovery-stack">
+            <p class="auth-inline-meta">HR can reset the IT password.</p>
+            <div class="auth-form-actions">
+              <button class="button" type="button" data-route="hr">Open HR</button>
+            </div>
+            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to sign in</button>
+          </div>
+        `
+      : setupBlocked
       ? `
         <div class="auth-form">
           ${helperText ? `<p class="form-note">${escapeHtml(helperText)}</p>` : ""}
@@ -2429,6 +2474,7 @@ function renderAdminAuthGate(route) {
             <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
           </div>
         </form>
+        ${!canSetup ? `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(route)}">Forgot password?</button>` : ""}
       `
   });
 }
@@ -2566,7 +2612,7 @@ function renderLauncher() {
       ${renderAppUpdateBanner()}
       <section class="launcher-stage">
         <div class="launcher-brand" aria-label="Palziv">
-          <div class="launcher-brand-mark">palziv</div>
+          <img class="launcher-brand-logo" src="/assets/logo.svg" alt="Palziv" loading="eager" decoding="async">
         </div>
 
         <div class="launcher-panel">
@@ -2894,6 +2940,35 @@ function renderPrivilegedPasswordPanel(route) {
   `;
 }
 
+function renderHrWebmasterResetPanel() {
+  return `
+    <section class="panel-card settings-credential-card">
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("monitor")} IT recovery</p>
+          <h3>Reset the IT password</h3>
+          <p>Use HR authority to rotate the IT password and immediately sign out existing IT sessions.</p>
+        </div>
+      </div>
+      <form class="auth-form" data-hr-reset-webmaster-password-form>
+        <div class="composer-grid">
+          <label class="field">
+            <span>New IT password</span>
+            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New IT password">
+          </label>
+          <label class="field">
+            <span>Confirm new IT password</span>
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+          </label>
+        </div>
+        <div class="auth-form-actions">
+          <button class="ghost-button" type="submit">Reset IT password</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function renderAdminSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
@@ -2923,6 +2998,7 @@ function renderAdminSettingsPanel() {
       </section>
 
       ${renderPrivilegedPasswordPanel("hr")}
+      ${renderHrWebmasterResetPanel()}
     </section>
   `;
 }
@@ -3553,6 +3629,8 @@ function clearMessageSoon() {
 
 async function routeTo(route) {
   const nextPath = routePath(route);
+  state.authRecovery.hr = false;
+  state.authRecovery.webmaster = false;
 
   if (route === "launcher") {
     activeAdminTab = "publish";
@@ -3641,9 +3719,13 @@ function render() {
   app.innerHTML = pageMarkup;
   restoreFocusSnapshot(focusSnapshot);
   syncEmployeeNameField();
+  measureEmployeeStickyBanner();
   syncEmployeeStickyBanner();
   window.requestAnimationFrame(syncEmployeeNameField);
-  window.requestAnimationFrame(syncEmployeeStickyBanner);
+  window.requestAnimationFrame(() => {
+    measureEmployeeStickyBanner();
+    syncEmployeeStickyBanner();
+  });
 }
 
 function captureFocusSnapshot() {
@@ -3687,18 +3769,47 @@ function syncEmployeeNameField() {
   }
 }
 
-function syncEmployeeStickyBanner() {
+let employeeBannerResizeObserver = null;
+let employeeBannerFontsReadyHooked = false;
+
+function measureEmployeeStickyBanner() {
   const shell = app.querySelector(".employee-shell");
   const banner = app.querySelector(".employee-brand-banner");
   if (!(shell instanceof HTMLElement) || !(banner instanceof HTMLElement)) return;
 
-  const stickyGap = Number.parseFloat(window.getComputedStyle(shell).getPropertyValue("--employee-sticky-gap")) || 0;
-  const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
-  const stuckThreshold = Math.max(0, banner.offsetTop - stickyGap);
-  const isStuck = scrollTop > stuckThreshold;
+  const bannerHeight = Math.ceil(banner.getBoundingClientRect().height);
+  shell.style.setProperty("--employee-brand-banner-height", `${bannerHeight}px`);
+}
 
-  shell.style.setProperty("--employee-brand-banner-height", `${Math.ceil(banner.offsetHeight)}px`);
-  shell.dataset.employeeBannerStuck = isStuck ? "true" : "false";
+function syncEmployeeStickyBanner() {
+  const banner = app.querySelector(".employee-brand-banner");
+  if (!(banner instanceof HTMLElement)) return;
+
+  measureEmployeeStickyBanner();
+
+  if (typeof ResizeObserver === "function") {
+    if (!employeeBannerResizeObserver) {
+      employeeBannerResizeObserver = new ResizeObserver(() => {
+        measureEmployeeStickyBanner();
+      });
+    }
+
+    const currentBanner = employeeBannerResizeObserver.__banner || null;
+    if (currentBanner !== banner) {
+      if (currentBanner instanceof HTMLElement) {
+        employeeBannerResizeObserver.unobserve(currentBanner);
+      }
+      employeeBannerResizeObserver.observe(banner);
+      employeeBannerResizeObserver.__banner = banner;
+    }
+  }
+
+  if (!employeeBannerFontsReadyHooked && document.fonts?.ready) {
+    employeeBannerFontsReadyHooked = true;
+    document.fonts.ready.then(() => {
+      measureEmployeeStickyBanner();
+    }).catch(() => {});
+  }
 }
 
 async function createPost(payload) {
@@ -4021,6 +4132,130 @@ async function handlePrivilegedPasswordChangeSubmit(event) {
   clearMessageSoon();
 }
 
+async function handleHrRecoverySubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  if (String(data.password || "") !== String(data.confirmPassword || "")) {
+    setMessage("New passwords must match.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  try {
+    const result = await requestJson("/api/hr/recover", {
+      method: "POST",
+      body: JSON.stringify({
+        code: data.code,
+        password: data.password
+      })
+    });
+    form.reset();
+    state.authRecovery.hr = false;
+    state.access.hr = {
+      ...state.access.hr,
+      ...result,
+      authorized: true,
+      setupRequired: false,
+      error: ""
+    };
+    setMessage("HR access recovered.", "success");
+    await hydrateRoute();
+  } catch (error) {
+    setMessage(error.message || "Could not recover HR access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleHrMasterRecoverySubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  if (String(data.password || "") !== String(data.confirmPassword || "")) {
+    setMessage("New passwords must match.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  try {
+    const result = await requestJson("/api/hr/recover", {
+      method: "POST",
+      body: JSON.stringify({
+        recoveryToken: data.recoveryToken,
+        password: data.password
+      })
+    });
+    form.reset();
+    state.authRecovery.hr = false;
+    state.access.hr = {
+      ...state.access.hr,
+      ...result,
+      authorized: true,
+      setupRequired: false,
+      error: ""
+    };
+    setMessage("HR access recovered.", "success");
+    await hydrateRoute();
+  } catch (error) {
+    setMessage(error.message || "Could not recover HR access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleHrRecoveryRequestSubmit(event) {
+  event.preventDefault();
+
+  try {
+    const result = await requestJson("/api/hr/recovery/request", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    setMessage(`Recovery code sent to ${result.destination}.`, "success");
+  } catch (error) {
+    setMessage(error.message || "Could not send the recovery code.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleHrResetWebmasterPasswordSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+
+  if (String(data.password || "") !== String(data.confirmPassword || "")) {
+    setMessage("New passwords must match.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  try {
+    await requestJson("/api/webmaster/password/reset", {
+      method: "POST",
+      body: JSON.stringify({
+        password: data.password
+      })
+    });
+    form.reset();
+    setMessage("IT password reset. Existing IT sessions were signed out.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not reset the IT password.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleRevokeEmployeeSessionsSubmit(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
@@ -4051,6 +4286,8 @@ document.addEventListener("click", async (event) => {
   if (target.closest("input, select, textarea, label")) return;
 
   const routeButton = target.closest("button[data-route], a[data-route], [role='button'][data-route]");
+  const openAuthRecoveryButton = target.closest("[data-open-auth-recovery]");
+  const closeAuthRecoveryButton = target.closest("[data-close-auth-recovery]");
   const tabButton = target.closest("[data-tab]");
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
@@ -4073,6 +4310,24 @@ document.addEventListener("click", async (event) => {
   if (routeButton) {
     event.preventDefault();
     await routeTo(routeButton.dataset.route);
+    return;
+  }
+
+  if (openAuthRecoveryButton) {
+    event.preventDefault();
+    const route = String(openAuthRecoveryButton.dataset.openAuthRecovery || "");
+    if (route === "hr") state.authRecovery.hr = true;
+    if (route === "webmaster") state.authRecovery.webmaster = true;
+    render();
+    return;
+  }
+
+  if (closeAuthRecoveryButton) {
+    event.preventDefault();
+    const route = String(closeAuthRecoveryButton.dataset.closeAuthRecovery || "");
+    if (route === "hr") state.authRecovery.hr = false;
+    if (route === "webmaster") state.authRecovery.webmaster = false;
+    render();
     return;
   }
 
@@ -4255,6 +4510,26 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.matches("[data-hr-recovery-form]")) {
+    await handleHrRecoverySubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-hr-master-recovery-form]")) {
+    await handleHrMasterRecoverySubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-hr-recovery-request-form]")) {
+    await handleHrRecoveryRequestSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-hr-reset-webmaster-password-form]")) {
+    await handleHrResetWebmasterPasswordSubmit(event);
+    return;
+  }
+
   if (event.target.matches("[data-create-employee-form]")) {
     await handleCreateEmployeeSubmit(event);
     return;
@@ -4365,8 +4640,10 @@ window.addEventListener("popstate", async () => {
   render();
 });
 
-window.addEventListener("scroll", syncEmployeeStickyBanner, { passive: true });
-window.addEventListener("resize", syncEmployeeStickyBanner);
+window.addEventListener("resize", () => {
+  measureEmployeeStickyBanner();
+  syncEmployeeStickyBanner();
+});
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(APP_ASSET_VERSION)}`).catch(() => {});

@@ -163,9 +163,9 @@ svg {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: 48px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   text-decoration: none;
   transition: transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
@@ -211,11 +211,17 @@ svg {
 }
 
 .icon-button {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   background: var(--surface);
   border-color: var(--line);
   color: var(--ink);
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(11, 76, 117, 0.42);
+  outline-offset: 2px;
 }
 
 .icon {
@@ -568,6 +574,7 @@ svg {
   width: min(960px, 100%);
   --employee-sticky-gap: 12px;
   --employee-brand-banner-height: 0px;
+  padding-top: 0;
 }
 
 .employee-shell .page-head {
@@ -593,19 +600,25 @@ svg {
 
 .employee-brand-banner {
   display: grid;
-  gap: 10px;
-  width: min(860px, 100%);
-  margin: 0 auto 10px;
-  padding: 18px 22px;
+  gap: 8px;
+  width: min(860px, calc(100% - 28px));
+  margin: 0;
+  padding: 14px 18px;
   border: 1px solid rgba(11, 76, 117, 0.12);
   border-radius: 28px;
   background:
     radial-gradient(circle at top left, rgba(15, 109, 171, 0.16), transparent 40%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(243, 249, 255, 0.96));
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
-  position: sticky;
+  position: fixed;
   top: var(--employee-sticky-gap);
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 40;
+}
+
+.employee-brand-banner + * {
+  margin-top: calc(var(--employee-brand-banner-height) + var(--employee-sticky-gap) + 28px);
 }
 
 .employee-brand-banner-head {
@@ -624,8 +637,8 @@ svg {
   display: flex;
   justify-content: center;
   width: min(860px, 100%);
-  margin: 8px auto 0;
-  padding-bottom: 8px;
+  margin: 16px auto 0;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
 }
 
 .employee-subscription-banner {
@@ -741,8 +754,8 @@ svg {
 }
 
 .employee-signout-button {
-  min-height: 38px;
-  padding-inline: 14px;
+  min-height: 48px;
+  padding-inline: 18px;
   border-radius: 999px;
 }
 
@@ -758,11 +771,7 @@ svg {
 }
 
 .feed-shell-bare {
-  padding-top: 6px;
-}
-
-.employee-shell[data-employee-banner-stuck="true"] .feed-shell-bare {
-  padding-top: calc(var(--employee-brand-banner-height) + 12px);
+  padding-top: 4px;
 }
 
 .feed-intro {
@@ -875,7 +884,7 @@ svg {
 }
 
 .auth-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 16px;
@@ -907,6 +916,33 @@ svg {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+
+.auth-inline-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.auth-inline-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: flex-start;
+  min-height: 48px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--brand);
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.auth-recovery-stack {
+  gap: 14px;
 }
 
 .employee-create-form {
@@ -976,19 +1012,19 @@ svg {
 
 .launcher-shell {
   width: min(760px, 100%);
-  min-height: calc(100svh - 24px);
+  min-height: 100dvh;
   padding: calc(env(safe-area-inset-top, 0px) + 16px) 0 calc(env(safe-area-inset-bottom, 0px) + 20px);
-  display: grid;
-  justify-items: center;
-  align-content: center;
+  display: block;
+  overflow-y: auto;
 }
 
 .launcher-stage {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   width: min(620px, 100%);
+  margin: 0 auto;
   justify-items: center;
-  align-content: center;
+  align-content: start;
 }
 
 .launcher-brand {
@@ -996,12 +1032,12 @@ svg {
   justify-items: center;
 }
 
-.launcher-brand-mark {
-  color: var(--brand);
-  font-size: clamp(2.8rem, 8vw, 4.2rem);
-  font-weight: 800;
-  letter-spacing: -0.08em;
-  line-height: 0.9;
+.launcher-brand-logo {
+  display: block;
+  width: clamp(132px, 24vw, 188px);
+  max-width: 100%;
+  height: auto;
+  filter: drop-shadow(0 10px 24px rgba(15, 23, 42, 0.08));
 }
 
 .launcher-panel {
@@ -1072,7 +1108,7 @@ svg {
 
 @media (max-width: 720px) {
   .launcher-shell {
-    min-height: calc(100svh - 16px);
+    min-height: 100dvh;
     padding: calc(env(safe-area-inset-top, 0px) + 12px) 0 calc(env(safe-area-inset-bottom, 0px) + 18px);
   }
 
@@ -1086,7 +1122,7 @@ svg {
 }
 
 body[data-route="launcher"] {
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 .admin-layout {
@@ -1876,9 +1912,9 @@ body[data-route="launcher"] {
 .field select,
 .field textarea {
   width: 100%;
-  min-height: 44px;
+  min-height: 48px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: #fff;
   color: var(--ink);
   padding: 10px 12px;
@@ -2097,13 +2133,12 @@ body[data-route="launcher"] {
 
 .page-shell.launcher-shell {
   width: min(760px, calc(100% - 24px));
-  min-height: 100svh;
+  min-height: 100dvh;
   padding:
     calc(env(safe-area-inset-top, 0px) + 18px)
     12px
     calc(env(safe-area-inset-bottom, 0px) + 18px);
-  display: grid;
-  place-content: center;
+  display: block;
   gap: 0;
 }
 
@@ -2118,6 +2153,32 @@ body[data-route="launcher"] {
       calc(env(safe-area-inset-top, 0px) + 16px)
       10px
       calc(env(safe-area-inset-bottom, 0px) + 14px);
+  }
+
+  .auth-shell {
+    place-items: start center;
+    padding:
+      calc(env(safe-area-inset-top, 0px) + 16px)
+      12px
+      calc(env(safe-area-inset-bottom, 0px) + 18px);
+  }
+
+  .auth-gate-card {
+    gap: 14px;
+  }
+
+  .employee-brand-banner {
+    width: calc(100% - 24px);
+    padding: 12px 16px;
+  }
+
+  .employee-brand-banner-head,
+  .employee-subscription-banner-head {
+    gap: 12px;
+  }
+
+  .employee-brand-banner-tagline {
+    display: none;
   }
 }
 

@@ -1,6 +1,18 @@
 {
   "posts": [
     {
+      "id": "bda2084c-ec34-4ff5-8c89-619dda5beb1a",
+      "type": "News",
+      "priority": "Normal",
+      "notifyEmployees": true,
+      "title": "Test Alex",
+      "body": "1234",
+      "audience": "All employees",
+      "author": "HR",
+      "createdAt": "2026-06-17T13:11:06.998Z",
+      "expiresAt": ""
+    },
+    {
       "id": "12f58349-9e42-4026-9604-3aece6398a0f",
       "type": "News",
       "priority": "Normal",

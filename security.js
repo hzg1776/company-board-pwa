@@ -196,6 +196,23 @@ function normalizeSecurityEvent(input = {}) {
   };
 }
 
+function normalizeRecoveryChallenge(input = {}) {
+  return {
+    codeSalt: cleanText(input.codeSalt, 128),
+    codeHash: cleanText(input.codeHash, 256),
+    email: cleanText(input.email, 200),
+    requestedAt: cleanText(input.requestedAt, 40),
+    expiresAt: cleanText(input.expiresAt, 40),
+    consumedAt: cleanText(input.consumedAt, 40)
+  };
+}
+
+function normalizeRecoveryState(input = {}) {
+  return {
+    hr: normalizeRecoveryChallenge(input.hr)
+  };
+}
+
 function normalizeSecurityState(input = {}) {
   const admin = normalizeAdmin(selectCanonicalAdminRecord(input.hr, input.admin));
   const webmaster = normalizeAdmin(input.webmaster);
@@ -219,6 +236,7 @@ function normalizeSecurityState(input = {}) {
       .filter((session) => session.id && session.employeeId)
     : [];
   const loginGuards = normalizeLoginGuards(input.loginGuards);
+  const recovery = normalizeRecoveryState(input.recovery);
   const securityEvents = Array.isArray(input.securityEvents)
     ? input.securityEvents
       .map((event) => normalizeSecurityEvent(event))
@@ -236,6 +254,7 @@ function normalizeSecurityState(input = {}) {
     employees,
     employeeSessions,
     loginGuards,
+    recovery,
     securityEvents
   };
 }
@@ -734,6 +753,8 @@ export function createSecurityStore({ dataFile } = {}) {
   let writeQueue = Promise.resolve();
   let memoryState = normalizeSecurityState();
   let initializedAt = "";
+  const HR_RECOVERY_CODE_TTL_MS = 15 * 60 * 1000;
+  const HR_RECOVERY_REQUEST_COOLDOWN_MS = 60 * 1000;
 
   async function readStoredState() {
     if (!dataFile) {
@@ -1422,6 +1443,211 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
+  async function resetWebmasterPasswordByHr(req = {}, { password, userAgent = "", clientIp = "" } = {}) {
+    const nextPasswordText = String(password || "");
+    validateAdminPassword(nextPasswordText);
+
+    return updateData((data) => {
+      const cookieNames = getAccessCookieNames();
+      const activeSessionId = activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]);
+      const session = findValidAdminSession(data, activeSessionId);
+
+      if (!session) {
+        throw new Error("You must be signed in as HR.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(nextPasswordText);
+
+      data.webmaster = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      };
+
+      data.webmasterSessions = data.webmasterSessions.map((entry) => ({
+        ...entry,
+        revokedAt: entry.revokedAt || changedAt,
+        updatedAt: changedAt
+      }));
+
+      clearRoleLoginGuards(data, "webmaster");
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_password_reset_by_hr",
+        actor: "hr",
+        accountKey: "webmaster",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "password-reset",
+        userAgent
+      }));
+
+      return {
+        resetAt: changedAt
+      };
+    }).then(({ result }) => result);
+  }
+
+  async function issueHrRecoveryCode({ email, userAgent = "", clientIp = "" } = {}) {
+    const targetEmail = cleanText(email, 200);
+
+    if (!targetEmail) {
+      throw new Error("HR recovery email is not configured.");
+    }
+
+    return updateData((data) => {
+      const existing = normalizeRecoveryChallenge(data.recovery?.hr);
+      const requestedAt = toTimestamp(existing.requestedAt);
+      const nowMs = Date.now();
+
+      if (requestedAt && (nowMs - requestedAt) < HR_RECOVERY_REQUEST_COOLDOWN_MS) {
+        throw new Error("Wait a moment before requesting another recovery code.");
+      }
+
+      const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+      const hashed = createPasswordHash(code);
+      const requestedAtIso = nowIso();
+      const expiresAt = new Date(nowMs + HR_RECOVERY_CODE_TTL_MS).toISOString();
+
+      data.recovery = normalizeRecoveryState(data.recovery);
+      data.recovery.hr = {
+        codeSalt: hashed.salt,
+        codeHash: hashed.hash,
+        email: targetEmail,
+        requestedAt: requestedAtIso,
+        expiresAt,
+        consumedAt: ""
+      };
+
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "hr_recovery_requested",
+        actor: "recovery",
+        accountKey: "hr",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "issued",
+        detail: "email-code",
+        userAgent
+      }));
+
+      return {
+        code,
+        email: targetEmail,
+        expiresAt,
+        requestedAt: requestedAtIso
+      };
+    }).then(({ result }) => result);
+  }
+
+  async function recoverAdminAccessByCode({ code, password, userAgent = "", clientIp = "" } = {}) {
+    const codeText = cleanText(code, 32);
+    const nextPasswordText = String(password || "");
+
+    if (!codeText) {
+      throw new Error("Recovery code is required.");
+    }
+
+    validateAdminPassword(nextPasswordText);
+
+    return updateData((data) => {
+      const challenge = normalizeRecoveryChallenge(data.recovery?.hr);
+
+      if (!challenge.codeSalt || !challenge.codeHash) {
+        throw new Error("No HR recovery code is active.");
+      }
+
+      if (challenge.consumedAt) {
+        throw new Error("That recovery code has already been used.");
+      }
+
+      if (toTimestamp(challenge.expiresAt) <= Date.now()) {
+        throw new Error("That recovery code has expired.");
+      }
+
+      if (!verifyPassword(codeText, challenge.codeSalt, challenge.codeHash)) {
+        throw new Error("Recovery code is invalid.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(nextPasswordText);
+      const session = createAdminSession(userAgent);
+
+      data.admin = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      };
+      data.hr = { ...data.admin };
+      data.adminSessions = [session];
+      data.hrSessions = data.adminSessions;
+      data.recovery = normalizeRecoveryState(data.recovery);
+      data.recovery.hr = {
+        ...challenge,
+        codeSalt: "",
+        codeHash: "",
+        consumedAt: changedAt
+      };
+
+      clearRoleLoginGuards(data, "hr");
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "hr_access_recovered",
+        actor: "recovery",
+        accountKey: "hr",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "email-recovery",
+        userAgent
+      }));
+
+      return { session };
+    }).then(({ result }) => ({
+      ...adminAccessResponse(result.session),
+      sessionId: result.session.id
+    }));
+  }
+
+  async function recoverAdminAccess({ password, userAgent = "", clientIp = "" } = {}) {
+    const nextPasswordText = String(password || "");
+    validateAdminPassword(nextPasswordText);
+
+    return updateData((data) => {
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(nextPasswordText);
+      const session = createAdminSession(userAgent);
+
+      data.admin = {
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      };
+      data.hr = { ...data.admin };
+      data.adminSessions = [session];
+      data.hrSessions = data.adminSessions;
+      data.recovery = normalizeRecoveryState(data.recovery);
+      data.recovery.hr = {
+        ...normalizeRecoveryChallenge(data.recovery.hr),
+        codeSalt: "",
+        codeHash: "",
+        consumedAt: changedAt
+      };
+
+      clearRoleLoginGuards(data, "hr");
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "hr_access_recovered",
+        actor: "recovery",
+        accountKey: "hr",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "deployment-recovery",
+        userAgent
+      }));
+
+      return { session };
+    }).then(({ result }) => ({
+      ...adminAccessResponse(result.session),
+      sessionId: result.session.id
+    }));
+  }
+
   async function resetEmployeePassword(employeeId, password) {
     const targetId = cleanText(employeeId, 80);
 
@@ -1535,6 +1761,10 @@ export function createSecurityStore({ dataFile } = {}) {
     setEmployeeActive,
     changeAdminPassword,
     changeWebmasterPassword,
+    issueHrRecoveryCode,
+    recoverAdminAccessByCode,
+    resetWebmasterPasswordByHr,
+    recoverAdminAccess,
     resetEmployeePassword,
     revokeEmployeeSessions
   };
