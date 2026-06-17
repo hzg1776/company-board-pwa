@@ -1,18 +1,7 @@
 const ASSET_VERSION = "__ASSET_VERSION__";
 const CACHE_NAME = `palziv-portal-v${ASSET_VERSION}`;
 const SHELL_ASSETS = [
-  "/",
   "/index.html",
-  "/palzivalerts",
-  "/palzivalerts/",
-  "/palzivalerts/employee",
-  "/palzivalerts/hr",
-  "/palzivalerts/webmaster",
-  "/palzivalerts/admin",
-  "/employee",
-  "/hr",
-  "/webmaster",
-  "/admin",
   "/styles.css?v=__ASSET_VERSION__",
   "/app.js?v=__ASSET_VERSION__",
   "/device-setup.js",
@@ -136,8 +125,22 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  if (event.request.mode === "navigate" || event.request.destination === "document") {
+    event.respondWith(
+      fetch(event.request, { cache: "no-store" }).catch(async () => {
+        return (
+          (await caches.match("/index.html")) ||
+          (await caches.match(event.request))
+        );
+      })
+    );
+    return;
+  }
+
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, {
+      cache: url.searchParams.has("v") ? "no-store" : "default"
+    })
       .then((response) => {
         if (response.ok) {
           const clone = response.clone();

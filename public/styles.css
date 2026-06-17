@@ -562,6 +562,7 @@ svg {
 
 .employee-shell {
   width: min(960px, 100%);
+  --employee-sticky-gap: 12px;
 }
 
 .employee-shell .page-head {
@@ -597,6 +598,111 @@ svg {
     radial-gradient(circle at top left, rgba(15, 109, 171, 0.16), transparent 40%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(243, 249, 255, 0.96));
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+  position: sticky;
+  top: var(--employee-sticky-gap);
+  z-index: 40;
+}
+
+.employee-brand-banner-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.employee-brand-banner-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.employee-bottom-actions {
+  display: flex;
+  justify-content: center;
+  width: min(860px, 100%);
+  margin: 8px auto 0;
+  padding-bottom: 8px;
+}
+
+.employee-subscription-banner {
+  display: grid;
+  gap: 10px;
+  width: min(860px, 100%);
+  margin: 0 auto 12px;
+  padding: 16px 18px;
+  border: 1px solid rgba(224, 122, 18, 0.28);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 239, 227, 0.98)),
+    repeating-linear-gradient(135deg, rgba(224, 122, 18, 0.03) 0 10px, rgba(224, 122, 18, 0.01) 10px 20px);
+  box-shadow: 0 20px 40px rgba(17, 24, 28, 0.08);
+}
+
+.employee-subscription-banner-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.employee-subscription-banner-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.employee-subscription-banner-copy h2,
+.employee-subscription-banner-copy p {
+  margin: 0;
+}
+
+.employee-subscription-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.employee-subscription-banner-checklist {
+  display: grid;
+  gap: 8px;
+}
+
+.employee-install-guide {
+  min-width: 0;
+}
+
+.employee-install-guide-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  list-style: none;
+}
+
+.employee-install-guide-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.employee-install-guide-body {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.employee-install-guide-body .panel-copy {
+  margin: 0 0 10px;
+}
+
+.employee-install-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.employee-install-guide-list li + li {
+  margin-top: 6px;
 }
 
 .employee-brand-banner-mark {
@@ -630,8 +736,8 @@ svg {
 }
 
 .employee-signout-button {
-  min-height: 34px;
-  padding-inline: 12px;
+  min-height: 38px;
+  padding-inline: 14px;
   border-radius: 999px;
 }
 
@@ -693,12 +799,6 @@ svg {
 
 .employee-quiet-settings-body {
   padding-top: 12px;
-}
-
-.employee-quiet-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 10px;
 }
 
 .feed-item {
@@ -1460,18 +1560,17 @@ svg {
 
 .device-setup-actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
 }
 
 .device-setup-checklist {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .device-setup-step {
-  padding: 12px 14px;
+  padding: 10px 12px;
   background: var(--surface-strong);
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -1494,15 +1593,8 @@ svg {
 }
 
 .device-setup-step-head strong {
-  display: block;
   font-size: 0.93rem;
   line-height: 1.25;
-}
-
-.device-setup-step-head p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  line-height: 1.35;
 }
 
 .device-roster {
@@ -1674,6 +1766,10 @@ svg {
 .employee-alert-error {
   margin: 0;
   color: var(--danger);
+}
+
+.employee-setup-embedded-minimal {
+  padding: 14px;
 }
 
 .push-metrics {
@@ -1938,6 +2034,33 @@ svg {
 
   .device-setup-actions .button,
   .device-setup-actions .ghost-button {
+    width: 100%;
+  }
+
+  .employee-subscription-banner-head {
+    flex-direction: column;
+  }
+
+  .employee-brand-banner-head {
+    flex-direction: column;
+  }
+
+  .employee-subscription-banner-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .employee-brand-banner-actions {
+    width: 100%;
+  }
+
+  .employee-subscription-banner-actions .button,
+  .employee-subscription-banner-actions .ghost-button,
+  .employee-install-guide {
+    width: 100%;
+  }
+
+  .employee-brand-banner-actions .ghost-button {
     width: 100%;
   }
 

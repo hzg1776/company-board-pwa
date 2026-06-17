@@ -69,6 +69,18 @@ function isIosDevice() {
   return ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod");
 }
 
+function isMobileDevice() {
+  const ua = navigator.userAgent.toLowerCase();
+  return ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod") || ua.includes("android");
+}
+
+function isInstalledWebApp() {
+  return Boolean(
+    window.matchMedia?.("(display-mode: standalone)")?.matches ||
+    window.navigator.standalone === true
+  );
+}
+
 function buildSuggestedDeviceLabel() {
   const browser = browserNameFromUserAgent();
   const platform = platformNameFromUserAgent();
@@ -231,7 +243,7 @@ const state = {
   },
   message: "",
   messageType: "",
-  employeeSetupOpen: false,
+  employeeInstallGuideOpen: false,
   loading: true
 };
 
@@ -956,7 +968,10 @@ function parseAssetVersionFromHtml(html) {
 }
 
 async function fetchLiveAssetVersion() {
-  const response = await fetch(routePath("launcher"), {
+  const checkUrl = new URL(routePath("launcher"), window.location.origin);
+  checkUrl.searchParams.set("asset-check", String(Date.now()));
+
+  const response = await fetch(checkUrl.toString(), {
     method: "GET",
     cache: "no-store",
     headers: {
@@ -1021,7 +1036,7 @@ function renderAppUpdateBanner() {
     <div class="admin-banner warning version-banner">
       <div class="version-banner-copy">
         <strong>New portal update available</strong>
-        <span>This tab is running an older build. Reload now to pick up the latest HR and Webmaster UI changes.</span>
+        <span>This tab or installed app is running an older build. Reload now to pick up the latest employee and admin changes.</span>
       </div>
       <button class="ghost-button version-banner-button" type="button" data-reload-app>${icon("refresh")} Reload now</button>
     </div>
@@ -1425,13 +1440,24 @@ function buildEmployeeSetupState() {
   const pushSubscribed = currentPush.subscribed;
   const pushPermission = currentPush.permission;
   const pushReady = currentPush.active;
+  const installRequired = isMobileDevice();
+  const installed = !installRequired || isInstalledWebApp();
+  const notificationGranted = pushPermission === "granted";
   let nextStep = {
     title: "Save the employee name",
     detail: "Enter the employee's name so the roster shows exactly who subscribed.",
     action: "profile"
   };
 
-  if (!pushSupported) {
+  if (installRequired && !installed) {
+    nextStep = {
+      title: "Install this site on your phone",
+      detail: isIosDevice()
+        ? "Use Safari Share -> Add to Home Screen, then reopen the installed Palziv app before subscribing."
+        : "Add this site to your Home Screen or install the app from the browser menu, then reopen it to finish setup.",
+      action: "profile"
+    };
+  } else if (!pushSupported) {
     nextStep = isIosDevice()
       ? {
           title: "Install this site to Home Screen",
@@ -1443,6 +1469,12 @@ function buildEmployeeSetupState() {
           detail: "This browser cannot use web push. Open the portal in a push-capable browser to enable alerts.",
           action: "profile"
         };
+  } else if (!employeeName) {
+    nextStep = {
+      title: "Enter name to subscribe",
+      detail: "Use your employee name, then tap Subscribe.",
+      action: pushPermission === "denied" ? "profile" : "push"
+    };
   } else if (pushPermission === "denied") {
       nextStep = {
         title: "Enable notifications for this site",
@@ -1480,16 +1512,24 @@ function buildEmployeeSetupState() {
   const primaryAction = nextStep.action === "push"
     ? {
         id: "push",
-        label: pushSubscribed ? "Refresh push setup" : "Save name & subscribe",
+        label: "Subscribe",
         icon: "bell"
       }
     : {
         id: "profile",
-        label: "Save employee name",
+        label: "Save",
         icon: "clipboard"
       };
 
   const checklist = [
+    {
+      title: "Install on phone",
+      value: installRequired ? (installed ? "Installed" : "Needed") : "Not needed",
+      detail: installRequired
+        ? "Open the installed Palziv app from your Home Screen before you finish alert setup."
+        : "Phone installation is only required on mobile devices.",
+      complete: installed
+    },
     {
       title: "Employee name",
       value: employeeName,
@@ -1497,7 +1537,21 @@ function buildEmployeeSetupState() {
       complete: Boolean(employeeName)
     },
     {
-      title: "Web push",
+      title: "Notifications",
+      value: !pushSupported
+        ? "Unavailable"
+        : notificationGranted
+          ? "Allowed"
+          : pushPermission === "denied"
+            ? "Blocked"
+            : "Not allowed",
+      detail: pushSupported
+        ? "This browser must allow notifications before urgent alerts can appear."
+        : "Notifications will become available once this device runs in a supported installed app.",
+      complete: notificationGranted
+    },
+    {
+      title: "Alert delivery",
       value: pushSupported
         ? (pushReady ? "Active" : pushPermission === "denied" ? "Blocked" : pushSubscribed ? currentPush.serverLabel : "Available")
         : "Unavailable",
@@ -1512,11 +1566,13 @@ function buildEmployeeSetupState() {
 
   return {
     employeeName,
+    installRequired,
+    installed,
     pushSupported,
     pushSubscribed,
     pushPermission,
     busy: Boolean(state.push.busy),
-    ready: Boolean(employeeName) && pushReady,
+    ready: Boolean(employeeName) && installed && notificationGranted && pushReady,
     currentPush,
     nextStep,
     primaryAction,
@@ -1844,61 +1900,96 @@ function renderDeviceChecklistItem(item) {
   return `
     <article class="device-setup-step ${item.complete ? "complete" : "missing"}">
       <div class="device-setup-step-head">
-        <div>
-          <strong>${escapeHtml(item.title)}</strong>
-          <p>${escapeHtml(item.detail)}</p>
-        </div>
+        <strong>${escapeHtml(item.title)}</strong>
         <span class="status-chip ${item.complete ? "muted" : "warning"}">${item.complete ? icon("check") : icon("alert")} ${escapeHtml(item.value)}</span>
       </div>
     </article>
   `;
 }
 
-function renderEmployeeSetupWizard({ embedded = false } = {}) {
+function installGuideSteps() {
+  if (isIosDevice()) {
+    return [
+      "Open this page in Safari.",
+      "Tap the Share button.",
+      "Tap Add to Home Screen.",
+      "Open the Palziv app from your Home Screen.",
+      "Return to Account and finish setup."
+    ];
+  }
+
+  if (navigator.userAgent.toLowerCase().includes("android")) {
+    return [
+      "Open this page in Chrome.",
+      "Tap the three dots.",
+      "Tap Install app or Add to Home screen.",
+      "Open the Palziv app from your Home Screen.",
+      "Return to Account and finish setup."
+    ];
+  }
+
+  return [
+    "Open this page on your phone.",
+    "Use the browser menu or Share button.",
+    "Tap Install app or Add to Home Screen.",
+    "Open the Palziv app from your Home Screen.",
+    "Return to Account and finish setup."
+  ];
+}
+
+function renderInstallGuideToggle() {
+  return `
+    <details class="employee-install-guide"${state.employeeInstallGuideOpen ? " open" : ""} data-employee-install-guide>
+      <summary class="ghost-button employee-install-guide-toggle">Install on phone</summary>
+      <div class="employee-install-guide-body">
+        <p class="panel-copy">Use the phone that should receive Palziv alerts.</p>
+        <ol class="employee-install-guide-list">
+          ${installGuideSteps().map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+        </ol>
+      </div>
+    </details>
+  `;
+}
+
+function renderEmployeeSubscriptionBanner(setup) {
+  if (setup.ready) return "";
+
+  const incompleteSteps = setup.checklist.filter((item) => !item.complete);
+  const firstIncomplete = incompleteSteps[0];
+  const headline = firstIncomplete?.title === "Install on phone"
+    ? "Install the Palziv app on this phone before alerts can work."
+    : firstIncomplete?.title === "Employee name"
+      ? "Enter name to subscribe."
+    : "This phone is not fully subscribed for urgent alerts yet.";
+
+  return `
+    <section class="employee-subscription-banner warning" aria-label="Not subscribed">
+      <div class="employee-subscription-banner-head">
+        <div class="employee-subscription-banner-copy">
+          <p class="eyebrow">${icon("alert")} Not subscribed</p>
+          <h2>${escapeHtml(headline)}</h2>
+        </div>
+        <div class="employee-subscription-banner-actions">
+          ${setup.installRequired && !setup.installed ? renderInstallGuideToggle() : ""}
+        </div>
+      </div>
+      <div class="employee-subscription-banner-checklist">
+        ${incompleteSteps.map((item) => renderDeviceChecklistItem(item)).join("")}
+      </div>
+      ${renderEmployeeSetupWizard()}
+    </section>
+  `;
+}
+
+function renderEmployeeSetupWizard() {
   const setup = buildEmployeeSetupState();
   const busy = setup.busy;
-  const headlineTitle = setup.nextStep.title;
-  const headlineDetail = `${pushSupportText()} ${setup.nextStep.detail}`.trim();
-  const formNote = !setup.pushSupported
-    ? (isIosDevice()
-      ? "Open Safari, use Share -> Add to Home Screen, then reopen the installed app to enable push."
-      : "Open the portal in a push-capable browser to subscribe this device.")
-  : setup.pushPermission === "denied"
-      ? "Enter the employee name, re-enable notifications in browser settings, then return here to subscribe."
-      : setup.currentPush.subscribed && !setup.currentPush.active
-        ? "This browser already has push permission, but the portal will still skip it until you refresh push setup from this signed-in session."
-      : setup.nextStep.action === "push"
-        ? "Enter the employee name, then tap subscribe to finish setup on this device."
-        : "Save the employee name to keep this device easy to identify.";
-  const statusText = busy
-    ? "Working..."
-    : setup.ready
-      ? "Active"
-      : !setup.pushSupported
-        ? (isIosDevice() ? "Install required" : "No push support")
-        : setup.pushPermission === "denied"
-          ? "Push blocked"
-          : setup.currentPush.subscribed
-            ? "Needs refresh"
-            : setup.nextStep.action === "push"
-              ? "Subscribe"
-            : "Web push";
 
-  const titleMarkup = `
-    <div class="employee-setup-summary-copy">
-      <p class="eyebrow">${embedded ? "Alert settings" : `${icon("bell")} Device setup`}</p>
-      <h2>${escapeHtml(headlineTitle)}</h2>
-      <p>${escapeHtml(headlineDetail)}</p>
-    </div>
-  `;
-
-  const bodyContent = `
-    ${renderCurrentPushStatusCard(setup.currentPush)}
-
+  const formMarkup = `
     <form class="device-setup-form" data-device-setup-form>
       <div class="device-setup-grid">
         <label class="field full">
-          <span>Employee name</span>
+          <span>Name</span>
           <input name="employeeName" maxlength="80" required value="${escapeHtml(setup.employeeName)}" placeholder="e.g. Maria Lopez" autocomplete="off" autocapitalize="words" spellcheck="false" data-employee-name-field>
         </label>
       </div>
@@ -1908,54 +1999,13 @@ function renderEmployeeSetupWizard({ embedded = false } = {}) {
           ${icon(setup.primaryAction.icon)} ${escapeHtml(setup.primaryAction.label)}
         </button>
       </div>
-
-      <p class="form-note">${escapeHtml(formNote)}</p>
     </form>
-
-    <div class="device-setup-checklist" aria-label="Device setup checklist">
-      ${setup.checklist.map((item) => renderDeviceChecklistItem(item)).join("")}
-    </div>
-
-    ${state.push.error ? `<p class="panel-copy employee-alert-error">${escapeHtml(state.push.error)}</p>` : ""}
   `;
 
-  if (embedded) {
-    return `
-      <section class="tool-panel panel-card employee-setup-panel employee-setup-embedded">
-        <div class="panel-title panel-title-wide">
-          ${titleMarkup}
-          <span class="sync-pill">${escapeHtml(statusText)}</span>
-        </div>
-        ${bodyContent}
-      </section>
-    `;
-  }
-
-  if (setup.ready) {
-    return `
-      <details class="tool-panel panel-card employee-setup-panel employee-setup-dropdown" data-employee-setup-dropdown ${state.employeeSetupOpen ? "open" : ""}>
-        <summary class="employee-setup-summary" data-employee-setup-summary>
-          ${titleMarkup}
-          <div class="employee-setup-summary-meta">
-            <span class="sync-pill">${escapeHtml(statusText)}</span>
-            <span class="employee-setup-summary-caret" aria-hidden="true"></span>
-          </div>
-        </summary>
-
-        <div class="employee-setup-body">
-          ${bodyContent}
-        </div>
-      </details>
-    `;
-  }
-
   return `
-    <section class="tool-panel panel-card employee-setup-panel">
-      <div class="panel-title panel-title-wide">
-        ${titleMarkup}
-        <span class="sync-pill">${escapeHtml(statusText)}</span>
-      </div>
-      ${bodyContent}
+    <section class="tool-panel panel-card employee-setup-panel employee-setup-embedded employee-setup-embedded-minimal">
+      ${formMarkup}
+      ${state.push.error ? `<p class="panel-copy employee-alert-error">${escapeHtml(state.push.error)}</p>` : ""}
     </section>
   `;
 }
@@ -2462,17 +2512,21 @@ function renderEmployeeDirectoryPanel() {
 
 function renderEmployee() {
   const notices = visiblePosts();
+  const setup = buildEmployeeSetupState();
 
   return `
     <main class="page-shell employee-shell">
       ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
+      ${renderEmployeeSubscriptionBanner(setup)}
 
       <section class="employee-brand-banner" aria-label="Palziv brand banner">
-        <div class="employee-brand-banner-mark" aria-hidden="true">palziv</div>
-        <div class="employee-brand-banner-copy">
-          <p class="employee-brand-banner-kicker">Employee updates</p>
-          <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
+        <div class="employee-brand-banner-head">
+          <div class="employee-brand-banner-copy">
+            <div class="employee-brand-banner-mark" aria-hidden="true">palziv</div>
+            <p class="employee-brand-banner-kicker">Employee updates</p>
+            <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
+          </div>
         </div>
       </section>
 
@@ -2486,15 +2540,9 @@ function renderEmployee() {
         </div>
       </section>
 
-      <details class="employee-quiet-settings" data-employee-setup-dropdown ${state.employeeSetupOpen ? "open" : ""}>
-        <summary class="employee-quiet-settings-summary">Account</summary>
-        <div class="employee-quiet-settings-body">
-          <div class="employee-quiet-actions">
-            <button class="ghost-button employee-signout-button" type="button" data-employee-logout>Sign out</button>
-          </div>
-          ${renderEmployeeSetupWizard({ embedded: true })}
-        </div>
-      </details>
+      <section class="employee-bottom-actions" aria-label="Account actions">
+        <button class="ghost-button employee-signout-button" type="button" data-employee-logout>Sign out</button>
+      </section>
     </main>
   `;
 }
@@ -3734,7 +3782,7 @@ async function handleDeviceSetupSubmit(event) {
   const data = Object.fromEntries(new FormData(form));
   const nextProfile = saveDeviceProfile({
     ...state.deviceProfile,
-    employeeName: String(data.employeeName || data.label || "").trim() || buildSuggestedDeviceLabel()
+    employeeName: String(data.employeeName || data.label || "").trim()
   });
   const setup = buildEmployeeSetupState();
   const action = resolveDeviceSetupAction({
@@ -3748,6 +3796,11 @@ async function handleDeviceSetupSubmit(event) {
   try {
     if (action === "push") {
       await enablePushAlerts(nextProfile);
+      render();
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("subscribed", String(Date.now()));
+      window.location.replace(nextUrl.toString());
+      return;
     } else {
       state.push.error = "";
       setMessage("Saved the employee name.", "success");
@@ -4046,6 +4099,9 @@ document.addEventListener("click", async (event) => {
 
   if (employeeLogoutButton) {
     event.preventDefault();
+    if (!window.confirm("Are you sure you want to sign out?")) {
+      return;
+    }
     await requestJson("/api/employee/logout", {
       method: "POST",
       body: JSON.stringify({})
@@ -4279,10 +4335,13 @@ app.addEventListener("toggle", (event) => {
 
     return;
   }
+}, true);
 
-  if (!event.target.matches("[data-employee-setup-dropdown]")) return;
+app.addEventListener("toggle", (event) => {
+  if (!(event.target instanceof HTMLDetailsElement)) return;
+  if (!event.target.matches("[data-employee-install-guide]")) return;
 
-  state.employeeSetupOpen = event.target.open;
+  state.employeeInstallGuideOpen = event.target.open;
 }, true);
 
 window.addEventListener("hashchange", async () => {
