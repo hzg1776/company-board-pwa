@@ -576,7 +576,7 @@ function sendServiceWorker(res) {
 
 function sendManifest(res) {
   const icon = {
-    src: "/assets/palziv-logo.png",
+      src: "/assets/palziv-logo-transparent.png?v=20260617c",
     sizes: "1054x1055",
     type: "image/png",
     purpose: "any maskable"
@@ -1845,3 +1845,4 @@ await securityStore.init();
 server.listen(PORT, () => {
   console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);
 });
+

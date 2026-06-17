@@ -16,7 +16,7 @@
       "url": "/palzivalerts",
       "icons": [
         {
-          "src": "/assets/palziv-logo.png",
+          "src": "/assets/palziv-logo-transparent.png?v=20260617c",
           "sizes": "1054x1055",
           "type": "image/png",
           "purpose": "any maskable"
@@ -30,7 +30,7 @@
       "url": "/palzivalerts/employee",
       "icons": [
         {
-          "src": "/assets/palziv-logo.png",
+          "src": "/assets/palziv-logo-transparent.png?v=20260617c",
           "sizes": "1054x1055",
           "type": "image/png",
           "purpose": "any maskable"
@@ -44,7 +44,7 @@
       "url": "/palzivalerts/hr",
       "icons": [
         {
-          "src": "/assets/palziv-logo.png",
+          "src": "/assets/palziv-logo-transparent.png?v=20260617c",
           "sizes": "1054x1055",
           "type": "image/png",
           "purpose": "any maskable"
@@ -58,7 +58,7 @@
       "url": "/palzivalerts/webmaster",
       "icons": [
         {
-          "src": "/assets/palziv-logo.png",
+          "src": "/assets/palziv-logo-transparent.png?v=20260617c",
           "sizes": "1054x1055",
           "type": "image/png",
           "purpose": "any maskable"
@@ -68,10 +68,11 @@
   ],
   "icons": [
     {
-      "src": "/assets/palziv-logo.png",
+      "src": "/assets/palziv-logo-transparent.png?v=20260617c",
       "sizes": "1054x1055",
       "type": "image/png",
       "purpose": "any maskable"
     }
   ]
 }
+

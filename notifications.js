@@ -10,7 +10,7 @@ const DEFAULT_SUBJECT = process.env.PUSH_VAPID_SUBJECT || "mailto:alerts@example
 const DEFAULT_TITLE = "Palziv alert";
 const DEFAULT_BODY = "Open the Palziv portal for details.";
 const DEFAULT_URL = "/palzivalerts/employee";
-const DEFAULT_ICON = "/assets/logo.svg";
+const DEFAULT_ICON = "/assets/palziv-logo-transparent.png?v=20260617c";
 
 function nowIso() {
   return new Date().toISOString();
@@ -434,3 +434,4 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
     close
   };
 }
+

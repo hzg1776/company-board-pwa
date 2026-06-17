@@ -737,7 +737,9 @@ Copying this into Codex should give it enough context to trace the site health a
     return `
       <div class="brand">
         <div class="brand-lockup">
-          <img class="brand-lockup-wordmark" src="/assets/palziv-wordmark.png" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+          <div class="brand-logo-disc">
+            <img class="brand-lockup-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+          </div>
           ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
         </div>
       </div>
@@ -2611,7 +2613,9 @@ function renderEmployee() {
         <section class="employee-brand-banner" aria-label="Palziv brand banner">
           <div class="employee-brand-banner-head">
             <div class="employee-brand-banner-copy">
-              <img class="employee-brand-banner-wordmark" src="/assets/palziv-wordmark.png" alt="Palziv" loading="eager" decoding="async">
+              <div class="employee-brand-banner-disc">
+                <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
+              </div>
               <p class="employee-brand-banner-kicker">Employee updates</p>
               <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
             </div>
@@ -2653,7 +2657,9 @@ function renderLauncher() {
       ${renderAppUpdateBanner()}
         <section class="launcher-stage">
           <div class="launcher-brand" aria-label="Palziv">
-            <img class="launcher-brand-logo" src="/assets/palziv-wordmark.png" alt="Palziv" loading="eager" decoding="async">
+            <div class="launcher-brand-disc">
+              <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
+            </div>
           </div>
 
         <div class="launcher-panel">
@@ -4621,4 +4627,5 @@ try {
   render();
   void checkForAppUpdate();
 }
+
 
