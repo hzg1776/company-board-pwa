@@ -2468,6 +2468,14 @@ function renderEmployee() {
       ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
+      <section class="employee-brand-banner" aria-label="Palziv brand banner">
+        <div class="employee-brand-banner-mark" aria-hidden="true">palziv</div>
+        <div class="employee-brand-banner-copy">
+          <p class="employee-brand-banner-kicker">Employee updates</p>
+          <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
+        </div>
+      </section>
+
       <section class="feed-shell feed-shell-quiet feed-shell-bare" aria-label="Latest updates feed">
         <div class="feed-list feed-list-quiet">
           ${
