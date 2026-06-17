@@ -733,16 +733,16 @@ Copying this into Codex should give it enough context to trace the site health a
 `;
 }
 
-function brandBlock(subtitle = APP_SUBTITLE) {
-  return `
-    <div class="brand">
-      <div class="brand-lockup">
-        <img class="brand-lockup-wordmark" src="/assets/palziv-wordmark.png" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
-        ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
+  function brandBlock(subtitle = APP_SUBTITLE) {
+    return `
+      <div class="brand">
+        <div class="brand-lockup">
+          <img class="brand-lockup-wordmark" src="/assets/palziv-wordmark.png" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+          ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
+        </div>
       </div>
-    </div>
-  `;
-}
+    `;
+  }
 
 function renderAuthFrame({ title, error = "", content }) {
   return `
@@ -1329,21 +1329,32 @@ function pushSupportText() {
   return "Subscribe this device to receive urgent updates.";
 }
 
-function formatPushError(error, fallback) {
-  const message = String(error?.message || "").trim();
-  const lower = message.toLowerCase();
+  function formatPushError(error, fallback) {
+    const message = String(error?.message || "").trim();
+    const lower = message.toLowerCase();
+    const userAgent = String(navigator.userAgent || "").toLowerCase();
+    const androidBrowser = userAgent.includes("android");
+    const samsungBrowser = userAgent.includes("samsungbrowser");
+    const chromeBrowser = userAgent.includes("chrome") && !samsungBrowser && !userAgent.includes("edg");
+    const pushServiceFailure = lower.includes("push service error") || lower.includes("registration failed");
 
-  if (error?.name === "NotAllowedError" || lower.includes("permission denied") || lower.includes("permission is blocked")) {
-    return "This browser blocked push registration. Allow notifications for this site and try again.";
-  }
+    if (error?.name === "NotAllowedError" || lower.includes("permission denied") || lower.includes("permission is blocked")) {
+      return "This browser blocked push registration. Allow notifications for this site and try again.";
+    }
 
-  if (lower.includes("not granted") || lower.includes("permission was not granted")) {
-    return "Allow notifications for this site before subscribing this device.";
-  }
+    if (lower.includes("not granted") || lower.includes("permission was not granted")) {
+      return "Allow notifications for this site before subscribing this device.";
+    }
 
-  if (lower.includes("pushmanager") || lower.includes("push manager") || lower.includes("service worker")) {
-    return "This browser cannot finish push setup on this page.";
-  }
+    if (androidBrowser && pushServiceFailure) {
+      return chromeBrowser
+        ? "Push registration failed on this device. Make sure Google Play Services is enabled, then try Subscribe again in Chrome."
+        : "Push registration failed on this device. Open the portal in Chrome, make sure Google Play Services is enabled, then try Subscribe again.";
+    }
+
+    if (lower.includes("pushmanager") || lower.includes("push manager") || lower.includes("service worker")) {
+      return "This browser cannot finish push setup on this page.";
+    }
 
   return message || fallback;
 }
@@ -2597,17 +2608,17 @@ function renderEmployee() {
 
   return `
     <main class="page-shell employee-shell">
-      <section class="employee-brand-banner" aria-label="Palziv brand banner">
-        <div class="employee-brand-banner-head">
-          <div class="employee-brand-banner-copy">
-            <div class="employee-brand-banner-mark" aria-hidden="true">palziv</div>
-            <p class="employee-brand-banner-kicker">Employee updates</p>
-            <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
+        <section class="employee-brand-banner" aria-label="Palziv brand banner">
+          <div class="employee-brand-banner-head">
+            <div class="employee-brand-banner-copy">
+              <img class="employee-brand-banner-wordmark" src="/assets/palziv-wordmark.png" alt="Palziv" loading="eager" decoding="async">
+              <p class="employee-brand-banner-kicker">Employee updates</p>
+              <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      ${renderAppUpdateBanner()}
+        ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
       ${renderEmployeeSubscriptionBanner(setup)}
 
@@ -2640,10 +2651,10 @@ function renderLauncher() {
   return `
     <main class="page-shell launcher-shell">
       ${renderAppUpdateBanner()}
-      <section class="launcher-stage">
-        <div class="launcher-brand" aria-label="Palziv">
-          <img class="launcher-brand-logo" src="/assets/logo.svg" alt="Palziv" loading="eager" decoding="async">
-        </div>
+        <section class="launcher-stage">
+          <div class="launcher-brand" aria-label="Palziv">
+            <img class="launcher-brand-logo" src="/assets/palziv-wordmark.png" alt="Palziv" loading="eager" decoding="async">
+          </div>
 
         <div class="launcher-panel">
           <div class="launcher-grid">
@@ -3745,18 +3756,12 @@ function render() {
     : route === "webmaster"
       ? `${APP_DISPLAY_TITLE} Webmaster`
       : APP_DISPLAY_TITLE;
-  const focusSnapshot = captureFocusSnapshot();
-  app.innerHTML = pageMarkup;
-  restoreFocusSnapshot(focusSnapshot);
-  syncEmployeeNameField();
-  measureEmployeeStickyBanner();
-  syncEmployeeStickyBanner();
-  window.requestAnimationFrame(syncEmployeeNameField);
-  window.requestAnimationFrame(() => {
-    measureEmployeeStickyBanner();
-    syncEmployeeStickyBanner();
-  });
-}
+    const focusSnapshot = captureFocusSnapshot();
+    app.innerHTML = pageMarkup;
+    restoreFocusSnapshot(focusSnapshot);
+    syncEmployeeNameField();
+    window.requestAnimationFrame(syncEmployeeNameField);
+  }
 
 function captureFocusSnapshot() {
   const active = document.activeElement;
@@ -3796,49 +3801,6 @@ function syncEmployeeNameField() {
 
   if (!storedEmployeeName) {
     input.value = "";
-  }
-}
-
-let employeeBannerResizeObserver = null;
-let employeeBannerFontsReadyHooked = false;
-
-function measureEmployeeStickyBanner() {
-  const shell = app.querySelector(".employee-shell");
-  const banner = app.querySelector(".employee-brand-banner");
-  if (!(shell instanceof HTMLElement) || !(banner instanceof HTMLElement)) return;
-
-  const bannerHeight = Math.ceil(banner.getBoundingClientRect().height);
-  shell.style.setProperty("--employee-brand-banner-height", `${bannerHeight}px`);
-}
-
-function syncEmployeeStickyBanner() {
-  const banner = app.querySelector(".employee-brand-banner");
-  if (!(banner instanceof HTMLElement)) return;
-
-  measureEmployeeStickyBanner();
-
-  if (typeof ResizeObserver === "function") {
-    if (!employeeBannerResizeObserver) {
-      employeeBannerResizeObserver = new ResizeObserver(() => {
-        measureEmployeeStickyBanner();
-      });
-    }
-
-    const currentBanner = employeeBannerResizeObserver.__banner || null;
-    if (currentBanner !== banner) {
-      if (currentBanner instanceof HTMLElement) {
-        employeeBannerResizeObserver.unobserve(currentBanner);
-      }
-      employeeBannerResizeObserver.observe(banner);
-      employeeBannerResizeObserver.__banner = banner;
-    }
-  }
-
-  if (!employeeBannerFontsReadyHooked && document.fonts?.ready) {
-    employeeBannerFontsReadyHooked = true;
-    document.fonts.ready.then(() => {
-      measureEmployeeStickyBanner();
-    }).catch(() => {});
   }
 }
 
@@ -4602,11 +4564,6 @@ window.addEventListener("hashchange", async () => {
 window.addEventListener("popstate", async () => {
   await hydrateRoute();
   render();
-});
-
-window.addEventListener("resize", () => {
-  measureEmployeeStickyBanner();
-  syncEmployeeStickyBanner();
 });
 
 if ("serviceWorker" in navigator) {
