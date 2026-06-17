@@ -734,9 +734,26 @@ function brandBlock(subtitle = APP_SUBTITLE) {
     <div class="brand">
       <div class="brand-lockup">
         <img class="brand-lockup-wordmark" src="/assets/palziv-wordmark.png" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
-        <p>${escapeHtml(subtitle)}</p>
+        ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
       </div>
     </div>
+  `;
+}
+
+function renderAuthFrame({ title, error = "", content }) {
+  return `
+    <main class="auth-shell">
+      <section class="auth-gate-card panel-card">
+        ${brandBlock("")}
+        <div class="panel-title">
+          <div>
+            <h2>${escapeHtml(title)}</h2>
+          </div>
+        </div>
+        ${error ? `<div class="employee-banner">${escapeHtml(error)}</div>` : ""}
+        ${content}
+      </section>
+    </main>
   `;
 }
 
@@ -2346,66 +2363,56 @@ function renderAccessPinPanel() {
 function renderEmployeeAuthGate() {
   const authError = state.access.employee.error || state.message;
 
-  return `
-    <main class="auth-shell">
-      <section class="auth-gate-card panel-card">
-        ${brandBlock("Employee sign in")}
-        <div class="panel-title">
-          <div>
-            <p class="eyebrow">${icon("lock")} Employee access</p>
-            <h2>Sign in to read company updates</h2>
-            <p>Each employee now has a named account. HR can disable that account immediately when employment ends.</p>
-          </div>
+  return renderAuthFrame({
+    title: "Employee login",
+    error: authError,
+    content: `
+      <form class="auth-form" data-employee-login-form>
+        <label class="field">
+          <span>Username</span>
+          <input name="username" maxlength="80" required autocomplete="username" placeholder="e.g. maria.lopez">
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input name="password" type="password" minlength="10" required autocomplete="current-password" placeholder="Your employee password">
+        </label>
+        <div class="auth-form-actions">
+          <button class="button" type="submit">Sign in</button>
+          <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
         </div>
-        ${authError ? `<div class="employee-banner">${escapeHtml(authError)}</div>` : ""}
-        <form class="auth-form" data-employee-login-form>
-          <label class="field">
-            <span>Username</span>
-            <input name="username" maxlength="80" required autocomplete="username" placeholder="e.g. maria.lopez">
-          </label>
-          <label class="field">
-            <span>Password</span>
-            <input name="password" type="password" minlength="10" required autocomplete="current-password" placeholder="Your employee password">
-          </label>
-          <div class="auth-form-actions">
-            <button class="button" type="submit">${icon("lock")} Sign in</button>
-            <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
-          </div>
-        </form>
-      </section>
-    </main>
-  `;
+      </form>
+    `
+  });
 }
 
 function renderAdminAuthGate(route) {
   const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
-  const sectionTitle = route === "webmaster" ? "Webmaster" : "HR";
+  const sectionTitle = route === "webmaster" ? "IT" : "HR";
   const authError = access.error || state.message;
   const canSetup = route === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
   const setupBlocked = route === "webmaster" && access.setupRequired && !access.hrAuthorized;
   const passwordLabel = route === "webmaster" ? "Webmaster password" : "Management password";
+  const heading = setupBlocked
+    ? "IT login unavailable"
+    : canSetup
+      ? `Set ${sectionTitle} password`
+      : `${sectionTitle} login`;
+  const helperText = setupBlocked ? "Open HR to finish setup." : "";
 
-  return `
-    <main class="auth-shell">
-      <section class="auth-gate-card panel-card">
-        ${brandBlock(`${sectionTitle} sign in`)}
-        <div class="panel-title">
-          <div>
-            <p class="eyebrow">${icon("lock")} ${escapeHtml(sectionTitle)} access</p>
-            <h2>${escapeHtml(setupBlocked ? "Webmaster access must be provisioned by HR" : (canSetup ? `Set the ${sectionTitle.toLowerCase()} password` : `Sign in to ${sectionTitle}`))}</h2>
-            <p>${escapeHtml(setupBlocked ? "An HR admin must sign in first and provision a separate webmaster password before this area can be used." : (canSetup ? (route === "hr" ? "First-run setup requires the deployment setup secret and a new management password." : "HR must create the initial webmaster password before a separate webmaster session can sign in.") : `Enter the ${route === "webmaster" ? "webmaster" : "management"} password to open this protected area.`))}</p>
+  return renderAuthFrame({
+    title: heading,
+    error: authError,
+    content: setupBlocked
+      ? `
+        <div class="auth-form">
+          ${helperText ? `<p class="form-note">${escapeHtml(helperText)}</p>` : ""}
+          <div class="auth-form-actions">
+            <button class="button" type="button" data-route="hr">Open HR</button>
+            <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
           </div>
         </div>
-        ${authError ? `<div class="employee-banner">${escapeHtml(authError)}</div>` : ""}
-        ${setupBlocked ? `
-        <div class="panel-card">
-          <p class="panel-copy">Use the HR console to provision webmaster access, then return here to sign in with the separate webmaster password.</p>
-        </div>
-        <div class="auth-form-actions">
-          <button class="button" type="button" data-route="hr">${icon("users")} Open HR console</button>
-          <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
-        </div>
-        ` : `
+      `
+      : `
         <form class="auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(route)}">
           ${route === "hr" && canSetup ? `
           <label class="field">
@@ -2418,14 +2425,12 @@ function renderAdminAuthGate(route) {
             <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? `Create the ${passwordLabel.toLowerCase()}` : passwordLabel)}">
           </label>
           <div class="auth-form-actions">
-            <button class="button" type="submit">${icon("lock")} ${escapeHtml(canSetup ? "Save password" : "Sign in")}</button>
-            <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
+            <button class="button" type="submit">${escapeHtml(canSetup ? "Save password" : "Sign in")}</button>
+            <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
           </div>
         </form>
-        `}
-      </section>
-    </main>
-  `;
+      `
+  });
 }
 
 function renderEmployeeDirectoryCard(employee) {
@@ -2547,15 +2552,10 @@ function renderEmployee() {
   `;
 }
 
-function renderLauncherCard(route, title, description, note, iconName) {
+function renderLauncherCard(route, title) {
   return `
     <a class="launch-card" href="${escapeHtml(routePath(route))}" data-route="${escapeHtml(route)}">
-      <div class="launch-card-icon" aria-hidden="true">${icon(iconName)}</div>
-      <div class="launch-card-copy">
-        <strong>${escapeHtml(title)}</strong>
-        <span>${escapeHtml(description)}</span>
-      </div>
-      <div class="launch-card-note">${escapeHtml(note)}</div>
+      <strong class="launch-card-label">${escapeHtml(title)}</strong>
     </a>
   `;
 }
@@ -2563,27 +2563,18 @@ function renderLauncherCard(route, title, description, note, iconName) {
 function renderLauncher() {
   return `
     <main class="page-shell launcher-shell">
-      <header class="page-head launcher-head">
-        ${brandBlock("Portal home")}
-        <div class="page-actions">
-          <span class="sync-pill">${icon("home")} Start here</span>
-        </div>
-      </header>
-
       ${renderAppUpdateBanner()}
-      <section class="launcher-panel panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("refresh")} Palziv Alerts</p>
-            <h2>Choose your section</h2>
-            <p>Read updates, publish notices, or review site health from one branded entry point.</p>
-          </div>
+      <section class="launcher-stage">
+        <div class="launcher-brand" aria-label="Palziv">
+          <div class="launcher-brand-mark">palziv</div>
         </div>
 
-        <div class="launcher-grid">
-          ${renderLauncherCard("employee", "Read updates", "Open the company feed for the latest notices and alerts.", "Read only", "news")}
-          ${renderLauncherCard("hr", "Publish notices", "Go to HR to post updates, weather, and alerts.", "Publishing", "users")}
-          ${renderLauncherCard("webmaster", "Review site health", "Open analytics, devices, and system status.", "Monitoring", "chart")}
+        <div class="launcher-panel">
+          <div class="launcher-grid">
+            ${renderLauncherCard("employee", "Employee login")}
+            ${renderLauncherCard("hr", "HR login")}
+            ${renderLauncherCard("webmaster", "IT login")}
+          </div>
         </div>
       </section>
     </main>
@@ -3650,7 +3641,9 @@ function render() {
   app.innerHTML = pageMarkup;
   restoreFocusSnapshot(focusSnapshot);
   syncEmployeeNameField();
+  syncEmployeeStickyBanner();
   window.requestAnimationFrame(syncEmployeeNameField);
+  window.requestAnimationFrame(syncEmployeeStickyBanner);
 }
 
 function captureFocusSnapshot() {
@@ -3692,6 +3685,20 @@ function syncEmployeeNameField() {
   if (!storedEmployeeName) {
     input.value = "";
   }
+}
+
+function syncEmployeeStickyBanner() {
+  const shell = app.querySelector(".employee-shell");
+  const banner = app.querySelector(".employee-brand-banner");
+  if (!(shell instanceof HTMLElement) || !(banner instanceof HTMLElement)) return;
+
+  const stickyGap = Number.parseFloat(window.getComputedStyle(shell).getPropertyValue("--employee-sticky-gap")) || 0;
+  const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+  const stuckThreshold = Math.max(0, banner.offsetTop - stickyGap);
+  const isStuck = scrollTop > stuckThreshold;
+
+  shell.style.setProperty("--employee-brand-banner-height", `${Math.ceil(banner.offsetHeight)}px`);
+  shell.dataset.employeeBannerStuck = isStuck ? "true" : "false";
 }
 
 async function createPost(payload) {
@@ -3835,7 +3842,8 @@ async function handleEmployeeLoginSubmit(event) {
       body: JSON.stringify(data)
     });
     await hydrateRoute();
-    setMessage("Signed in.", "success");
+    state.message = "";
+    state.messageType = "";
   } catch (error) {
     state.access.employee = {
       ...state.access.employee,
@@ -3873,12 +3881,15 @@ async function handleAdminAuthSubmit(event) {
       body: JSON.stringify(data)
     });
     await hydrateRoute();
-    setMessage(
-      mode === "setup"
-        ? (route === "webmaster" ? "Webmaster password configured." : "Management password configured.")
-        : "Signed in.",
-      "success"
-    );
+    if (mode === "setup") {
+      setMessage(
+        route === "webmaster" ? "Webmaster password configured." : "Management password configured.",
+        "success"
+      );
+    } else {
+      state.message = "";
+      state.messageType = "";
+    }
   } catch (error) {
     state.access[targetAccess] = {
       ...state.access[targetAccess],
@@ -4353,6 +4364,9 @@ window.addEventListener("popstate", async () => {
   await hydrateRoute();
   render();
 });
+
+window.addEventListener("scroll", syncEmployeeStickyBanner, { passive: true });
+window.addEventListener("resize", syncEmployeeStickyBanner);
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(APP_ASSET_VERSION)}`).catch(() => {});
