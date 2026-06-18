@@ -353,7 +353,63 @@ test("HR password changes do not revoke another admin user's webmaster session",
   }
 });
 
-test("admin management can create, update, revoke, and disable named admin accounts", async () => {
+test("Webmaster can reset the HR password and revoke existing HR sessions", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-hr-reset-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const webmasterSetup = await store.setupWebmasterAccess({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!",
+      userAgent: "test"
+    });
+
+    const resetResult = await store.resetHrPasswordByWebmaster({
+      headers: {
+        cookie: `palziv_webmaster_auth=${webmasterSetup.sessionId}`
+      }
+    }, {
+      password: "ManagerSecret2!",
+      userAgent: "test",
+      clientIp: "198.51.100.25"
+    });
+
+    assert.ok(resetResult.resetAt);
+
+    const revokedHrAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    });
+    assert.equal(Boolean(revokedHrAccess.authorized), false);
+
+    const webmasterAccess = await store.checkWebmasterAccess({
+      headers: {
+        cookie: `palziv_webmaster_auth=${webmasterSetup.sessionId}`
+      }
+    });
+    assert.equal(Boolean(webmasterAccess.authorized), true);
+
+    const hrRelogin = await store.authenticateAdmin({
+      username: "hr.owner",
+      password: "ManagerSecret2!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(hrRelogin.authorized), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("HR admin management stays scoped to HR-only admin accounts", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-admin-management-"));
   const dataFile = path.join(tempDir, "security.json");
 
@@ -371,53 +427,137 @@ test("admin management can create, update, revoke, and disable named admin accou
         cookie: `palziv_hr_auth=${hrSetup.sessionId}`
       }
     };
+    const webmasterSetup = await store.setupWebmasterAccess({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!",
+      userAgent: "test"
+    });
+
+    const adminList = await store.listAdminUsers({
+      currentUserId: hrSetup.user.id
+    });
+    assert.equal(adminList.length, 1);
+    assert.equal(adminList[0].username, "hr.owner");
+    assert.equal(adminList.some((adminUser) => adminUser.username === "webmaster.owner"), false);
+
+    await assert.rejects(
+      store.createAdminUser({
+        displayName: "Ops Webmaster",
+        email: "ops.webmaster@example.com",
+        username: "ops.webmaster",
+        password: "OpsSecret1!",
+        roles: ["webmaster"]
+      }),
+      /HR cannot assign webmaster roles/i
+    );
 
     const created = await store.createAdminUser({
       displayName: "Ops Admin",
       email: "ops.admin@example.com",
       username: "ops.admin",
       password: "OpsSecret1!",
-      roles: ["webmaster"]
+      roles: ["hr"]
     });
     assert.equal(created.adminUser.displayName, "Ops Admin");
     assert.equal(created.adminUser.email, "ops.admin@example.com");
-    assert.deepEqual(created.adminUser.roles, ["webmaster"]);
+    assert.deepEqual(created.adminUser.roles, ["hr"]);
 
-    const adminList = await store.listAdminUsers({
+    const scopedList = await store.listAdminUsers({
       currentUserId: hrSetup.user.id
     });
-    assert.equal(adminList.length, 2);
-    assert.equal(adminList.some((adminUser) => adminUser.currentUser), true);
+    assert.equal(scopedList.length, 2);
+    assert.equal(scopedList.some((adminUser) => adminUser.currentUser), true);
+    assert.equal(scopedList.some((adminUser) => adminUser.username === "webmaster.owner"), false);
 
-    const updated = await store.updateAdminUserRoles(hrReq, created.adminUser.id, ["hr", "webmaster"]);
-    assert.deepEqual(updated.adminUser.roles, ["hr", "webmaster"]);
+    const updated = await store.updateAdminUserRoles(hrReq, created.adminUser.id, ["hr"]);
+    assert.deepEqual(updated.adminUser.roles, ["hr"]);
 
-    const webmasterLogin = await store.authenticateWebmaster({
+    const adminLogin = await store.authenticateAdmin({
       username: "ops.admin",
       password: "OpsSecret1!",
       userAgent: "test"
     });
-    assert.equal(Boolean(webmasterLogin.authorized), true);
+    assert.equal(Boolean(adminLogin.authorized), true);
 
+    await store.resetAdminUserPassword(hrReq, created.adminUser.id, {
+      password: "OpsSecret2!",
+      userAgent: "test",
+      clientIp: "198.51.100.40"
+    });
     await store.revokeAdminUserSessions(hrReq, created.adminUser.id, {
       userAgent: "test",
       clientIp: "198.51.100.40"
     });
-    const revokedAccess = await store.checkWebmasterAccess({
+    const revokedAccess = await store.checkHrAccess({
       headers: {
-        cookie: `palziv_webmaster_auth=${webmasterLogin.sessionId}`
+        cookie: `palziv_hr_auth=${adminLogin.sessionId}`
       }
     });
     assert.equal(Boolean(revokedAccess.authorized), false);
 
     await store.setAdminUserActive(hrReq, created.adminUser.id, false);
     await assert.rejects(
-      store.authenticateWebmaster({
+      store.authenticateAdmin({
         username: "ops.admin",
-        password: "OpsSecret1!",
+        password: "OpsSecret2!",
         userAgent: "test"
       }),
-      /Webmaster access has not been configured\./
+      /Invalid username or password\./
+    );
+
+    await assert.rejects(
+      store.inviteAdminUser({
+        displayName: "Avery Webmaster",
+        email: "avery.webmaster@example.com",
+        username: "avery.webmaster",
+        roles: ["webmaster"],
+        userAgent: "test",
+        clientIp: "198.51.100.44"
+      }),
+      /HR cannot assign webmaster roles/i
+    );
+
+    await assert.rejects(
+      store.updateAdminUserProfile(hrReq, webmasterSetup.user.id, {
+        displayName: "Updated Webmaster",
+        email: "updated.webmaster@example.com"
+      }),
+      /HR cannot manage webmaster accounts/i
+    );
+
+    await assert.rejects(
+      store.updateAdminUserRoles(hrReq, webmasterSetup.user.id, ["hr"]),
+      /HR cannot manage webmaster accounts/i
+    );
+
+    await assert.rejects(
+      store.setAdminUserActive(hrReq, webmasterSetup.user.id, false),
+      /HR cannot manage webmaster accounts/i
+    );
+
+    await assert.rejects(
+      store.resetAdminUserPassword(hrReq, webmasterSetup.user.id, {
+        password: "WebmasterSecret2!",
+        userAgent: "test",
+        clientIp: "198.51.100.45"
+      }),
+      /HR cannot manage webmaster accounts/i
+    );
+
+    await assert.rejects(
+      store.revokeAdminUserSessions(hrReq, webmasterSetup.user.id, {
+        userAgent: "test",
+        clientIp: "198.51.100.45"
+      }),
+      /HR cannot manage webmaster accounts/i
+    );
+
+    await assert.rejects(
+      store.resendAdminInvite(hrReq, webmasterSetup.user.id, {
+        userAgent: "test",
+        clientIp: "198.51.100.45"
+      }),
+      /HR cannot manage webmaster accounts/i
     );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -447,7 +587,7 @@ test("admin invitations support identity edits, resend, and invite acceptance", 
       displayName: "Avery Ops",
       email: "avery.ops@example.com",
       username: "avery.ops",
-      roles: ["webmaster"],
+      roles: ["hr"],
       userAgent: "test",
       clientIp: "198.51.100.50"
     });
@@ -483,15 +623,15 @@ test("admin invitations support identity edits, resend, and invite acceptance", 
       userAgent: "test",
       clientIp: "198.51.100.52"
     });
-    assert.deepEqual(accepted.roles, ["webmaster"]);
-    assert.ok(accepted.sessions.webmaster?.id);
+    assert.deepEqual(accepted.roles, ["hr"]);
+    assert.ok(accepted.sessions.hr?.id);
 
-    const webmasterAccess = await store.checkWebmasterAccess({
+    const hrAccess = await store.checkHrAccess({
       headers: {
-        cookie: `palziv_webmaster_auth=${accepted.sessions.webmaster.id}`
+        cookie: `palziv_hr_auth=${accepted.sessions.hr.id}`
       }
     });
-    assert.equal(Boolean(webmasterAccess.authorized), true);
+    assert.equal(Boolean(hrAccess.authorized), true);
 
     const adminList = await store.listAdminUsers({
       currentUserId: hrSetup.user.id

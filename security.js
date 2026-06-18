@@ -1263,6 +1263,30 @@ function requireHrManagerAccess(data, req = {}) {
   return access;
 }
 
+function isHrManagedAdminUser(user = {}) {
+  return !adminUserHasRole(user, "webmaster");
+}
+
+function assertHrManagedAdminRoles(roles = []) {
+  if (roles.includes("webmaster")) {
+    throw new Error("HR cannot assign webmaster roles.");
+  }
+}
+
+function requireHrManagedAdminTarget(data, req = {}, adminUserId = "") {
+  const hrManager = requireHrManagerAccess(data, req);
+  const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+
+  if (!isHrManagedAdminUser(targetUser)) {
+    throw new Error("HR cannot manage webmaster accounts.");
+  }
+
+  return {
+    hrManager,
+    targetUser
+  };
+}
+
 function revokeOtherSessionsForUser(sessions, activeSessionId, adminUserId, changedAt) {
   return sessions.map((session) => {
     if (session.id === activeSessionId) {
@@ -1984,6 +2008,7 @@ export function createSecurityStore({ dataFile } = {}) {
   async function listAdminUsers({ currentUserId = "" } = {}) {
     const data = await readSecurityState();
     return data.adminUsers
+      .filter((adminUser) => isHrManagedAdminUser(adminUser))
       .map((adminUser) => publicAdminUserRecord(adminUser, data.adminSessions, currentUserId))
       .sort((left, right) => (
         Number(right.active) - Number(left.active) ||
@@ -1997,6 +2022,7 @@ export function createSecurityStore({ dataFile } = {}) {
     const adminEmail = validateAdminEmail(email);
     const adminUsername = normalizeUsername(username);
     const adminRoles = validateAdminRoles(roles);
+    assertHrManagedAdminRoles(adminRoles);
 
     if (!adminUsername) {
       throw new Error("Username is required.");
@@ -2055,6 +2081,7 @@ export function createSecurityStore({ dataFile } = {}) {
     const adminEmail = validateAdminEmail(email);
     const adminUsername = normalizeUsername(username);
     const adminRoles = validateAdminRoles(roles);
+    assertHrManagedAdminRoles(adminRoles);
 
     if (!adminUsername) {
       throw new Error("Username is required.");
@@ -2122,8 +2149,7 @@ export function createSecurityStore({ dataFile } = {}) {
     const adminEmail = validateAdminEmail(email);
 
     return updateData((data) => {
-      requireHrManagerAccess(data, req);
-      const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+      const { targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
       const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
         .some((adminUser) => adminUser.id !== targetUser.id);
 
@@ -2162,8 +2188,7 @@ export function createSecurityStore({ dataFile } = {}) {
 
   async function resendAdminInvite(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
     return updateData((data) => {
-      const hrManager = requireHrManagerAccess(data, req);
-      const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+      const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
 
       if (targetUser.id === hrManager.adminUser.id && hasConfiguredAdminRecord(targetUser)) {
         throw new Error("Use account settings to manage your own credentials.");
@@ -2302,12 +2327,13 @@ export function createSecurityStore({ dataFile } = {}) {
     const nextRoles = validateAdminRoles(roles, "admin");
 
     return updateData((data) => {
-      const hrManager = requireHrManagerAccess(data, req);
-      const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+      const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
 
       if (targetUser.id === hrManager.adminUser.id && !nextRoles.includes("hr")) {
         throw new Error("You cannot remove your own HR role while signed in.");
       }
+
+      assertHrManagedAdminRoles(nextRoles);
 
       const changedAt = nowIso();
       const updatedUser = normalizeAdminUser({
@@ -2354,8 +2380,7 @@ export function createSecurityStore({ dataFile } = {}) {
     const nextActive = Boolean(active);
 
     return updateData((data) => {
-      const hrManager = requireHrManagerAccess(data, req);
-      const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+      const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
 
       if (targetUser.id === hrManager.adminUser.id && !nextActive) {
         throw new Error("You cannot disable your own admin account while signed in.");
@@ -2403,8 +2428,7 @@ export function createSecurityStore({ dataFile } = {}) {
     validateAdminPassword(password);
 
     return updateData((data) => {
-      const hrManager = requireHrManagerAccess(data, req);
-      const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+      const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
 
       if (targetUser.id === hrManager.adminUser.id) {
         throw new Error("Use account settings to change your own password.");
@@ -2441,8 +2465,7 @@ export function createSecurityStore({ dataFile } = {}) {
 
   async function revokeAdminUserSessions(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
     return updateData((data) => {
-      const hrManager = requireHrManagerAccess(data, req);
-      const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+      const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
 
       if (targetUser.id === hrManager.adminUser.id) {
         throw new Error("Use Sign Out to end your own current admin session.");
@@ -2675,46 +2698,46 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
-  async function resetWebmasterPasswordByHr(req = {}, { password, userAgent = "", clientIp = "" } = {}) {
+  async function resetHrPasswordByWebmaster(req = {}, { password, userAgent = "", clientIp = "" } = {}) {
     const nextPasswordText = String(password || "");
     validateAdminPassword(nextPasswordText);
 
     return updateData((data) => {
       const cookieNames = getAccessCookieNames();
-      const activeSessionId = activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]);
-      const hrAccess = findValidRoleSession(data, "hr", activeSessionId);
+      const activeSessionId = activeCookieValue(req, [cookieNames.webmaster]);
+      const webmasterAccess = findValidRoleSession(data, "webmaster", activeSessionId);
 
-      if (!hrAccess) {
-        throw new Error("You must be signed in as HR.");
+      if (!webmasterAccess) {
+        throw new Error("You must be signed in as Webmaster.");
       }
 
-      const webmasterUser = findConfiguredRoleUser(data.adminUsers, "webmaster");
+      const hrUser = findConfiguredRoleUser(data.adminUsers, "hr");
 
-      if (!webmasterUser) {
-        throw new Error("Webmaster access has not been configured.");
+      if (!hrUser) {
+        throw new Error("HR access has not been configured.");
       }
 
       const changedAt = nowIso();
       const nextPassword = createPasswordHash(nextPasswordText);
-      const updatedWebmasterUser = normalizeAdminUser(clearAdminInviteMetadata({
-        ...webmasterUser,
+      const updatedHrUser = normalizeAdminUser(clearAdminInviteMetadata({
+        ...hrUser,
         passwordSalt: nextPassword.salt,
         passwordHash: nextPassword.hash,
         updatedAt: changedAt
       }));
-      data.adminUsers = replaceAdminUser(data.adminUsers, updatedWebmasterUser);
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedHrUser);
       data.adminSessions = revokeOtherSessionsForUser(
         data.adminSessions,
-        hrAccess.adminUser.id === webmasterUser.id ? hrAccess.session.id : "",
-        webmasterUser.id,
+        webmasterAccess.adminUser.id === hrUser.id ? webmasterAccess.session.id : "",
+        hrUser.id,
         changedAt
       );
 
-      clearAdminIdentityGuards(data, webmasterUser.username);
+      clearAdminIdentityGuards(data, hrUser.username);
       appendSecurityEvent(data, createSecurityEvent({
-        type: "webmaster_password_reset_by_hr",
-        actor: "hr",
-        accountKey: webmasterUser.username,
+        type: "hr_password_reset_by_webmaster",
+        actor: "webmaster",
+        accountKey: hrUser.username,
         sourceIp: normalizeSecurityKey(clientIp),
         outcome: "success",
         detail: "password-reset",
@@ -3085,7 +3108,7 @@ export function createSecurityStore({ dataFile } = {}) {
     changeWebmasterPassword,
     issueHrRecoveryCode,
     recoverAdminAccessByCode,
-    resetWebmasterPasswordByHr,
+    resetHrPasswordByWebmaster,
     recoverAdminAccess,
     resetEmployeePassword,
     revokeEmployeeSessions

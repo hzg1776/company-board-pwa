@@ -552,14 +552,19 @@ test("trusted proxy loopback honors forwarded client IPs for login throttling", 
   assert.equal(secondEmployeeLogin.status, 200);
 });
 
-test("server manages named admin accounts through the HR API surface", async (t) => {
+test("server scopes the HR admin API to HR-only admin accounts", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-users-"));
   const securityFile = path.join(tempDir, "security.json");
   const provisionStore = createSecurityStore({ dataFile: securityFile });
   await provisionStore.init();
-  await provisionStore.setupAdminAccess({
+  const hrSetup = await provisionStore.setupAdminAccess({
     username: "hr.owner",
     password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const webmasterSetup = await provisionStore.setupWebmasterAccess({
+    username: "webmaster.owner",
+    password: "WebmasterSecret1!",
     userAgent: "test"
   });
 
@@ -586,7 +591,20 @@ test("server manages named admin accounts through the HR API surface", async (t)
   const hrBody = await hrLogin.json();
   const hrCookie = readSetCookie(hrLogin);
 
-  const createAdmin = await fetch(`${server.baseUrl}/api/admin-users`, {
+  const listAdmins = await fetch(`${server.baseUrl}/api/admin-users`, {
+    headers: {
+      Cookie: hrCookie
+    }
+  });
+  assert.equal(listAdmins.status, 200);
+  const listAdminsBody = await listAdmins.json();
+  assert.equal(Array.isArray(listAdminsBody.adminUsers), true);
+  assert.equal(listAdminsBody.adminUsers.length, 1);
+  assert.equal(listAdminsBody.adminUsers[0].username, "hr.owner");
+  assert.equal(listAdminsBody.adminUsers[0].currentUser, true);
+  assert.equal(listAdminsBody.adminUsers.some((adminUser) => adminUser.username === "webmaster.owner"), false);
+
+  const deniedCreate = await fetch(`${server.baseUrl}/api/admin-users`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -602,23 +620,11 @@ test("server manages named admin accounts through the HR API surface", async (t)
       roles: ["webmaster"]
     })
   });
-  assert.equal(createAdmin.status, 201);
-  const createAdminBody = await createAdmin.json();
-  assert.equal(createAdminBody.adminUser.displayName, "Ops Admin");
-  assert.equal(createAdminBody.adminUser.email, "ops.admin@example.com");
-  assert.deepEqual(createAdminBody.adminUser.roles, ["webmaster"]);
+  assert.equal(deniedCreate.status, 400);
+  const deniedCreateBody = await deniedCreate.json();
+  assert.match(String(deniedCreateBody.error || ""), /HR cannot assign webmaster roles/i);
 
-  const listAdmins = await fetch(`${server.baseUrl}/api/admin-users`, {
-    headers: {
-      Cookie: hrCookie
-    }
-  });
-  assert.equal(listAdmins.status, 200);
-  const listAdminsBody = await listAdmins.json();
-  assert.equal(Array.isArray(listAdminsBody.adminUsers), true);
-  assert.equal(listAdminsBody.adminUsers.some((adminUser) => adminUser.currentUser), true);
-
-  const updateRoles = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/roles`, {
+  const createAdmin = await fetch(`${server.baseUrl}/api/admin-users`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -627,12 +633,18 @@ test("server manages named admin accounts through the HR API surface", async (t)
       "X-CSRF-Token": hrBody.csrfToken
     },
     body: JSON.stringify({
-      roles: ["hr", "webmaster"]
+      displayName: "Ops Admin",
+      email: "ops.admin@example.com",
+      username: "ops.admin",
+      password: "OpsSecret1!",
+      roles: ["hr"]
     })
   });
-  assert.equal(updateRoles.status, 200);
+  assert.equal(createAdmin.status, 201);
+  const createAdminBody = await createAdmin.json();
+  assert.deepEqual(createAdminBody.adminUser.roles, ["hr"]);
 
-  const webmasterLogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+  const adminLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -643,8 +655,8 @@ test("server manages named admin accounts through the HR API surface", async (t)
       password: "OpsSecret1!"
     })
   });
-  assert.equal(webmasterLogin.status, 200);
-  const webmasterCookie = readSetCookie(webmasterLogin);
+  assert.equal(adminLogin.status, 200);
+  const adminCookie = readSetCookie(adminLogin);
 
   const resetPassword = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/password`, {
     method: "POST",
@@ -660,16 +672,16 @@ test("server manages named admin accounts through the HR API surface", async (t)
   });
   assert.equal(resetPassword.status, 200);
 
-  const revokedCheck = await fetch(`${server.baseUrl}/api/webmaster/check`, {
+  const revokedCheck = await fetch(`${server.baseUrl}/api/hr/check`, {
     headers: {
-      Cookie: webmasterCookie
+      Cookie: adminCookie
     }
   });
   assert.equal(revokedCheck.status, 200);
   const revokedCheckBody = await revokedCheck.json();
   assert.equal(Boolean(revokedCheckBody.authorized), false);
 
-  const relogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+  const relogin = await fetch(`${server.baseUrl}/api/hr/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -682,7 +694,39 @@ test("server manages named admin accounts through the HR API surface", async (t)
   });
   assert.equal(relogin.status, 200);
 
-  const disableAdmin = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/status`, {
+  const updateRoles = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(webmasterSetup.user.id)}/roles`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    },
+    body: JSON.stringify({
+      roles: ["hr"]
+    })
+  });
+  assert.equal(updateRoles.status, 400);
+  const updateRolesBody = await updateRoles.json();
+  assert.match(String(updateRolesBody.error || ""), /HR cannot manage webmaster accounts/i);
+
+  const resetWebmasterPassword = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(webmasterSetup.user.id)}/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    },
+    body: JSON.stringify({
+      password: "WebmasterSecret2!"
+    })
+  });
+  assert.equal(resetWebmasterPassword.status, 400);
+  const resetWebmasterPasswordBody = await resetWebmasterPassword.json();
+  assert.match(String(resetWebmasterPasswordBody.error || ""), /HR cannot manage webmaster accounts/i);
+
+  const disableWebmaster = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(webmasterSetup.user.id)}/status`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -694,20 +738,124 @@ test("server manages named admin accounts through the HR API surface", async (t)
       active: false
     })
   });
-  assert.equal(disableAdmin.status, 200);
+  assert.equal(disableWebmaster.status, 400);
+  const disableWebmasterBody = await disableWebmaster.json();
+  assert.match(String(disableWebmasterBody.error || ""), /HR cannot manage webmaster accounts/i);
 
-  const deniedRelogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+  const scopedListAgain = await fetch(`${server.baseUrl}/api/admin-users`, {
+    headers: {
+      Cookie: hrCookie
+    }
+  });
+  assert.equal(scopedListAgain.status, 200);
+  const scopedListAgainBody = await scopedListAgain.json();
+  assert.equal(scopedListAgainBody.adminUsers.some((adminUser) => adminUser.id === webmasterSetup.user.id), false);
+  assert.equal(scopedListAgainBody.adminUsers.some((adminUser) => adminUser.id === hrSetup.user.id), true);
+});
+
+test("server lets Webmaster reset the HR password and removes the old HR-to-Webmaster reset path", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-hr-password-reset-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  await provisionStore.setupWebmasterAccess({
+    username: "webmaster.owner",
+    password: "WebmasterSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const hrLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Origin: server.baseUrl
     },
     body: JSON.stringify({
-      username: "ops.admin",
-      password: "OpsSecret2!"
+      username: "hr.owner",
+      password: "ManagerSecret1!"
     })
   });
-  assert.equal(deniedRelogin.status, 400);
+  assert.equal(hrLogin.status, 200);
+  const hrBody = await hrLogin.json();
+  const hrCookie = readSetCookie(hrLogin);
+
+  const webmasterLogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!"
+    })
+  });
+  assert.equal(webmasterLogin.status, 200);
+  const webmasterBody = await webmasterLogin.json();
+  const webmasterCookie = readSetCookie(webmasterLogin);
+
+  const resetHrPassword = await fetch(`${server.baseUrl}/api/hr/password/reset`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      password: "ManagerSecret2!"
+    })
+  });
+  assert.equal(resetHrPassword.status, 200);
+
+  const revokedHrCheck = await fetch(`${server.baseUrl}/api/hr/check`, {
+    headers: {
+      Cookie: hrCookie
+    }
+  });
+  assert.equal(revokedHrCheck.status, 200);
+  const revokedHrBody = await revokedHrCheck.json();
+  assert.equal(Boolean(revokedHrBody.authorized), false);
+
+  const hrRelogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret2!"
+    })
+  });
+  assert.equal(hrRelogin.status, 200);
+
+  const oldResetPath = await fetch(`${server.baseUrl}/api/webmaster/password/reset`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    },
+    body: JSON.stringify({
+      password: "WebmasterSecret2!"
+    })
+  });
+  assert.equal(oldResetPath.status, 404);
 });
 
 test("server supports invite-by-email admin onboarding", async (t) => {
@@ -761,7 +909,7 @@ test("server supports invite-by-email admin onboarding", async (t) => {
       displayName: "Avery Ops",
       email: "avery.ops@example.com",
       username: "avery.ops",
-      roles: ["webmaster"]
+      roles: ["hr"]
     })
   });
   assert.equal(inviteAdmin.status, 201);
@@ -798,18 +946,18 @@ test("server supports invite-by-email admin onboarding", async (t) => {
   });
   assert.equal(accept.status, 200);
   const acceptBody = await accept.json();
-  assert.deepEqual(acceptBody.roles, ["webmaster"]);
-  const webmasterCookie = readSetCookie(accept);
-  assert.ok(webmasterCookie.includes("palziv_webmaster_auth="));
+  assert.deepEqual(acceptBody.roles, ["hr"]);
+  const invitedHrCookie = readSetCookie(accept);
+  assert.ok(invitedHrCookie.includes("palziv_hr_auth="));
 
-  const webmasterCheck = await fetch(`${server.baseUrl}/api/webmaster/check`, {
+  const hrCheck = await fetch(`${server.baseUrl}/api/hr/check`, {
     headers: {
-      Cookie: webmasterCookie
+      Cookie: invitedHrCookie
     }
   });
-  assert.equal(webmasterCheck.status, 200);
-  const webmasterCheckBody = await webmasterCheck.json();
-  assert.equal(Boolean(webmasterCheckBody.authorized), true);
+  assert.equal(hrCheck.status, 200);
+  const hrCheckBody = await hrCheck.json();
+  assert.equal(Boolean(hrCheckBody.authorized), true);
 
   const listAdmins = await fetch(`${server.baseUrl}/api/admin-users`, {
     headers: {

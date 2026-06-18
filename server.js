@@ -79,16 +79,13 @@ function readSiteConfig() {
 const siteConfig = readSiteConfig();
 const indexHtmlTemplate = await readFile(INDEX_HTML_TEMPLATE_PATH, "utf8");
 const serviceWorkerTemplate = await readFile(SERVICE_WORKER_TEMPLATE_PATH, "utf8");
-const assetVersionSeed = await Promise.all([
-  stat(path.join(PUBLIC_DIR, "app.js")),
-  stat(path.join(PUBLIC_DIR, "styles.css")),
-  stat(INDEX_HTML_TEMPLATE_PATH),
-  stat(SERVICE_WORKER_TEMPLATE_PATH),
-  stat(SERVICE_WORKER_ROUTING_PATH)
-])
-  .then((stats) => Math.round(Math.max(...stats.map((fileStat) => fileStat.mtimeMs))).toString(36))
-  .catch(() => "dev");
-const ASSET_VERSION = CONFIGURED_ASSET_VERSION || assetVersionSeed;
+const ASSET_VERSION_PATHS = [
+  path.join(PUBLIC_DIR, "app.js"),
+  path.join(PUBLIC_DIR, "styles.css"),
+  INDEX_HTML_TEMPLATE_PATH,
+  SERVICE_WORKER_TEMPLATE_PATH,
+  SERVICE_WORKER_ROUTING_PATH
+];
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
@@ -650,7 +647,22 @@ function buildWebmasterSummary({ boardData, pushData, analyticsData, securityRun
   };
 }
 
-function renderIndexHtml() {
+async function resolveAssetVersion() {
+  if (CONFIGURED_ASSET_VERSION) {
+    return CONFIGURED_ASSET_VERSION;
+  }
+
+  try {
+    const stats = await Promise.all(ASSET_VERSION_PATHS.map((filePath) => stat(filePath)));
+    return Math.round(Math.max(...stats.map((fileStat) => fileStat.mtimeMs))).toString(36);
+  } catch {
+    return "dev";
+  }
+}
+
+async function renderIndexHtml() {
+  const assetVersion = await resolveAssetVersion();
+
   return indexHtmlTemplate
     .replaceAll("__SITE_NAME__", escapeHtml(displayBrandName(siteConfig)))
     .replaceAll("__SITE_SHORT_NAME__", escapeHtml(siteConfig.shortName))
@@ -658,31 +670,32 @@ function renderIndexHtml() {
     .replaceAll("__SITE_DESCRIPTION__", escapeHtml(siteConfig.description))
     .replaceAll("__SITE_THEME_COLOR__", escapeHtml(siteConfig.themeColor))
     .replaceAll("__SITE_BACKGROUND_COLOR__", escapeHtml(siteConfig.backgroundColor))
-    .replaceAll("__ASSET_VERSION__", escapeHtml(ASSET_VERSION))
+    .replaceAll("__ASSET_VERSION__", escapeHtml(assetVersion))
     .replace("<!-- BOARD_CONFIG -->", `<script>window.__BOARD_CONFIG__ = ${serializeForScript({
       ...siteConfig,
-      assetVersion: ASSET_VERSION
+      assetVersion
     })};</script>`);
 }
 
-function renderServiceWorker() {
-  return serviceWorkerTemplate.replaceAll("__ASSET_VERSION__", ASSET_VERSION);
+async function renderServiceWorker() {
+  const assetVersion = await resolveAssetVersion();
+  return serviceWorkerTemplate.replaceAll("__ASSET_VERSION__", assetVersion);
 }
 
-function sendIndexHtml(res) {
+async function sendIndexHtml(res) {
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store"
   });
-  res.end(renderIndexHtml());
+  res.end(await renderIndexHtml());
 }
 
-function sendServiceWorker(res) {
+async function sendServiceWorker(res) {
   res.writeHead(200, {
     "Content-Type": "text/javascript; charset=utf-8",
     "Cache-Control": "no-store"
   });
-  res.end(renderServiceWorker());
+  res.end(await renderServiceWorker());
 }
 
 function sendManifest(res) {
@@ -1403,6 +1416,20 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/hr/password/reset") {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.resetHrPasswordByWebmaster(req, {
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/hr/recovery/request") {
       if (!requireSameOrigin(req, res)) return;
 
@@ -1528,20 +1555,6 @@ async function handleApi(req, res, url) {
       const body = await readJsonBody(req);
       const result = await securityStore.changeWebmasterPassword(req, {
         currentPassword: body.currentPassword,
-        password: body.password,
-        userAgent: req.headers["user-agent"],
-        clientIp: requestClientIp(req)
-      });
-
-      sendJson(res, 200, result);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/webmaster/password/reset") {
-      if (!(await requireHrMutationAccess(req, res))) return;
-
-      const body = await readJsonBody(req);
-      const result = await securityStore.resetWebmasterPasswordByHr(req, {
         password: body.password,
         userAgent: req.headers["user-agent"],
         clientIp: requestClientIp(req)
@@ -2199,18 +2212,18 @@ const server = http.createServer(async (req, res) => {
     if (nextLocation && url.pathname !== nextLocation) {
       redirectTo(res, nextLocation);
     } else {
-      sendIndexHtml(res);
+      await sendIndexHtml(res);
     }
     return;
   }
 
   if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster"))) {
-    sendIndexHtml(res);
+    await sendIndexHtml(res);
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/sw.js") {
-    sendServiceWorker(res);
+    await sendServiceWorker(res);
     return;
   }
 

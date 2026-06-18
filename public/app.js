@@ -156,7 +156,7 @@ let activeHistoryFilter = "All";
 let activePushRosterFilter = "active";
 const adminTabs = [
   { id: "publish", label: "Publish", icon: "megaphone" },
-  { id: "share", label: "Access", icon: "users" },
+  { id: "share", label: "Users", icon: "users" },
   { id: "history", label: "History", icon: "board" },
   { id: "settings", label: "Settings", icon: "lock" }
 ];
@@ -767,18 +767,61 @@ Copying this into Codex should give it enough context to trace the site health a
     `;
   }
 
-function renderAuthFrame({ title, error = "", content }) {
+function renderAuthFrame({
+  title,
+  eyebrow = "",
+  description = "",
+  error = "",
+  content,
+  className = "",
+  contentClassName = ""
+}) {
+  const cardClasses = ["auth-gate-card", "panel-card", className].filter(Boolean).join(" ");
+  const contentClasses = ["auth-frame-content", contentClassName].filter(Boolean).join(" ");
+
   return `
     <main class="auth-shell">
-      <section class="auth-gate-card panel-card">
+      <section class="${cardClasses}">
         ${brandBlock("")}
-        <div class="panel-title">
+        <div class="panel-title auth-frame-title">
           <div>
+            ${eyebrow ? `<p class="eyebrow auth-frame-eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
             <h2>${escapeHtml(title)}</h2>
+            ${description ? `<p>${escapeHtml(description)}</p>` : ""}
           </div>
         </div>
         ${error ? `<div class="employee-banner">${escapeHtml(error)}</div>` : ""}
-        ${content}
+        <div class="${contentClasses}">
+          ${content}
+        </div>
+      </section>
+    </main>
+  `;
+}
+
+function renderAdminAuthFrame({ route, title, description = "", error = "", content, footer = "" }) {
+  const routeLabel = route === "webmaster" ? "Webmaster admin" : "HR admin";
+
+  return `
+    <main class="admin-auth-shell">
+      <section class="admin-auth-card panel-card" data-admin-auth-surface="${escapeHtml(route)}">
+        <header class="admin-auth-header">
+          <div class="admin-auth-brand">
+            <div class="admin-auth-brand-disc">
+              <img class="admin-auth-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+            </div>
+            <div class="admin-auth-brand-copy">
+              <p class="eyebrow">${escapeHtml(routeLabel)}</p>
+              <h1>${escapeHtml(title)}</h1>
+              ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+            </div>
+          </div>
+        </header>
+        ${error ? `<div class="employee-banner">${escapeHtml(error)}</div>` : ""}
+        <div class="admin-auth-body">
+          ${content}
+        </div>
+        ${footer ? `<footer class="admin-auth-footer">${footer}</footer>` : ""}
       </section>
     </main>
   `;
@@ -820,7 +863,7 @@ function renderStatCard(value, label, note = "") {
 function renderHrSummaryStatCard({ value, label, tab, filter = "" }) {
   const actionLabel =
     tab === "share"
-      ? "Open Employee Access."
+      ? "Open Employee Accounts."
       : filter === "Urgent"
         ? "Open Urgent Alert History."
         : "Open Active Update History.";
@@ -978,7 +1021,8 @@ function csrfTokenForPath(pathname) {
   if (
     route === "/api/push/test" ||
     route === "/api/webmaster/logout" ||
-    route === "/api/webmaster/password"
+    route === "/api/webmaster/password" ||
+    route === "/api/hr/password/reset"
   ) {
     return String(state.access.webmaster?.csrfToken || "");
   }
@@ -2626,7 +2670,7 @@ function renderAdminInviteGate(route) {
 
 function renderAdminAuthGate(route) {
   const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
-  const sectionTitle = route === "webmaster" ? "IT" : "HR";
+  const sectionTitle = route === "webmaster" ? "Webmaster" : "HR";
   const inviteToken = currentInviteToken();
   const authError = access.error || state.message;
   const canSetup = route === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
@@ -2636,93 +2680,117 @@ function renderAdminAuthGate(route) {
     : route === "webmaster"
       ? state.authRecovery.webmaster
       : false;
-  const requiresUsername = route === "hr" || route === "webmaster";
-  const passwordLabel = route === "webmaster" ? "Webmaster password" : "HR password";
 
   if (inviteToken) {
     return renderAdminInviteGate(route);
   }
 
   const heading = recoveryMode
-    ? "Forgot Password"
+    ? `Reset ${sectionTitle} access`
     : setupBlocked
-    ? "IT login unavailable"
-    : canSetup
-      ? (route === "hr" ? "Set HR credentials" : `Set ${sectionTitle} credentials`)
-      : `${sectionTitle} login`;
-  const helperText = setupBlocked ? "Open HR to finish setup." : "";
+      ? `${sectionTitle} not ready`
+      : canSetup
+        ? `Create first ${sectionTitle} admin`
+        : `${sectionTitle} sign in`;
+  const description = recoveryMode
+    ? route === "hr"
+      ? "Use today's master key to set a new password."
+      : "Password resets for Webmaster admins are handled from HR."
+    : setupBlocked
+      ? "HR must finish setup or grant Webmaster access before this screen can be used."
+      : canSetup
+        ? `Create the first named admin account for ${sectionTitle}.`
+        : `Use your named admin account to continue.`;
 
-  return renderAuthFrame({
+  return renderAdminAuthFrame({
+    route,
     title: heading,
+    description,
     error: authError,
     content: recoveryMode
       ? route === "hr"
         ? `
-          <div class="auth-form auth-recovery-stack">
-            <p class="auth-inline-meta">Use today's master key to reset the HR password.</p>
-            <form class="auth-form" data-hr-master-recovery-form>
-              <label class="field">
-                <span>Master key</span>
-                <input name="recoveryToken" type="password" required autocomplete="one-time-code" placeholder="Today's master key">
-              </label>
-              <label class="field">
-                <span>New password</span>
-                <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New HR password">
-              </label>
-              <label class="field">
-                <span>Confirm new password</span>
-                <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
-              </label>
-              <div class="auth-form-actions">
-                <button class="button" type="submit">Recover With Master Key</button>
-              </div>
-            </form>
-            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to Sign In</button>
-          </div>
+          <form class="auth-form admin-auth-form" data-hr-master-recovery-form>
+            <label class="field">
+              <span>Master key</span>
+              <input name="recoveryToken" type="password" required autocomplete="one-time-code" placeholder="Today's master key">
+            </label>
+            <label class="field">
+              <span>New password</span>
+              <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New password">
+            </label>
+            <label class="field">
+              <span>Confirm new password</span>
+              <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+            </label>
+            <button class="button admin-auth-submit" type="submit">Recover With Master Key</button>
+          </form>
         `
         : `
-          <div class="auth-form auth-recovery-stack">
-            <p class="auth-inline-meta">HR can reset the IT password.</p>
-            <div class="auth-form-actions">
-              <button class="button" type="button" data-route="hr">Open HR</button>
-            </div>
-            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to Sign In</button>
+          <div class="admin-auth-message">
+            HR handles password resets for Webmaster admins from Admin Management.
+          </div>
+          <div class="admin-auth-primary-actions">
+            <button class="button admin-auth-submit" type="button" data-route="hr">Open HR</button>
           </div>
         `
       : setupBlocked
       ? `
-        <div class="auth-form">
-          ${helperText ? `<p class="form-note">${escapeHtml(helperText)}</p>` : ""}
-          <div class="auth-form-actions">
-            <button class="button" type="button" data-route="hr">Open HR</button>
-            <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
-          </div>
+        <div class="admin-auth-message">
+          HR must finish the first admin setup or assign Webmaster access before this sign-in becomes available.
+        </div>
+        <div class="admin-auth-primary-actions">
+          <button class="button admin-auth-submit" type="button" data-route="hr">Open HR</button>
         </div>
       `
       : `
-        <form class="auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(route)}">
+        <form class="auth-form admin-auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(route)}">
           ${route === "hr" && canSetup ? `
           <label class="field">
             <span>Deployment setup secret</span>
             <input name="setupToken" type="password" required autocomplete="one-time-code" placeholder="Bootstrap secret">
           </label>
           ` : ""}
-          ${requiresUsername ? `
           <label class="field">
-            <span>${escapeHtml(route === "webmaster" ? (canSetup ? "Webmaster username" : "Username") : (canSetup ? "HR username" : "Username"))}</span>
-            <input name="username" maxlength="80" required autocomplete="username" placeholder="${escapeHtml(route === "webmaster" ? "webmaster" : "hr")}">
+            <span>${escapeHtml(canSetup ? "Create username" : "Username")}</span>
+            <input name="username" maxlength="80" required autocomplete="username" placeholder="e.g. alex.smith">
           </label>
-          ` : ""}
           <label class="field">
-            <span>${escapeHtml(canSetup ? passwordLabel : "Password")}</span>
-            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? `Create the ${passwordLabel.toLowerCase()}` : passwordLabel)}">
+            <span>${escapeHtml(canSetup ? "Create password" : "Password")}</span>
+            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? "Create a password" : "Your password")}">
           </label>
-          <div class="auth-form-actions">
-            <button class="button" type="submit">${escapeHtml(canSetup ? "Save Credentials" : "Sign In")}</button>
-            <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
-          </div>
+          <button class="button admin-auth-submit" type="submit">${escapeHtml(canSetup ? "Save Credentials" : "Sign In")}</button>
         </form>
-        ${!canSetup ? `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(route)}">Forgot Password?</button>` : ""}
+      `,
+    footer: recoveryMode
+      ? `
+        <div class="admin-auth-footer-actions">
+          <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to Sign In</button>
+          <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
+        </div>
+      `
+      : setupBlocked
+      ? `
+        <div class="admin-auth-footer-actions">
+          <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
+        </div>
+      `
+      : canSetup
+      ? `
+        <p class="admin-auth-footer-note">${escapeHtml(
+          route === "webmaster"
+            ? "Finish HR setup first if Webmaster access has not been assigned yet."
+            : "After setup, use Admin Management to create or invite additional admins."
+        )}</p>
+        <div class="admin-auth-footer-actions">
+          <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
+        </div>
+      `
+      : `
+        <div class="admin-auth-footer-actions">
+          <button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(route)}">Forgot Password?</button>
+          <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
+        </div>
       `
   });
 }
@@ -2835,18 +2903,7 @@ function renderAdminDirectoryRow(adminUser) {
       <td>
         <div class="admin-role-cell">
           <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
-          <form class="admin-role-editor" data-update-admin-roles-form>
-            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
-            <label class="checkbox-row admin-role-checkbox">
-              <input name="roles" type="checkbox" value="hr"${roles.includes("hr") ? " checked" : ""}>
-              <span>HR</span>
-            </label>
-            <label class="checkbox-row admin-role-checkbox">
-              <input name="roles" type="checkbox" value="webmaster"${roles.includes("webmaster") ? " checked" : ""}>
-              <span>IT</span>
-            </label>
-            <button class="ghost-button" type="submit">${icon("check")} Save Roles</button>
-          </form>
+          <div class="admin-table-secondary">Webmaster roles stay outside the HR console.</div>
         </div>
       </td>
       <td>
@@ -2905,7 +2962,7 @@ function renderAdminDirectoryRow(adminUser) {
 
 function renderAdminDirectoryTable(adminUsers) {
   if (!adminUsers.length) {
-    return '<div class="empty-state">No Admin Accounts Yet.</div>';
+    return '<div class="empty-state">No HR Admin Accounts Yet.</div>';
   }
 
   return `
@@ -2936,9 +2993,10 @@ function renderAdminAccountsPanel() {
     <section class="panel-card employee-access-card">
       <div class="employee-access-head">
         <div>
-          <h3>Admin Accounts</h3>
+          <h3>HR Admin Accounts</h3>
+          <p>Webmaster-role accounts are intentionally hidden from the HR console.</p>
         </div>
-        <span class="sync-pill">${escapeHtml(`${adminUsers.length} Admin${adminUsers.length === 1 ? "" : "s"}`)}</span>
+        <span class="sync-pill">${escapeHtml(`${adminUsers.length} HR Admin${adminUsers.length === 1 ? "" : "s"}`)}</span>
       </div>
 
       <form class="employee-create-form admin-create-grid" data-create-admin-form>
@@ -2958,23 +3016,17 @@ function renderAdminAccountsPanel() {
           <span>Temporary password</span>
           <input name="password" type="password" minlength="10" autocomplete="new-password" placeholder="Only needed for manual setup">
         </label>
-        <fieldset class="admin-role-picker">
-          <legend>Roles</legend>
-          <label class="checkbox-row admin-role-checkbox">
-            <input name="roles" type="checkbox" value="hr" checked>
-            <span>HR</span>
-          </label>
-          <label class="checkbox-row admin-role-checkbox">
-            <input name="roles" type="checkbox" value="webmaster">
-            <span>IT</span>
-          </label>
-        </fieldset>
+        <input name="roles" type="hidden" value="hr">
+        <div class="field">
+          <span>Role</span>
+          <div class="admin-role-chip-row">${renderAdminRoleChips(["hr"])}</div>
+        </div>
         <div class="admin-create-actions">
           <button class="button employee-create-submit" type="submit" data-admin-create-action="invite">${icon("send")} Send Invite</button>
           <button class="ghost-button" type="submit" data-admin-create-action="password">${icon("lock")} Create With Password</button>
         </div>
       </form>
-      <p class="form-note admin-create-note">Email invite is the default path. Use manual password setup only when the admin cannot receive email yet.</p>
+      <p class="form-note admin-create-note">This surface creates HR-only admin accounts. Webmaster-role accounts stay outside the HR console.</p>
 
       ${renderAdminDirectoryTable(adminUsers)}
     </section>
@@ -3487,29 +3539,29 @@ function renderPrivilegedPasswordPanel(route) {
   `;
 }
 
-function renderHrWebmasterResetPanel() {
+function renderWebmasterHrResetPanel() {
   return `
     <section class="panel-card settings-credential-card">
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("monitor")} IT recovery</p>
-          <h3>Reset the IT password</h3>
-          <p>Use HR authority to rotate the IT password and immediately sign out existing IT sessions.</p>
+          <p class="eyebrow">${icon("users")} HR recovery</p>
+          <h3>Reset the HR password</h3>
+          <p>Use Webmaster authority to rotate the HR password and immediately sign out existing HR sessions.</p>
         </div>
       </div>
-      <form class="auth-form" data-hr-reset-webmaster-password-form>
+      <form class="auth-form" data-webmaster-reset-hr-password-form>
         <div class="composer-grid">
           <label class="field">
-            <span>New IT password</span>
-            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New IT password">
+            <span>New HR password</span>
+            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New HR password">
           </label>
           <label class="field">
-            <span>Confirm new IT password</span>
+            <span>Confirm new HR password</span>
             <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
           </label>
         </div>
         <div class="auth-form-actions">
-          <button class="ghost-button" type="submit">Reset IT password</button>
+          <button class="ghost-button" type="submit">Reset HR password</button>
         </div>
       </form>
     </section>
@@ -3553,6 +3605,7 @@ function renderWebmasterSettingsPanel() {
       </section>
 
       ${renderPrivilegedPasswordPanel("webmaster")}
+      ${renderWebmasterHrResetPanel()}
     </section>
   `;
 }
@@ -3560,8 +3613,8 @@ function renderWebmasterSettingsPanel() {
 function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
-      ${renderAdminAccountsPanel()}
       ${renderEmployeeDirectoryPanel()}
+      ${renderAdminAccountsPanel()}
     </section>
   `;
 }
@@ -4632,29 +4685,6 @@ async function handleUpdateAdminProfileSubmit(event) {
   clearMessageSoon();
 }
 
-async function handleUpdateAdminRolesSubmit(event) {
-  event.preventDefault();
-  const form = event.target;
-  const formData = new FormData(form);
-  const adminUserId = String(formData.get("adminUserId") || "");
-
-  try {
-    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/roles`, {
-      method: "POST",
-      body: JSON.stringify({
-        roles: formData.getAll("roles")
-      })
-    });
-    await refreshAdminData();
-    setMessage("Admin roles updated.", "success");
-  } catch (error) {
-    setMessage(error.message || "Could not update admin roles.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
 async function handleResendAdminInviteSubmit(event) {
   event.preventDefault();
   const formData = new FormData(event.target);
@@ -4864,7 +4894,7 @@ async function handleHrMasterRecoverySubmit(event) {
   clearMessageSoon();
 }
 
-async function handleHrResetWebmasterPasswordSubmit(event) {
+async function handleWebmasterResetHrPasswordSubmit(event) {
   event.preventDefault();
   const form = event.target;
   const data = Object.fromEntries(new FormData(form));
@@ -4877,16 +4907,16 @@ async function handleHrResetWebmasterPasswordSubmit(event) {
   }
 
   try {
-    await requestJson("/api/webmaster/password/reset", {
+    await requestJson("/api/hr/password/reset", {
       method: "POST",
       body: JSON.stringify({
         password: data.password
       })
     });
     form.reset();
-    setMessage("IT password reset. Existing IT sessions were signed out.", "success");
+    setMessage("HR password reset. Existing HR sessions were signed out.", "success");
   } catch (error) {
-    setMessage(error.message || "Could not reset the IT password.");
+    setMessage(error.message || "Could not reset the HR password.");
   }
 
   render();
@@ -5177,8 +5207,8 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (event.target.matches("[data-hr-reset-webmaster-password-form]")) {
-    await handleHrResetWebmasterPasswordSubmit(event);
+  if (event.target.matches("[data-webmaster-reset-hr-password-form]")) {
+    await handleWebmasterResetHrPasswordSubmit(event);
     return;
   }
 
@@ -5194,11 +5224,6 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-update-admin-profile-form]")) {
     await handleUpdateAdminProfileSubmit(event);
-    return;
-  }
-
-  if (event.target.matches("[data-update-admin-roles-form]")) {
-    await handleUpdateAdminRolesSubmit(event);
     return;
   }
 

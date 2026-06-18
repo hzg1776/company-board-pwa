@@ -927,6 +927,19 @@ a:focus-visible {
   gap: 16px;
 }
 
+.auth-frame-title {
+  margin-bottom: 0;
+}
+
+.auth-frame-eyebrow {
+  margin-bottom: 6px;
+}
+
+.auth-frame-content {
+  display: grid;
+  gap: 16px;
+}
+
 .auth-gate-card .brand {
   display: flex;
   justify-content: center;
@@ -974,6 +987,130 @@ a:focus-visible {
 
 .auth-recovery-stack {
   gap: 14px;
+}
+
+.admin-auth-shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 20px 16px;
+}
+
+.admin-auth-card {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 20px;
+  padding: 28px 24px;
+}
+
+.admin-auth-header {
+  display: grid;
+}
+
+.admin-auth-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.admin-auth-brand-disc {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  border-radius: 16px;
+  border: 1px solid rgba(11, 76, 117, 0.12);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(15, 109, 171, 0.18), rgba(255, 255, 255, 0.98) 62%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.99), rgba(237, 246, 252, 0.99));
+  box-shadow:
+    0 18px 32px rgba(15, 23, 42, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.admin-auth-brand-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.admin-auth-brand-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-auth-brand-copy .eyebrow {
+  min-height: 0;
+  margin: 0;
+}
+
+.admin-auth-brand-copy h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.45rem;
+  line-height: 1.08;
+}
+
+.admin-auth-brand-copy p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.42;
+}
+
+.admin-auth-body,
+.admin-auth-form,
+.admin-auth-primary-actions {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-auth-submit {
+  width: 100%;
+}
+
+.admin-auth-message {
+  margin: 0;
+  padding: 14px 15px;
+  border: 1px solid rgba(42, 64, 79, 0.12);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.admin-auth-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(42, 64, 79, 0.1);
+}
+
+.admin-auth-footer-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.42;
+  flex: 1 1 220px;
+}
+
+.admin-auth-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-auth-footer .auth-inline-action {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  font-size: 0.88rem;
+  font-weight: 800;
 }
 
 .employee-create-form {
@@ -2484,6 +2621,31 @@ body[data-route="launcher"] {
 
   .auth-gate-card {
     gap: 14px;
+  }
+
+  .admin-auth-shell {
+    padding:
+      calc(env(safe-area-inset-top, 0px) + 16px)
+      12px
+      calc(env(safe-area-inset-bottom, 0px) + 18px);
+  }
+
+  .admin-auth-card {
+    padding: 24px 18px;
+    gap: 18px;
+  }
+
+  .admin-auth-brand {
+    align-items: center;
+  }
+
+  .admin-auth-footer {
+    align-items: stretch;
+  }
+
+  .admin-auth-footer-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .employee-brand-banner {
