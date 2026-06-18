@@ -33,9 +33,12 @@ const ADMIN_DAILY_RECOVERY_SEED = String(process.env.ADMIN_DAILY_RECOVERY_SEED |
 const HR_RECOVERY_EMAIL = String(process.env.HR_RECOVERY_EMAIL || "");
 const RECOVERY_EMAIL_FROM = String(process.env.RECOVERY_EMAIL_FROM || process.env.EMAIL_FROM || "");
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "");
-const CONFIGURED_PUBLIC_BASE_URL = parseRequiredPublicBaseUrl(process.env.PUBLIC_BASE_URL);
+const CONFIGURED_PUBLIC_BASE_URL = parseConfiguredPublicBaseUrl(process.env.PUBLIC_BASE_URL);
 const TRUST_PROXY_ADDRESSES = parseTrustedProxyAddresses(process.env.TRUST_PROXY_ADDRESSES || "");
 const RECOVERY_TIME_ZONE = "America/New_York";
+const ALERT_RETENTION_DAYS = Math.max(1, Number(process.env.ALERT_RETENTION_DAYS || 2));
+const ALERT_RETENTION_MS = ALERT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const ALERT_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.ALERT_CLEANUP_INTERVAL_MS || 24 * 60 * 60 * 1000));
 const MAX_BODY_BYTES = 1_000_000;
 const EMPLOYEE_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const DEFAULT_SITE_CONFIG = Object.freeze({
@@ -83,6 +86,7 @@ const ASSET_VERSION = CONFIGURED_ASSET_VERSION || assetVersionSeed;
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
+const allowedAlertRetention = new Set(["24h", "48h", "168h", "manual"]);
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -381,6 +385,49 @@ function isPostExpired(post) {
   return endOfDay < new Date();
 }
 
+function pruneOldAlertPosts(posts, now = Date.now()) {
+  if (!Array.isArray(posts) || !posts.length) {
+    return { posts: Array.isArray(posts) ? posts : [], removedCount: 0 };
+  }
+
+  let removedCount = 0;
+  const retainedPosts = posts.filter((post) => {
+    if (!post?.notifyEmployees) {
+      return true;
+    }
+
+    const retentionMode = allowedAlertRetention.has(post?.alertRetention)
+      ? post.alertRetention
+      : "48h";
+    if (retentionMode === "manual") {
+      return true;
+    }
+
+    const retentionMs =
+      retentionMode === "24h"
+        ? 24 * 60 * 60 * 1000
+        : retentionMode === "168h"
+          ? 7 * 24 * 60 * 60 * 1000
+          : retentionMode === "48h"
+            ? 48 * 60 * 60 * 1000
+            : ALERT_RETENTION_MS;
+
+    const createdAt = Date.parse(post.createdAt || "");
+    if (Number.isNaN(createdAt)) {
+      return true;
+    }
+
+    if (createdAt < now - retentionMs) {
+      removedCount += 1;
+      return false;
+    }
+
+    return true;
+  });
+
+  return { posts: retainedPosts, removedCount };
+}
+
 function isExpiringSoon(post, days = 7) {
   if (!post?.expiresAt || isPostExpired(post)) {
     return false;
@@ -637,11 +684,11 @@ function normalizeRemoteAddress(value) {
   return address.startsWith('::ffff:') ? address.slice(7) : address;
 }
 
-function parseRequiredPublicBaseUrl(value) {
+function parseConfiguredPublicBaseUrl(value) {
   const raw = String(value || "").trim();
 
   if (!raw) {
-    throw new Error("PUBLIC_BASE_URL is required and must match the deployed public origin.");
+    return "";
   }
 
   let parsed;
@@ -712,8 +759,19 @@ function requestProtocol(req) {
   return trustedProxyRequest(req) && forwardedProto ? forwardedProto : (req.socket.encrypted ? 'https' : 'http');
 }
 
+function requestOrigin(req) {
+  const protocol = requestProtocol(req);
+  const host = cleanText(requestHost(req), 200) || `localhost:${PORT}`;
+
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return `${protocol}://localhost:${PORT}`;
+  }
+}
+
 function appBaseUrl(req) {
-  return CONFIGURED_PUBLIC_BASE_URL;
+  return CONFIGURED_PUBLIC_BASE_URL || requestOrigin(req);
 }
 
 async function sendEmployeeQr(req, res) {
@@ -1023,6 +1081,9 @@ function normalizePost(input) {
   const audience = cleanText(input.audience || "All employees", 80);
   const expiresAt = cleanText(input.expiresAt, 10);
   const notifyEmployees = parseBooleanish(input.notifyEmployees) || priority === "Important" || priority === "Urgent";
+  const alertRetention = allowedAlertRetention.has(String(input.alertRetention || ""))
+    ? String(input.alertRetention)
+    : "48h";
 
   if (!title) throw new Error("Title is required.");
   if (!body) throw new Error("Message is required.");
@@ -1033,6 +1094,7 @@ function normalizePost(input) {
     type,
     priority,
     notifyEmployees,
+    alertRetention: notifyEmployees ? alertRetention : "manual",
     title,
     body,
     audience,
@@ -1736,6 +1798,26 @@ function getPublicFilePath(urlPathname) {
   return requestedPath;
 }
 
+async function runAlertRetentionCleanup() {
+  const result = await boardStore.updateData((data) => {
+    const currentPosts = Array.isArray(data.posts) ? data.posts : [];
+    const { posts, removedCount } = pruneOldAlertPosts(currentPosts);
+    if (removedCount > 0) {
+      data.posts = posts;
+    }
+    return {
+      removedCount,
+      remainingCount: posts.length
+    };
+  });
+
+  if (result?.removedCount > 0) {
+    console.log(`Alert retention cleanup removed ${result.removedCount} old alert${result.removedCount === 1 ? "" : "s"}; ${result.remainingCount} post${result.remainingCount === 1 ? "" : "s"} remain.`);
+  }
+
+  return result;
+}
+
 async function serveStatic(req, res, url) {
   const staticPath = path.extname(url.pathname) ? url.pathname : "/";
   const requestedPath = getPublicFilePath(staticPath);
@@ -1841,6 +1923,12 @@ await boardStore.init();
 await notificationHub.init();
 await analyticsStore.init();
 await securityStore.init();
+await runAlertRetentionCleanup();
+setInterval(() => {
+  runAlertRetentionCleanup().catch((error) => {
+    console.error("Alert retention cleanup failed.", error);
+  });
+}, ALERT_CLEANUP_INTERVAL_MS);
 
 server.listen(PORT, () => {
   console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);

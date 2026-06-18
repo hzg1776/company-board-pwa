@@ -149,18 +149,15 @@ function saveDeviceProfile(profile) {
 }
 
 document.title = APP_DISPLAY_TITLE;
-const historyFilters = ["All", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
+const historyFilters = ["All", "Active", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeAdminTab = "publish";
 let activeWebmasterTab = "overview";
 let activeHistoryFilter = "All";
 let activePushRosterFilter = "active";
 const adminTabs = [
   { id: "publish", label: "Publish", icon: "megaphone" },
-  { id: "weather", label: "Weather", icon: "cloud" },
-  { id: "alerts", label: "Alerts", icon: "bell" },
-  { id: "history", label: "History", icon: "board" },
-  { id: "security", label: "Security", icon: "alert" },
   { id: "share", label: "Access", icon: "users" },
+  { id: "history", label: "History", icon: "board" },
   { id: "settings", label: "Settings", icon: "lock" }
 ];
 const webmasterTabs = [
@@ -793,6 +790,27 @@ function renderStatCard(value, label, note = "") {
       <span>${escapeHtml(label)}</span>
       ${note ? `<p>${escapeHtml(note)}</p>` : ""}
     </article>
+  `;
+}
+
+function renderHrSummaryStatCard({ value, label, tab, filter = "" }) {
+  const actionLabel =
+    tab === "share"
+      ? "Open Employee Access."
+      : filter === "Urgent"
+        ? "Open Urgent Alert History."
+        : "Open Active Update History.";
+
+  return `
+    <button
+      class="stat-card hr-stat-button"
+      type="button"
+      onclick="window.openHrSummaryTarget && window.openHrSummaryTarget('${escapeHtml(tab)}', '${escapeHtml(filter)}')"
+      aria-label="${escapeHtml(`${label}. ${actionLabel}`)}"
+    >
+      <strong>${escapeHtml(value)}</strong>
+      <span>${escapeHtml(label)}</span>
+    </button>
   `;
 }
 
@@ -1517,7 +1535,7 @@ function buildEmployeeSetupState() {
       };
   } else if (!pushSubscribed) {
       nextStep = {
-      title: "Subscribe this browser",
+      title: "Subscribe This Browser",
       detail: "This browser can receive web push. Enter the employee name, then tap subscribe to finish setup.",
       action: "push"
     };
@@ -1557,7 +1575,7 @@ function buildEmployeeSetupState() {
 
   const checklist = [
     {
-      title: "Install on phone",
+      title: "Install On Phone",
       value: installRequired ? (installed ? "Installed" : "Needed") : "Not needed",
       detail: installRequired
         ? "Open the installed Palziv app from your Home Screen before you finish alert setup."
@@ -1909,12 +1927,12 @@ function renderAlertControls() {
   if (state.push.subscribed) {
     return `
       <button class="ghost-button" type="button" data-disable-alerts>${icon("bell")} Turn off this device</button>
-      <span class="status-chip success">${icon("check")} Subscribed on this device</span>
+      <span class="status-chip success">${icon("check")} Subscribed On This Device</span>
     `;
   }
 
   const supported = supportsPushNotifications();
-  const buttonLabel = "Subscribe this device";
+  const buttonLabel = "Subscribe This Device";
   const helperText = !supported
     ? "Open the portal in a push-capable browser."
     : state.push.permission === "denied"
@@ -1932,7 +1950,7 @@ function renderTestPushControl() {
     return `<span class="status-chip muted">${icon("refresh")} Sending test...</span>`;
   }
 
-  return `<button class="ghost-button" type="button" data-send-test-push>${icon("send")} Send test push</button>`;
+  return `<button class="ghost-button" type="button" data-send-test-push>${icon("send")} Send Test Push</button>`;
 }
 
 function renderCurrentPushStatusCard(currentPush) {
@@ -2004,7 +2022,7 @@ function installGuideSteps() {
 function renderInstallGuideToggle() {
   return `
     <details class="employee-install-guide"${state.employeeInstallGuideOpen ? " open" : ""} data-employee-install-guide>
-      <summary class="ghost-button employee-install-guide-toggle">Install on phone</summary>
+      <summary class="ghost-button employee-install-guide-toggle">Install On Phone</summary>
       <div class="employee-install-guide-body">
         <p class="panel-copy">Use the phone that should receive Palziv alerts.</p>
         <ol class="employee-install-guide-list">
@@ -2216,10 +2234,20 @@ function historyPosts() {
   return [...state.posts]
     .filter((post) => {
       if (activeHistoryFilter === "All") return true;
+      if (activeHistoryFilter === "Active") return !isExpired(post);
       if (activeHistoryFilter === "Urgent") return post.priority === "Urgent";
       return post.type === activeHistoryFilter;
     })
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function formatAlertRetentionLabel(value) {
+  return {
+    "24h": "24 Hours",
+    "48h": "48 Hours",
+    "168h": "7 Days",
+    manual: "Manual Only"
+  }[String(value || "48h")] || "48 Hours";
 }
 
 function renderNotice(post, includeControls = false) {
@@ -2424,7 +2452,7 @@ function renderEmployeeAuthGate() {
           <input name="password" type="password" minlength="10" required autocomplete="current-password" placeholder="Your employee password">
         </label>
         <div class="auth-form-actions">
-          <button class="button" type="submit">Sign in</button>
+          <button class="button" type="submit">Sign In</button>
           <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
         </div>
       </form>
@@ -2445,7 +2473,7 @@ function renderAdminAuthGate(route) {
       : false;
   const passwordLabel = route === "webmaster" ? "Webmaster password" : "Management password";
   const heading = recoveryMode
-    ? "Forgot password"
+    ? "Forgot Password"
     : setupBlocked
     ? "IT login unavailable"
     : canSetup
@@ -2475,10 +2503,10 @@ function renderAdminAuthGate(route) {
                 <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
               </label>
               <div class="auth-form-actions">
-                <button class="button" type="submit">Recover with master key</button>
+                <button class="button" type="submit">Recover With Master Key</button>
               </div>
             </form>
-            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to sign in</button>
+            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to Sign In</button>
           </div>
         `
         : `
@@ -2487,7 +2515,7 @@ function renderAdminAuthGate(route) {
             <div class="auth-form-actions">
               <button class="button" type="button" data-route="hr">Open HR</button>
             </div>
-            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to sign in</button>
+            <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to Sign In</button>
           </div>
         `
       : setupBlocked
@@ -2513,53 +2541,83 @@ function renderAdminAuthGate(route) {
             <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? `Create the ${passwordLabel.toLowerCase()}` : passwordLabel)}">
           </label>
           <div class="auth-form-actions">
-            <button class="button" type="submit">${escapeHtml(canSetup ? "Save password" : "Sign in")}</button>
+            <button class="button" type="submit">${escapeHtml(canSetup ? "Save Password" : "Sign In")}</button>
             <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
           </div>
         </form>
-        ${!canSetup ? `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(route)}">Forgot password?</button>` : ""}
+        ${!canSetup ? `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(route)}">Forgot Password?</button>` : ""}
       `
   });
 }
 
-function renderEmployeeDirectoryCard(employee) {
+function renderEmployeeDirectoryRow(employee) {
   return `
-    <article class="panel-card employee-directory-card ${employee.active ? "employee-directory-active" : "employee-directory-inactive"}">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("users")} Employee account</p>
-          <h3>${escapeHtml(employee.name || employee.username)}</h3>
-          <p>@${escapeHtml(employee.username)} · ${escapeHtml(employee.active ? "Active" : "Disabled")}</p>
-        </div>
-        <span class="sync-pill">${escapeHtml(employee.active ? "Enabled" : "Revoked")}</span>
-      </div>
-      <div class="panel-metrics employee-directory-metrics">
-        ${renderStatCard(String(employee.activeSessions || 0), "Sessions", employee.lastLoginAt ? `Last login ${formatDate(employee.lastLoginAt)}` : "No login yet")}
-        ${renderStatCard(String(employee.authorizedDevices || 0), "Active devices", `${employee.devices || 0} total enrolled`)}
-        ${renderStatCard(employee.disabledAt ? formatDate(employee.disabledAt) : "Live", "Status changed", employee.updatedAt ? formatDate(employee.updatedAt) : "Not updated")}
-      </div>
-      <div class="employee-directory-actions">
-        <form data-employee-access-form>
+    <tr>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</div>
+      </td>
+      <td>
+        <div class="admin-table-primary">@${escapeHtml(employee.username)}</div>
+      </td>
+      <td>
+        <span class="admin-table-chip ${employee.active ? "is-positive" : "is-muted"}">${escapeHtml(employee.active ? "Active" : "Disabled")}</span>
+      </td>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(String(employee.activeSessions || 0))}</div>
+        <div class="admin-table-secondary">${escapeHtml(employee.lastLoginAt ? `Last Login ${formatDate(employee.lastLoginAt)}` : "No Login Yet")}</div>
+      </td>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(String(employee.authorizedDevices || 0))}</div>
+        <div class="admin-table-secondary">${escapeHtml(`${employee.devices || 0} Total Enrolled`)}</div>
+      </td>
+      <td>
+        <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
           <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <input type="hidden" name="active" value="${employee.active ? "false" : "true"}">
-          <button class="ghost-button" type="submit">${employee.active ? `${icon("alert")} Disable access` : `${icon("check")} Re-enable access`}</button>
+          <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New Temporary Password">
+          <button class="ghost-button" type="submit">${icon("lock")} Reset</button>
         </form>
-        <form data-revoke-employee-sessions-form>
-          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <button class="ghost-button" type="submit">${icon("refresh")} Sign out all sessions</button>
-        </form>
-      </div>
-      <form class="employee-password-form" data-reset-employee-password-form>
-        <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-        <label class="field full">
-          <span>Reset password</span>
-          <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New temporary password">
-        </label>
-        <div class="auth-form-actions">
-          <button class="ghost-button" type="submit">${icon("lock")} Save new password</button>
+      </td>
+      <td>
+        <div class="admin-table-actions">
+          <form data-employee-access-form>
+            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+            <input type="hidden" name="active" value="${employee.active ? "false" : "true"}">
+            <button class="ghost-button" type="submit">${employee.active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}</button>
+          </form>
+          <form data-revoke-employee-sessions-form>
+            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+            <button class="ghost-button" type="submit">${icon("refresh")} Sign Out Sessions</button>
+          </form>
         </div>
-      </form>
-    </article>
+      </td>
+    </tr>
+  `;
+}
+
+function renderEmployeeDirectoryTable(employees) {
+  if (!employees.length) {
+    return '<div class="empty-state">No Employee Accounts Yet.</div>';
+  }
+
+  return `
+    <div class="admin-table-wrap">
+      <table class="admin-table admin-table-employees">
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Username</th>
+            <th>Status</th>
+            <th>Sessions</th>
+            <th>Devices</th>
+            <th>Reset Password</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${employees.map((employee) => renderEmployeeDirectoryRow(employee)).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -2567,39 +2625,31 @@ function renderEmployeeDirectoryPanel() {
   const employees = Array.isArray(state.employeeDirectory.employees) ? state.employeeDirectory.employees : [];
 
   return `
-    <section class="panel-card">
-      <div class="panel-title panel-title-wide">
+    <section class="panel-card employee-access-card">
+      <div class="employee-access-head">
         <div>
-          <p class="eyebrow">${icon("lock")} Employee accounts</p>
-          <h3>Create, disable, and reset employee access</h3>
-          <p>Disabling an account immediately blocks board access and deauthorizes that employee's push devices.</p>
+          <h3>Employee Accounts</h3>
         </div>
-        <span class="sync-pill">${escapeHtml(`${employees.length} account${employees.length === 1 ? "" : "s"}`)}</span>
+        <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
       </div>
 
-      <form class="auth-form employee-create-form" data-create-employee-form>
-        <div class="composer-grid">
+      <form class="employee-create-form employee-create-grid" data-create-employee-form>
           <label class="field">
-            <span>Employee name</span>
-            <input name="name" maxlength="120" required placeholder="e.g. Maria Lopez">
+            <span>Name</span>
+            <input name="name" maxlength="120" required placeholder="Employee Name">
           </label>
           <label class="field">
             <span>Username</span>
-            <input name="username" maxlength="80" required placeholder="e.g. maria.lopez">
+            <input name="username" maxlength="80" required placeholder="Username">
           </label>
-          <label class="field field-span-2">
+          <label class="field">
             <span>Temporary password</span>
-            <input name="password" type="password" minlength="10" required placeholder="At least 10 characters">
+            <input name="password" type="password" minlength="10" required placeholder="Temporary Password">
           </label>
-        </div>
-        <div class="auth-form-actions">
-          <button class="button" type="submit">${icon("users")} Create employee account</button>
-        </div>
+          <button class="button employee-create-submit" type="submit">${icon("users")} Create Account</button>
       </form>
 
-      <div class="employee-directory-list">
-        ${employees.length ? employees.map((employee) => renderEmployeeDirectoryCard(employee)).join("") : '<div class="empty-state">No employee accounts yet.</div>'}
-      </div>
+      ${renderEmployeeDirectoryTable(employees)}
     </section>
   `;
 }
@@ -2637,7 +2687,7 @@ function renderEmployee() {
       </section>
 
       <section class="employee-bottom-actions" aria-label="Account actions">
-        <button class="ghost-button employee-signout-button" type="button" data-employee-logout>Sign out</button>
+        <button class="ghost-button employee-signout-button" type="button" data-employee-logout>Sign Out</button>
       </section>
     </main>
   `;
@@ -2680,21 +2730,20 @@ function renderAdminPublishPanel() {
       <div class="panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("megaphone")} Publish</p>
-          <h2>New update</h2>
-          <p>Use the dropdowns to keep publishing focused and send the right update to the right group.</p>
+          <h2>New Update</h2>
+          <p>Create a clear employee update and choose exactly who should receive it.</p>
         </div>
-        <span class="sync-pill">Live server</span>
       </div>
       <section class="tool-panel composer-panel panel-card">
         <form data-post-form>
           <div class="composer-grid">
             <label class="field field-span-2">
               <span>Title</span>
-              <input name="title" maxlength="90" required placeholder="Short headline">
+              <input name="title" maxlength="90" required placeholder="Short Headline">
             </label>
             <label class="field field-span-2">
               <span>Message</span>
-              <textarea name="body" maxlength="700" required placeholder="What employees need to know"></textarea>
+              <textarea name="body" maxlength="700" required placeholder="What Employees Need To Know"></textarea>
             </label>
             <label class="field">
               <span>Category</span>
@@ -2716,18 +2765,30 @@ function renderAdminPublishPanel() {
             </label>
             <label class="field">
               <span>Audience</span>
-              <input name="audience" maxlength="80" value="All employees">
+              <select name="audience">
+                <option>All Employees</option>
+                <option>Operations</option>
+                <option>Office Staff</option>
+                <option>Warehouse</option>
+                <option>Leadership</option>
+                <option>HR</option>
+              </select>
             </label>
             <label class="field">
-              <span>Expires</span>
-              <input name="expiresAt" type="date">
+              <span>Alert Retention</span>
+              <select name="alertRetention">
+                <option value="24h">24 Hours</option>
+                <option value="48h" selected>48 Hours</option>
+                <option value="168h">7 Days</option>
+                <option value="manual">Manual Only</option>
+              </select>
             </label>
           </div>
           <label class="checkbox-row">
             <input type="checkbox" name="notifyEmployees">
             <span>Send a push alert to subscribed employees</span>
           </label>
-          <p class="form-note">Important and urgent updates notify employees automatically. Use the checkbox for routine updates you still want to broadcast.</p>
+          <p class="form-note">Important and urgent updates notify employees automatically. Routine updates stay in the feed unless you choose to send an alert.</p>
           <div class="form-actions">
             <button class="button" type="submit">${icon("send")} Publish</button>
           </div>
@@ -2829,14 +2890,74 @@ function renderAdminHistoryPanel() {
           })}
         </div>
       </div>
-      <div class="post-list">
-        ${
-          notices.length
-            ? notices.map((post) => renderNotice(post, true)).join("")
-            : '<div class="empty-state">No updates yet.</div>'
-        }
-      </div>
+      ${renderHistoryTable(notices)}
     </section>
+  `;
+}
+
+function renderHistoryTable(posts) {
+  if (!posts.length) {
+    return '<div class="empty-state">No Updates Yet.</div>';
+  }
+
+  return `
+    <div class="admin-table-wrap">
+      <table class="admin-table admin-table-history">
+        <thead>
+          <tr>
+            <th>Published</th>
+            <th>Title</th>
+            <th>Category</th>
+            <th>Priority</th>
+            <th>Audience</th>
+            <th>Alert</th>
+            <th>Retention</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${posts.map((post) => renderHistoryTableRow(post)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderHistoryTableRow(post) {
+  const safePriority = priorityClass(post.priority);
+
+  return `
+    <tr>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(formatDate(post.createdAt))}</div>
+      </td>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(post.title)}</div>
+      </td>
+      <td>
+        <span class="admin-table-chip">${escapeHtml(post.type)}</span>
+      </td>
+      <td>
+        <span class="priority-pill ${safePriority}">${escapeHtml(post.priority)}</span>
+      </td>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(post.audience || "All Employees")}</div>
+      </td>
+      <td>
+        <span class="admin-table-chip ${post.notifyEmployees ? "is-info" : "is-muted"}">${escapeHtml(post.notifyEmployees ? "Sent" : "No")}</span>
+      </td>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(formatAlertRetentionLabel(post.alertRetention))}</div>
+      </td>
+      <td>
+        <form class="admin-table-actions" data-delete-post-form>
+          <input type="hidden" name="id" value="${escapeHtml(post.id)}">
+          <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Delete Post">
+            ${icon("delete")} Delete
+          </button>
+        </form>
+      </td>
+    </tr>
   `;
 }
 
@@ -2925,7 +3046,7 @@ function renderRoleSettingsHero(route) {
         <div class="settings-chip-grid" aria-label="${escapeHtml(role)} settings summary">
           <div class="settings-chip">
             <span>Surface</span>
-            <strong>Settings only</strong>
+            <strong>Settings Only</strong>
             <small>Sensitive controls stay out of the daily workflow.</small>
           </div>
           <div class="settings-chip">
@@ -2946,41 +3067,33 @@ function renderRoleSettingsHero(route) {
 
 function renderPrivilegedPasswordPanel(route) {
   const role = route === "webmaster" ? "Webmaster" : "HR";
-  const passwordStatus = state.passwordChangeStatus?.[route] || null;
 
   return `
     <section class="panel-card settings-credential-card" data-privileged-password-panel>
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} credentials</p>
-          <h3>Change the ${escapeHtml(role.toLowerCase())} password</h3>
-          <p>Use this only for account maintenance. Saving a new password keeps this session active and signs out other active ${escapeHtml(role.toLowerCase())} sessions.</p>
+          <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} Credentials</p>
+          <h3>Change ${escapeHtml(role)} Password</h3>
+          <p>Update the password for this account.</p>
         </div>
       </div>
-      ${passwordStatus ? `
-      <div class="status-display settings-status-card">
-        <span>Last password changed</span>
-        <strong>${escapeHtml(formatDate(passwordStatus.changedAt))}</strong>
-        <small>${escapeHtml(passwordStatus.otherSessionsSignedOut ? "Other active sessions were signed out immediately." : "Session status unchanged.")}</small>
-      </div>
-      ` : ""}
       <form class="auth-form" data-privileged-password-form data-role-route="${escapeHtml(route)}">
         <div class="composer-grid">
           <label class="field">
-            <span>Current password</span>
-            <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password" placeholder="Current ${escapeHtml(role.toLowerCase())} password">
+            <span>Current Password</span>
+            <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password" placeholder="Current ${escapeHtml(role)} Password">
           </label>
           <label class="field">
-            <span>New password</span>
-            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New ${escapeHtml(role.toLowerCase())} password">
+            <span>New Password</span>
+            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New ${escapeHtml(role)} Password">
           </label>
           <label class="field field-span-2">
-            <span>Confirm new password</span>
-            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+            <span>Confirm New Password</span>
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat The New Password">
           </label>
         </div>
         <div class="auth-form-actions">
-          <button class="ghost-button" type="submit">${icon("lock")} Save new password</button>
+          <button class="ghost-button" type="submit">${icon("lock")} Save New Password</button>
         </div>
       </form>
     </section>
@@ -3019,33 +3132,7 @@ function renderHrWebmasterResetPanel() {
 function renderAdminSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
-      ${renderRoleSettingsHero("hr")}
-
-      <section class="panel-card settings-context-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("check")} Design boundary</p>
-            <h3>Account controls are intentionally separated</h3>
-            <p>This settings tab isolates low-frequency security actions from the high-frequency work of publishing, alerts, weather updates, and employee access management.</p>
-          </div>
-        </div>
-
-        <div class="settings-context-grid">
-          <div class="settings-context-item">
-            <span>Primary workflow</span>
-            <strong>Publish, alert, manage employees</strong>
-            <small>Operational work stays in the main tabs.</small>
-          </div>
-          <div class="settings-context-item">
-            <span>Security workflow</span>
-            <strong>Explicit settings-only action</strong>
-            <small>Credential changes are deliberate, not ambient.</small>
-          </div>
-        </div>
-      </section>
-
       ${renderPrivilegedPasswordPanel("hr")}
-      ${renderHrWebmasterResetPanel()}
     </section>
   `;
 }
@@ -3086,36 +3173,7 @@ function renderWebmasterSettingsPanel() {
 function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("users")} Access & sharing</p>
-          <h2>Managed employee access</h2>
-          <p>Employee board access is now tied to named accounts so HR can revoke terminated workers immediately.</p>
-        </div>
-        <span class="sync-pill">Protected</span>
-      </div>
-
-      <section class="panel-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("check")} Access model</p>
-            <h3>Named employee accounts</h3>
-            <p>Each employee signs in with a username and password. Disable the account to cut off board access and future push delivery.</p>
-          </div>
-          <span class="sync-pill">Accounts</span>
-        </div>
-
-        <div class="status-display">
-          <span>Access mode</span>
-          <strong>Managed</strong>
-          <small>Employee feed access now depends on an active account instead of just knowing the URL.</small>
-        </div>
-
-        <p class="panel-copy">This is the clean minimum to block fired employees right away. The next step after this is SSO if you want central identity management.</p>
-      </section>
-
       ${renderEmployeeDirectoryPanel()}
-      ${renderEmployeeSharePanel()}
     </section>
   `;
 }
@@ -3132,7 +3190,7 @@ function renderWebmasterOverviewPanel() {
     <section class="panel-stack">
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("chart")} Power center</p>
+          <p class="eyebrow">${icon("chart")} Power Center</p>
           <h2>Webmaster overview</h2>
           <p>Quick status for the site, the host, and the copy-ready brief.</p>
         </div>
@@ -3156,7 +3214,7 @@ function renderWebmasterOverviewPanel() {
           ["Launcher URL", urls.base || `${window.location.origin}${appPath()}`, "Canonical entry point"],
           ["HR route", urls.hr || `${window.location.origin}${routePath("hr")}`, "Publish console"],
           ["Employee route", urls.employee || `${window.location.origin}${routePath("employee")}`, "Read-only feed"],
-          ["Latest update", board.latestPost ? board.latestPost.title : "None", board.latestPost ? formatDate(board.latestPost.createdAt) : "No posts yet"],
+          ["Latest Update", board.latestPost ? board.latestPost.title : "None", board.latestPost ? formatDate(board.latestPost.createdAt) : "No Posts Yet"],
           ["Push subs", String(notifications.pushSubscriptions || 0), "Web push enrollments"],
           ["Admin access", "Separated roles", "Distinct HR and Webmaster sessions"],
           ["Enrollment", "Employee-authenticated", "Employees must sign in before subscribing"],
@@ -3529,14 +3587,14 @@ function renderWebmaster() {
   return `
     <main class="page-shell webmaster-shell">
       <header class="page-head">
-        ${brandBlock("Webmaster command center")}
+        ${brandBlock("Webmaster Command Center")}
         <div class="page-actions">
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
-          <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee feed</button>
+          <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR console</button>
           <button class="ghost-button" type="button" data-copy-webmaster-brief>${icon("clipboard")} Copy brief</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
-          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign out</button>
+          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
         </div>
       </header>
 
@@ -3610,31 +3668,29 @@ function renderWebmaster() {
 }
 
 function renderAdmin() {
-  const weather = state.weather || defaultWeather();
   const activeCount = state.posts.filter((post) => !isExpired(post)).length;
   const urgentCount = state.posts.filter((post) => post.priority === "Urgent" && !isExpired(post)).length;
-  const latest = state.posts[0]?.createdAt ? formatDate(state.posts[0].createdAt) : "None";
-  const weatherLocation = weatherDisplayName(weather);
+  const activeEmployeeCount = Array.isArray(state.employeeDirectory?.employees)
+    ? state.employeeDirectory.employees.filter((employee) => employee && employee.active !== false).length
+    : 0;
 
   return `
     <main class="page-shell hr-shell">
       <header class="page-head">
-        ${brandBlock("HR control center")}
+        ${brandBlock("HR Control Center")}
         <div class="page-actions">
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
-          <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee feed</button>
-          <button class="ghost-button" type="button" data-route="webmaster">${icon("chart")} Webmaster</button>
+          <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
-          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign out</button>
+          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
         </div>
       </header>
 
       ${renderAppUpdateBanner()}
-      <section class="hero-strip hero-strip-hr" aria-label="HR summary">
-        ${renderStatCard(String(activeCount), "Active updates", "Visible to employees")}
-        ${renderStatCard(String(urgentCount), "Urgent alerts", "Items that trigger attention")}
-        ${renderStatCard(weather.level, "Weather level", weatherLocation)}
-        ${renderStatCard(latest, "Latest update", "Most recent publish time")}
+      <section class="hero-strip" aria-label="HR summary">
+        ${renderHrSummaryStatCard({ value: String(activeCount), label: "Active Updates", tab: "history", filter: "Active" })}
+        ${renderHrSummaryStatCard({ value: String(urgentCount), label: "Urgent Alerts", tab: "history", filter: "Urgent" })}
+        ${renderHrSummaryStatCard({ value: String(activeEmployeeCount), label: "Active Employees", tab: "share" })}
       </section>
 
       ${state.message ? `<div class="hr-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
@@ -3645,17 +3701,11 @@ function renderAdmin() {
         ${
           activeAdminTab === "publish"
             ? renderAdminPublishPanel()
-            : activeAdminTab === "weather"
-              ? renderAdminWeatherPanel(weather, weatherLocation)
-              : activeAdminTab === "alerts"
-                ? renderAdminAlertsPanel()
-                : activeAdminTab === "history"
-                  ? renderAdminHistoryPanel()
-                  : activeAdminTab === "security"
-                    ? renderAdminSecurityPanel()
-                    : activeAdminTab === "share"
-                      ? renderAdminAccessPanel()
-                      : renderAdminSettingsPanel()
+            : activeAdminTab === "share"
+              ? renderAdminAccessPanel()
+              : activeAdminTab === "history"
+                ? renderAdminHistoryPanel()
+                : renderAdminSettingsPanel()
         }
       </section>
     </main>
@@ -3666,6 +3716,14 @@ function setMessage(message, type = "") {
   state.message = message;
   state.messageType = type;
 }
+
+function openHrSummaryTarget(tab, filter = "") {
+  activeAdminTab = tab || "publish";
+  activeHistoryFilter = activeAdminTab === "history" ? (filter || "All") : "All";
+  render();
+}
+
+window.openHrSummaryTarget = openHrSummaryTarget;
 
 function clearMessageSoon() {
   window.setTimeout(() => {
@@ -3852,7 +3910,8 @@ async function handlePostSubmit(event) {
   try {
     const result = await createPost(data);
     form.reset();
-    form.elements.audience.value = "All employees";
+    form.elements.audience.value = "All Employees";
+    form.elements.alertRetention.value = "48h";
     if (result.notification?.error) {
       setMessage(`Published, but alert delivery failed: ${result.notification.error}`, "warning");
     } else if (result.post.notifyEmployees) {
@@ -4627,5 +4686,8 @@ try {
   render();
   void checkForAppUpdate();
 }
+
+
+
 
 

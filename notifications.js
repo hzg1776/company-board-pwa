@@ -151,7 +151,7 @@ export function normalizeNotificationState(input) {
     ? dedupeSubscriptions(
         input.subscriptions
           .map((subscription) => normalizeSubscription(subscription))
-          .filter((subscription) => subscription && hasEmployeeBinding(subscription))
+          .filter(Boolean)
       )
     : [];
 

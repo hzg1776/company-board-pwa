@@ -101,6 +101,7 @@ async function startBoardServer({ port, tempDir }) {
       PORT: String(port),
       DATA_FILE: path.join(tempDir, "board.json"),
       PUSH_DATA_FILE: path.join(tempDir, "push.json"),
+      ANALYTICS_DATA_FILE: path.join(tempDir, "analytics.json"),
       SECURITY_DATA_FILE: path.join(tempDir, "security.json")
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -374,6 +375,27 @@ async function cleanupProcess(child) {
   });
 }
 
+async function removeDirectoryWithRetries(targetPath, attempts = 6) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await rm(targetPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const retryable = ["EBUSY", "EPERM", "ENOTEMPTY"].includes(error?.code);
+
+      if (!retryable || attempt === attempts - 1) {
+        if (!retryable) {
+          throw error;
+        }
+
+        return;
+      }
+
+      await sleep(250 * (attempt + 1));
+    }
+  }
+}
+
 async function provisionManagedAccess(tempDir, options = {}) {
   const store = createSecurityStore({
     dataFile: path.join(tempDir, "security.json")
@@ -423,8 +445,8 @@ test(
       await connection.close();
       await cleanupProcess(chrome.child);
       await cleanupProcess(server.child);
-      await rm(tempDir, { recursive: true, force: true });
-      await rm(chrome.userDataDir, { recursive: true, force: true });
+      await removeDirectoryWithRetries(tempDir);
+      await removeDirectoryWithRetries(chrome.userDataDir);
     });
 
     await connection.ready;
@@ -519,8 +541,8 @@ test(
       await connection.close();
       await cleanupProcess(chrome.child);
       await cleanupProcess(server.child);
-      await rm(tempDir, { recursive: true, force: true });
-      await rm(chrome.userDataDir, { recursive: true, force: true });
+      await removeDirectoryWithRetries(tempDir);
+      await removeDirectoryWithRetries(chrome.userDataDir);
     });
 
     await connection.ready;
@@ -543,7 +565,7 @@ test(
         return true;
       })()
     `);
-    await waitForCondition(session, "document.body.innerText.includes('HR control center')");
+    await waitForCondition(session, "document.body.innerText.includes('HR Control Center')");
 
     const hrScreen = await evaluateExpression(session, `
       ({
@@ -553,7 +575,7 @@ test(
     `);
 
     assert.equal(hrScreen.hasAuthForm, false);
-    assert.ok(String(hrScreen.text).includes("HR control center"));
+    assert.ok(String(hrScreen.text).includes("HR Control Center"));
 
     const hrStatus = await evaluateExpression(session, `
       (async () => {
@@ -565,6 +587,24 @@ test(
     assert.equal(Boolean(hrStatus.authorized), true);
 
     await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const form = document.querySelector('[data-admin-auth-form]');
+        const password = form?.querySelector('input[name="password"]');
+
+        if (!form || !password) {
+          throw new Error('Webmaster setup form is missing required fields.');
+        }
+
+        password.value = 'WebmasterSecret1!';
+        form.requestSubmit();
+        return {
+          mode: form.dataset.adminAuthMode,
+          route: form.dataset.adminRoute
+        };
+      })()
+    `);
     await waitForCondition(session, "document.body.innerText.includes('Webmaster overview')");
 
     const webmasterScreen = await evaluateExpression(session, `
