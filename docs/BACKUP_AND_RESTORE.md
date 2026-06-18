@@ -10,28 +10,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1
 
 Default behavior:
 
-- reads data from `.\data`
-- writes timestamped zip archives into `.\backups`
+- reads data from the configured runtime data directory
+- writes timestamped zip archives into the configured runtime backup directory
 - writes a manifest JSON next to the zip
 
 Optional parameters:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -ProjectRoot C:\Users\admin\Documents\Codex\Project-A -OutputRoot C:\Backups\CompanyBoard
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -ProjectRoot C:\Users\admin\Documents\Codex\Project-A -RuntimeRoot C:\ProgramData\Palziv\runtime -OutputRoot C:\ProgramData\Palziv\runtime\backups
 ```
+
+If you override `-OutputRoot`, put it in a directory with the same ACL hardening as the runtime root. Backup zips and manifests contain live runtime state.
 
 ## Restore
 
 Use the restore script during a maintenance window:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\restore-data.ps1 -BackupZip .\backups\company-board-backup-YYYYMMDD-HHMMSS.zip
+powershell -ExecutionPolicy Bypass -File .\scripts\restore-data.ps1 -BackupZip C:\ProgramData\Palziv\runtime\backups\company-board-backup-YYYYMMDD-HHMMSS.zip -RuntimeRoot C:\ProgramData\Palziv\runtime
 ```
 
 Optional controlled restart:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\restore-data.ps1 -BackupZip .\backups\company-board-backup-YYYYMMDD-HHMMSS.zip -RestartApp
+powershell -ExecutionPolicy Bypass -File .\scripts\restore-data.ps1 -BackupZip C:\ProgramData\Palziv\runtime\backups\company-board-backup-YYYYMMDD-HHMMSS.zip -RuntimeRoot C:\ProgramData\Palziv\runtime -RestartApp
 ```
 
 ## Restore Safety Rules

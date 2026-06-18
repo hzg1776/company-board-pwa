@@ -13,42 +13,6 @@
       "expiresAt": ""
     },
     {
-      "id": "12f58349-9e42-4026-9604-3aece6398a0f",
-      "type": "News",
-      "priority": "Normal",
-      "notifyEmployees": true,
-      "title": "Test push1",
-      "body": "Message 1",
-      "audience": "All employees",
-      "author": "HR",
-      "createdAt": "2026-06-15T00:16:13.779Z",
-      "expiresAt": ""
-    },
-    {
-      "id": "e08a371f-91b7-4da6-888e-8d6d5122caa6",
-      "type": "Safety",
-      "priority": "Urgent",
-      "notifyEmployees": true,
-      "title": "Hello world",
-      "body": "Testing message 1",
-      "audience": "All employees",
-      "author": "HR",
-      "createdAt": "2026-06-14T21:20:39.120Z",
-      "expiresAt": "2026-06-15"
-    },
-    {
-      "id": "seed-weather-1",
-      "type": "Weather",
-      "priority": "Important",
-      "notifyEmployees": true,
-      "title": "Rain expected during evening commute",
-      "body": "Keep walkways clear and use the south entrance if the front lot becomes congested.",
-      "audience": "All employees",
-      "author": "HR",
-      "createdAt": "2026-06-11T13:00:00.000Z",
-      "expiresAt": ""
-    },
-    {
       "id": "seed-news-1",
       "type": "News",
       "priority": "Normal",
@@ -57,19 +21,7 @@
       "body": "Benefits selections are due Friday. HR is available from 10:00 AM to 3:00 PM for questions.",
       "audience": "All employees",
       "author": "HR",
-      "createdAt": "2026-06-11T13:10:00.000Z",
-      "expiresAt": ""
-    },
-    {
-      "id": "seed-safety-1",
-      "type": "Safety",
-      "priority": "Urgent",
-      "notifyEmployees": true,
-      "title": "Loading dock inspection today",
-      "body": "Dock 2 is closed from 1:00 PM to 4:00 PM. Use Dock 1 for scheduled deliveries.",
-      "audience": "Operations",
-      "author": "HR",
-      "createdAt": "2026-06-11T13:20:00.000Z",
+      "createdAt": "2026-06-11T13:10:00Z",
       "expiresAt": ""
     }
   ],

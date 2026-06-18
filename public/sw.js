@@ -1,9 +1,12 @@
 const ASSET_VERSION = "__ASSET_VERSION__";
 const CACHE_NAME = `palziv-portal-v${ASSET_VERSION}`;
+importScripts(`/sw-routing.js?v=${encodeURIComponent(ASSET_VERSION)}`);
+
 const SHELL_ASSETS = [
   "/index.html",
   "/styles.css?v=__ASSET_VERSION__",
   "/app.js?v=__ASSET_VERSION__",
+  "/sw-routing.js?v=__ASSET_VERSION__",
   "/device-setup.js",
   "/manifest.webmanifest",
   "/assets/logo.svg",
@@ -96,15 +99,22 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = new URL(String(event.notification?.data?.url || "/palzivalerts/employee"), self.location.origin).href;
+  const routing = self.__palzivSwRouting || {};
+  const url = typeof routing.normalizePortalUrl === "function"
+    ? routing.normalizePortalUrl(event.notification?.data?.url || "/palzivalerts/employee", self.location.origin, "/palzivalerts/employee")
+    : new URL("/palzivalerts/employee", self.location.origin).href;
 
   event.waitUntil(
     (async () => {
       const clients = await getClients();
-      const existingClient = clients.find((client) => client.url.startsWith(self.location.origin));
+      const existingClient = typeof routing.chooseNotificationClient === "function"
+        ? routing.chooseNotificationClient(clients, url, self.location.origin)
+        : null;
 
       if (existingClient && "navigate" in existingClient) {
-        await existingClient.navigate(url);
+        if (existingClient.url !== url) {
+          await existingClient.navigate(url);
+        }
         await existingClient.focus();
         return;
       }

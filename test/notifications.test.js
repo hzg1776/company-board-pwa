@@ -48,7 +48,7 @@ test("createNotificationHub persists subscriptions and keys", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-"));
   const dataFile = path.join(tempDir, "push.json");
   const subscription = {
-    endpoint: "https://push.example.com/endpoint/abc",
+    endpoint: "https://fcm.googleapis.com/fcm/send/abc",
     expirationTime: null,
     keys: {
       p256dh: "sample-public-key",
@@ -96,7 +96,7 @@ test("normalizeNotificationState strips legacy SMS data", () => {
     },
     subscriptions: [
       {
-        endpoint: "https://push.example.com/endpoint/device-legacy",
+        endpoint: "https://fcm.googleapis.com/fcm/send/device-legacy",
         expirationTime: null,
         keys: {
           p256dh: "legacy-public-key",
@@ -129,7 +129,7 @@ test("createNotificationHub tracks push labels and persists push only", async ()
     await hub.init();
 
     const pushResult = await hub.subscribe({
-      endpoint: "https://push.example.com/endpoint/device-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/device-1",
       expirationTime: null,
       keys: {
         p256dh: "sample-public-key",
@@ -162,7 +162,7 @@ test("createNotificationHub keeps enrollment open and deduplicates subscriptions
     await hub.init();
 
     const subscribeResult = await hub.subscribe({
-      endpoint: "https://push.example.com/endpoint/open",
+      endpoint: "https://fcm.googleapis.com/fcm/send/open",
       expirationTime: null,
       keys: {
         p256dh: "sample-public-key",
@@ -177,7 +177,7 @@ test("createNotificationHub keeps enrollment open and deduplicates subscriptions
     assert.equal(subscribeResult.totalSubscriptions, 1);
 
     const updatedSubscription = await hub.subscribe({
-      endpoint: "https://push.example.com/endpoint/open",
+      endpoint: "https://fcm.googleapis.com/fcm/send/open",
       expirationTime: null,
       keys: {
         p256dh: "sample-public-key",
@@ -198,6 +198,29 @@ test("createNotificationHub keeps enrollment open and deduplicates subscriptions
     assert.equal(snapshot.subscriptions[0].browser, "Edge");
     assert.equal("accessPin" in snapshot, false);
     assert.equal("accessPinVersion" in snapshot.subscriptions[0], false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("createNotificationHub rejects untrusted push endpoints", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-invalid-"));
+  const dataFile = path.join(tempDir, "push.json");
+  const hub = createNotificationHub({ dataFile });
+
+  try {
+    await hub.init();
+    await assert.rejects(
+      hub.subscribe({
+        endpoint: "https://attacker.example.com/push",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key",
+          auth: "sample-auth-key"
+        }
+      }),
+      /Invalid push subscription\./
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

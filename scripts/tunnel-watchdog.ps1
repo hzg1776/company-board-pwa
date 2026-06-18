@@ -1,9 +1,12 @@
 [CmdletBinding()]
 param(
     [string]$ProjectRoot,
+    [string]$RuntimeRoot,
     [string]$PublicBaseUrl = "https://itotexpress.com",
     [int]$LocalPort = 3116,
     [string]$CloudflaredServiceName = "cloudflared",
+    [string]$CloudflaredConfigPath = "",
+    [string]$TrustedProxyAddresses = "",
     [string]$AlertWebhookUrl = "",
     [int]$PublicTimeoutSec = 15,
     [int]$LocalTimeoutSec = 5,
@@ -19,7 +22,10 @@ if (-not $ProjectRoot) {
     $ProjectRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 }
 
-$logDirectory = Join-Path $ProjectRoot "logs"
+. (Join-Path $PSScriptRoot "runtime-state.ps1")
+
+$runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
+$logDirectory = $runtimeLayout.LogDirectory
 if (-not (Test-Path -LiteralPath $logDirectory)) {
     New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 }
@@ -117,6 +123,154 @@ function Write-AlertEvent {
     }
 }
 
+function Get-CloudflaredConfigCandidates {
+    param([string]$ExplicitConfigPath)
+
+    $candidates = @()
+
+    if ($ExplicitConfigPath) {
+        $candidates += $ExplicitConfigPath
+    }
+
+    if ($env:USERPROFILE) {
+        $candidates += (Join-Path $env:USERPROFILE ".cloudflared\config.yml")
+    }
+
+    if ($env:WINDIR) {
+        $candidates += (Join-Path $env:WINDIR "System32\config\systemprofile\.cloudflared\config.yml")
+    }
+
+    return $candidates |
+        Where-Object { $_ } |
+        Select-Object -Unique
+}
+
+function Resolve-CloudflaredExecutable {
+    try {
+        $cloudflared = Get-Command cloudflared -ErrorAction Stop
+        if ($cloudflared.Source) {
+            return $cloudflared.Source
+        }
+    } catch {
+        # Fall through to common install locations.
+    }
+
+    $candidates = @(
+        "C:\Program Files\cloudflared\cloudflared.exe",
+        "C:\Program Files (x86)\cloudflared\cloudflared.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "cloudflared was not found."
+}
+
+function Get-CloudflaredTunnelId {
+    param([string]$ConfigPath)
+
+    if (-not $ConfigPath -or -not (Test-Path -LiteralPath $ConfigPath)) {
+        return $null
+    }
+
+    $configText = Get-Content -LiteralPath $ConfigPath -Raw
+    $match = [regex]::Match($configText, '(?m)^\s*tunnel:\s*(.+)$')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    return $match.Groups[1].Value.Trim()
+}
+
+function Resolve-CloudflaredConfigPath {
+    param([string]$ExplicitConfigPath)
+
+    foreach ($candidate in (Get-CloudflaredConfigCandidates -ExplicitConfigPath $ExplicitConfigPath)) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Get-TrustedCloudflaredProcesses {
+    param([string]$ConfigPath)
+
+    $tunnelId = Get-CloudflaredTunnelId -ConfigPath $ConfigPath
+    if (-not $tunnelId) {
+        return @()
+    }
+
+    return @(
+        Get-CimInstance Win32_Process -Filter "Name = 'cloudflared.exe'" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and
+                $_.CommandLine -match 'tunnel\s+run' -and
+                $_.CommandLine -match [regex]::Escape($tunnelId)
+            }
+    )
+}
+
+function Start-CloudflaredTunnelProcess {
+    param(
+        [string]$Root,
+        [string]$LogDirectory,
+        [string]$ConfigPath
+    )
+
+    $resolvedConfigPath = Resolve-CloudflaredConfigPath -ExplicitConfigPath $ConfigPath
+    if (-not $resolvedConfigPath) {
+        throw "cloudflared config was not found."
+    }
+
+    $tunnelId = Get-CloudflaredTunnelId -ConfigPath $resolvedConfigPath
+    if (-not $tunnelId) {
+        throw "cloudflared config does not declare a tunnel id."
+    }
+
+    $cloudflaredExe = Resolve-CloudflaredExecutable
+    $stdout = Join-Path $LogDirectory "cloudflared.out.log"
+    $stderr = Join-Path $LogDirectory "cloudflared.err.log"
+
+    Start-Process -FilePath $cloudflaredExe `
+        -WindowStyle Hidden `
+        -WorkingDirectory $Root `
+        -ArgumentList @("--config", $resolvedConfigPath, "tunnel", "run", $tunnelId) `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr | Out-Null
+
+    Write-WatchdogLog -Level "warn" -Message "Started direct cloudflared tunnel process for $tunnelId."
+}
+
+function Restart-DirectCloudflaredTunnelProcess {
+    param(
+        [string]$Root,
+        [string]$LogDirectory,
+        [string]$ConfigPath
+    )
+
+    $resolvedConfigPath = Resolve-CloudflaredConfigPath -ExplicitConfigPath $ConfigPath
+    if (-not $resolvedConfigPath) {
+        throw "cloudflared config was not found."
+    }
+
+    foreach ($process in (Get-TrustedCloudflaredProcesses -ConfigPath $resolvedConfigPath)) {
+        try {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+            Write-WatchdogLog -Level "warn" -Message "Stopped stale cloudflared process $($process.ProcessId)."
+        } catch {
+            Write-WatchdogLog -Level "warn" -Message "Could not stop stale cloudflared process $($process.ProcessId). $($_.Exception.Message)"
+        }
+    }
+
+    Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory -ConfigPath $resolvedConfigPath
+    return "restart direct process"
+}
+
 function Send-AlertWebhook {
     param(
         [string]$WebhookUrl,
@@ -167,17 +321,38 @@ function Should-SendAlert {
     return ((Get-Date) -gt $lastAlertAt.AddMinutes($CooldownMinutes))
 }
 
-function Restart-CloudflaredServiceSafe {
-    param([string]$ServiceName)
+function Recover-CloudflaredTunnel {
+    param(
+        [string]$ServiceName,
+        [string]$ConfigPath
+    )
 
-    $service = Get-Service -Name $ServiceName -ErrorAction Stop
-    if ($service.Status -eq "Running") {
-        Restart-Service -Name $ServiceName -Force -ErrorAction Stop
-        return "restart"
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($service) {
+        try {
+            if ($service.Status -eq "Running") {
+                Restart-Service -Name $ServiceName -Force -ErrorAction Stop
+                $action = "restart service"
+            } else {
+                Start-Service -Name $ServiceName -ErrorAction Stop
+                $action = "start service"
+            }
+
+            Start-Sleep -Seconds 2
+            $service = Get-Service -Name $ServiceName -ErrorAction Stop
+            if ($service.Status -eq "Running") {
+                return $action
+            }
+
+            Write-WatchdogLog -Level "warn" -Message "cloudflared service '$ServiceName' did not remain running. Falling back to a direct tunnel process."
+        } catch {
+            Write-WatchdogLog -Level "warn" -Message "cloudflared service '$ServiceName' recovery failed. Falling back to a direct tunnel process. $($_.Exception.Message)"
+        }
+    } else {
+        Write-WatchdogLog -Level "warn" -Message "cloudflared service '$ServiceName' was not found. Falling back to a direct tunnel process."
     }
 
-    Start-Service -Name $ServiceName -ErrorAction Stop
-    return "start"
+    return Restart-DirectCloudflaredTunnelProcess -Root $ProjectRoot -LogDirectory $logDirectory -ConfigPath $ConfigPath
 }
 
 $publicHealthUrl = ($PublicBaseUrl.TrimEnd('/')) + "/api/health"
@@ -212,12 +387,12 @@ if (-not $localResult.ok) {
 
 $preRecoveryMessage = "Public health failed while local origin is healthy. Attempting Cloudflare tunnel recovery. Public=$($publicResult.detail); Local=$($localResult.detail)"
 Write-WatchdogLog -Level "warn" -Message $preRecoveryMessage
-$action = Restart-CloudflaredServiceSafe -ServiceName $CloudflaredServiceName
+$action = Recover-CloudflaredTunnel -ServiceName $CloudflaredServiceName -ConfigPath $CloudflaredConfigPath
 Start-Sleep -Seconds $RecoveryWaitSec
 $postRecoveryResult = Test-UrlHealth -Url $publicHealthUrl -TimeoutSec $PublicTimeoutSec
 
 if ($postRecoveryResult.ok) {
-    $message = "Cloudflare tunnel self-recovery succeeded via $action of service '$CloudflaredServiceName'."
+    $message = "Cloudflare tunnel self-recovery succeeded via $action."
     Write-WatchdogLog -Level "info" -Message $message
     Write-AlertEvent -Type "WARNING" -EventId 2002 -Message $message
 

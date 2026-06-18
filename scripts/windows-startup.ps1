@@ -2,11 +2,13 @@
 param(
   [int]$Port = 3116,
   [string]$ProjectRoot,
+  [string]$RuntimeRoot,
   [string]$CloudflaredServiceName = "Cloudflared",
   [string]$PublicBaseUrl,
   [string]$CloudflaredConfigPath,
   [string]$TrustedProxyAddresses = "",
-  [switch]$SkipCloudflared
+  [switch]$SkipCloudflared,
+  [switch]$ForcePortRecovery
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +24,8 @@ if (-not $ProjectRoot) {
   $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
   $ProjectRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 }
+
+. (Join-Path $PSScriptRoot "runtime-state.ps1")
 
 function Ensure-Directory {
   param([string]$Path)
@@ -115,6 +119,63 @@ function Get-PortListeners {
   return Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
 }
 
+function Get-ProcessCommandLine {
+  param([int]$ProcessId)
+
+  try {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    return [string]$process.CommandLine
+  } catch {
+    return ""
+  }
+}
+
+function Is-BoardAppProcess {
+  param(
+    [int]$ProcessId,
+    [string]$Root
+  )
+
+  $serverPath = (Join-Path $Root "server.js")
+  $commandLine = Get-ProcessCommandLine -ProcessId $ProcessId
+
+  if (-not $commandLine) {
+    return $false
+  }
+
+  return $commandLine.IndexOf($serverPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Get-PortListenerOwners {
+  param(
+    [int]$TargetPort,
+    [string]$Root
+  )
+
+  $listeners = Get-PortListeners -TargetPort $TargetPort
+  if (-not $listeners) {
+    return @()
+  }
+
+  $processIds = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+  $owners = foreach ($processId in $processIds) {
+    $processName = try {
+      (Get-Process -Id $processId -ErrorAction Stop).ProcessName
+    } catch {
+      "pid:$processId"
+    }
+
+    [pscustomobject]@{
+      ProcessId   = $processId
+      ProcessName = $processName
+      CommandLine = Get-ProcessCommandLine -ProcessId $processId
+      IsBoardApp  = Is-BoardAppProcess -ProcessId $processId -Root $Root
+    }
+  }
+
+  return @($owners)
+}
+
 function Test-BoardHealth {
   param([int]$TargetPort)
 
@@ -127,20 +188,29 @@ function Test-BoardHealth {
 }
 
 function Stop-PortListeners {
-  param([int]$TargetPort)
+  param(
+    [int]$TargetPort,
+    [string]$Root,
+    [switch]$AllowForeignListeners
+  )
 
-  $listeners = Get-PortListeners -TargetPort $TargetPort
-  if (-not $listeners) {
+  $owners = Get-PortListenerOwners -TargetPort $TargetPort -Root $Root
+  if (-not $owners.Count) {
     return
   }
 
-  $processIds = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
-  foreach ($pid in $processIds) {
+  $foreignOwners = @($owners | Where-Object { -not $_.IsBoardApp })
+  if ($foreignOwners.Count -and -not $AllowForeignListeners) {
+    $details = ($foreignOwners | ForEach-Object { "$($_.ProcessName) [$($_.ProcessId)]" }) -join ", "
+    throw "Port ${TargetPort} is owned by non-board process(es): $details. Resolve the conflict manually or rerun with -ForcePortRecovery."
+  }
+
+  foreach ($owner in $owners) {
     try {
-      Stop-Process -Id $pid -Force -ErrorAction Stop
-      Write-Host "Stopped process $pid on port $TargetPort."
+      Stop-Process -Id $owner.ProcessId -Force -ErrorAction Stop
+      Write-Host "Stopped process $($owner.ProcessId) on port $TargetPort."
     } catch {
-      Write-Warning "Could not stop process $pid on port $TargetPort."
+      Write-Warning "Could not stop process $($owner.ProcessId) on port $TargetPort."
     }
   }
 }
@@ -183,6 +253,28 @@ function Wait-ForBoardHealth {
 
 function Get-CloudflaredProcesses {
   return Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
+}
+
+function Get-TrustedCloudflaredProcess {
+  param([string]$ConfigPath)
+
+  try {
+    $tunnelId = Get-CloudflaredTunnelId -ConfigPath $ConfigPath
+  } catch {
+    return $null
+  }
+
+  if (-not $tunnelId) {
+    return $null
+  }
+
+  return Get-CimInstance Win32_Process -Filter "Name = 'cloudflared.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.CommandLine -and
+      $_.CommandLine -match 'tunnel\s+run' -and
+      $_.CommandLine -match [regex]::Escape($tunnelId)
+    } |
+    Select-Object -First 1
 }
 
 function Wait-ForServiceRunning {
@@ -257,6 +349,7 @@ function Start-BoardApp {
   param(
     [string]$Root,
     [int]$TargetPort,
+    [Parameter(Mandatory = $true)]$RuntimeLayout,
     [string]$LogDirectory,
     [string]$ResolvedPublicBaseUrl,
     [string]$ResolvedTrustedProxyAddresses
@@ -269,18 +362,22 @@ function Start-BoardApp {
 
   $listeners = Get-PortListeners -TargetPort $TargetPort
   if ($listeners) {
-    $processIds = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
-    $processNames = foreach ($pid in $processIds) {
-      try {
-        (Get-Process -Id $pid -ErrorAction Stop).ProcessName
-      } catch {
-        "pid:$pid"
+    $owners = Get-PortListenerOwners -TargetPort $TargetPort -Root $Root
+    $processNames = foreach ($owner in $owners) {
+      if ($owner.IsBoardApp) {
+        "$($owner.ProcessName) [$($owner.ProcessId)]"
+      } else {
+        "$($owner.ProcessName) [$($owner.ProcessId)] foreign"
       }
     }
 
     Write-Warning "Port ${TargetPort} is occupied by: $($processNames -join ', ')."
-    Write-Warning "Stopping stale listener(s) before starting the app."
-    Stop-PortListeners -TargetPort $TargetPort
+    if ($ForcePortRecovery) {
+      Write-Warning "Stopping listener(s) before starting the app."
+    } else {
+      Write-Warning "Stopping only known board listeners before starting the app."
+    }
+    Stop-PortListeners -TargetPort $TargetPort -Root $Root -AllowForeignListeners:$ForcePortRecovery
 
     if (-not (Wait-ForPortRelease -TargetPort $TargetPort)) {
       throw "Port ${TargetPort} is still in use after attempting recovery."
@@ -292,8 +389,18 @@ function Start-BoardApp {
   $previousPort = $env:PORT
   $previousPublicBaseUrl = $env:PUBLIC_BASE_URL
   $previousTrustedProxyAddresses = $env:TRUST_PROXY_ADDRESSES
+  $previousRuntimeDataDirectory = $env:RUNTIME_DATA_DIR
+  $previousDataFile = $env:DATA_FILE
+  $previousPushDataFile = $env:PUSH_DATA_FILE
+  $previousAnalyticsDataFile = $env:ANALYTICS_DATA_FILE
+  $previousSecurityDataFile = $env:SECURITY_DATA_FILE
   $env:PORT = "$TargetPort"
   $env:PUBLIC_BASE_URL = $ResolvedPublicBaseUrl
+  $env:RUNTIME_DATA_DIR = $RuntimeLayout.DataDirectory
+  $env:DATA_FILE = Join-Path $RuntimeLayout.DataDirectory "board.json"
+  $env:PUSH_DATA_FILE = Join-Path $RuntimeLayout.DataDirectory "push.json"
+  $env:ANALYTICS_DATA_FILE = Join-Path $RuntimeLayout.DataDirectory "analytics.json"
+  $env:SECURITY_DATA_FILE = Join-Path $RuntimeLayout.DataDirectory "security.json"
 
   if ($ResolvedTrustedProxyAddresses) {
     $env:TRUST_PROXY_ADDRESSES = $ResolvedTrustedProxyAddresses
@@ -333,10 +440,41 @@ function Start-BoardApp {
     } else {
       $env:TRUST_PROXY_ADDRESSES = $previousTrustedProxyAddresses
     }
+
+    if ([string]::IsNullOrEmpty($previousRuntimeDataDirectory)) {
+      Remove-Item Env:RUNTIME_DATA_DIR -ErrorAction SilentlyContinue
+    } else {
+      $env:RUNTIME_DATA_DIR = $previousRuntimeDataDirectory
+    }
+
+    if ([string]::IsNullOrEmpty($previousDataFile)) {
+      Remove-Item Env:DATA_FILE -ErrorAction SilentlyContinue
+    } else {
+      $env:DATA_FILE = $previousDataFile
+    }
+
+    if ([string]::IsNullOrEmpty($previousPushDataFile)) {
+      Remove-Item Env:PUSH_DATA_FILE -ErrorAction SilentlyContinue
+    } else {
+      $env:PUSH_DATA_FILE = $previousPushDataFile
+    }
+
+    if ([string]::IsNullOrEmpty($previousAnalyticsDataFile)) {
+      Remove-Item Env:ANALYTICS_DATA_FILE -ErrorAction SilentlyContinue
+    } else {
+      $env:ANALYTICS_DATA_FILE = $previousAnalyticsDataFile
+    }
+
+    if ([string]::IsNullOrEmpty($previousSecurityDataFile)) {
+      Remove-Item Env:SECURITY_DATA_FILE -ErrorAction SilentlyContinue
+    } else {
+      $env:SECURITY_DATA_FILE = $previousSecurityDataFile
+    }
   }
 
   Write-Host "Started board app on port ${TargetPort}."
   Write-Host "Public origin: $ResolvedPublicBaseUrl"
+  Write-Host "Runtime data: $($RuntimeLayout.DataDirectory)"
   Write-Host "App logs: $stdout"
   Write-Host "App errors: $stderr"
 }
@@ -401,15 +539,15 @@ function Ensure-CloudflaredService {
     [string]$ConfigPath
   )
 
-  $cloudflaredProcess = Get-CloudflaredProcesses | Select-Object -First 1
-  if ($cloudflaredProcess) {
-    Write-Host "cloudflared process already running (pid $($cloudflaredProcess.Id))."
-    return
-  }
-
   try {
     $service = Get-Service -Name $ServiceName -ErrorAction Stop
   } catch {
+    $trustedProcess = Get-TrustedCloudflaredProcess -ConfigPath $ConfigPath
+    if ($trustedProcess) {
+      Write-Host "cloudflared tunnel already running (pid $($trustedProcess.ProcessId))."
+      return
+    }
+
     Write-Warning "cloudflared service '$ServiceName' was not found."
     Write-Warning "Falling back to a direct cloudflared process."
     Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory -ConfigPath $ConfigPath
@@ -420,6 +558,12 @@ function Ensure-CloudflaredService {
     try {
       Start-Service -Name $ServiceName
     } catch {
+      $trustedProcess = Get-TrustedCloudflaredProcess -ConfigPath $ConfigPath
+      if ($trustedProcess) {
+        Write-Host "cloudflared tunnel already running (pid $($trustedProcess.ProcessId))."
+        return
+      }
+
       Write-Warning "cloudflared service '$ServiceName' could not be started."
       Write-Warning "Falling back to a direct cloudflared process."
       Start-CloudflaredTunnelProcess -Root $Root -LogDirectory $LogDirectory -ConfigPath $ConfigPath
@@ -450,12 +594,18 @@ if (-not (Test-Path $ProjectRoot)) {
 Write-Host "Project root: $ProjectRoot"
 
 Set-Location $ProjectRoot
-$logDirectory = Join-Path $ProjectRoot "logs"
+$runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
+if ($runtimeLayout.IsExternal) {
+  Sync-BoardRuntimeData -SourceDirectory (Join-Path $ProjectRoot "data") -TargetDirectory $runtimeLayout.DataDirectory
+}
+
+$logDirectory = $runtimeLayout.LogDirectory
 Ensure-Directory -Path $logDirectory
 $resolvedPublicBaseUrl = Resolve-PublicBaseUrl -ExplicitPublicBaseUrl $PublicBaseUrl -ExplicitConfigPath $CloudflaredConfigPath
+$resolvedTrustedProxyAddresses = if ([string]::IsNullOrWhiteSpace($TrustedProxyAddresses)) { "loopback" } else { $TrustedProxyAddresses.Trim() }
 
 Write-Step "Start the board app"
-Start-BoardApp -Root $ProjectRoot -TargetPort $Port -LogDirectory $logDirectory -ResolvedPublicBaseUrl $resolvedPublicBaseUrl -ResolvedTrustedProxyAddresses $TrustedProxyAddresses
+Start-BoardApp -Root $ProjectRoot -TargetPort $Port -RuntimeLayout $runtimeLayout -LogDirectory $logDirectory -ResolvedPublicBaseUrl $resolvedPublicBaseUrl -ResolvedTrustedProxyAddresses $resolvedTrustedProxyAddresses
 
 if (-not $SkipCloudflared) {
   Write-Step "Start cloudflared"

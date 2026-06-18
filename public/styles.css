@@ -1003,13 +1003,59 @@ a:focus-visible {
   align-items: end;
 }
 
+.admin-create-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
 .employee-create-grid .field {
   margin: 0;
+}
+
+.admin-create-grid .field {
+  margin: 0;
+}
+
+.admin-create-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.admin-create-actions .button,
+.admin-create-actions .ghost-button {
+  min-width: 180px;
+}
+
+.admin-create-note {
+  margin-top: -4px;
 }
 
 .employee-create-submit {
   align-self: end;
   white-space: nowrap;
+}
+
+.admin-role-picker {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.admin-role-picker legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.admin-role-checkbox {
+  margin-top: 8px;
 }
 
 .employee-directory-list {
@@ -1128,11 +1174,33 @@ a:focus-visible {
   min-width: 220px;
 }
 
+.admin-identity-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.admin-identity-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
 .admin-table-inline-form input {
   width: 100%;
 }
 
+.admin-access-cell {
+  display: grid;
+  gap: 10px;
+}
+
 .employee-password-inline-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.admin-password-inline-form {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
@@ -1143,6 +1211,10 @@ a:focus-visible {
 
 .admin-table-history {
   min-width: 900px;
+}
+
+.admin-table-admins {
+  min-width: 1460px;
 }
 
 .admin-table-employees {
@@ -1169,9 +1241,66 @@ a:focus-visible {
   width: 260px;
 }
 
+.admin-table-admins td:nth-child(3),
+.admin-table-admins td:nth-child(4) {
+  text-align: center;
+}
+
+.admin-table-admins td:nth-child(1) {
+  min-width: 320px;
+}
+
+.admin-table-admins td:nth-child(5) {
+  min-width: 300px;
+}
+
+.admin-table-admins td:nth-child(6) {
+  min-width: 220px;
+}
+
 .admin-table-history td:last-child,
 .admin-table-employees td:last-child {
   width: 220px;
+}
+
+.admin-role-cell {
+  display: grid;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.admin-role-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-role-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-role-editor .ghost-button {
+  justify-self: start;
+}
+
+.admin-table-admins .admin-password-inline-form {
+  grid-template-columns: 1fr;
+}
+
+.invite-summary {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.invite-summary-row {
+  color: var(--steel);
+  font-size: 0.92rem;
+  line-height: 1.4;
 }
 
 .employee-directory-card {
@@ -2172,6 +2301,14 @@ body[data-route="launcher"] {
     grid-template-columns: 1fr 1fr;
   }
 
+  .admin-create-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .admin-identity-grid {
+    grid-template-columns: 1fr;
+  }
+
   .employee-create-submit {
     grid-column: span 2;
     width: 100%;
@@ -2206,6 +2343,14 @@ body[data-route="launcher"] {
 
   .employee-create-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-create-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-create-actions {
+    flex-direction: column;
   }
 
   .employee-create-submit {

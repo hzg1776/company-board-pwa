@@ -1,5 +1,6 @@
 param(
     [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$RuntimeRoot = "",
     [string]$OutputRoot = "",
     [string]$DataDirectory = "",
     [switch]$IncludeLogs
@@ -7,12 +8,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $ProjectRoot "backups"
-}
+. (Join-Path $PSScriptRoot "runtime-state.ps1")
+
+$runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
 
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    $DataDirectory = Join-Path $ProjectRoot "data"
+    $DataDirectory = $runtimeLayout.DataDirectory
+}
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = $runtimeLayout.BackupDirectory
 }
 
 if (-not (Test-Path -LiteralPath $DataDirectory)) {
@@ -23,7 +28,7 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupName = "company-board-backup-$timestamp"
-$stagingRoot = Join-Path $env:TEMP $backupName
+$stagingRoot = Join-Path $OutputRoot ".$backupName.staging"
 $backupZip = Join-Path $OutputRoot "$backupName.zip"
 $manifestPath = Join-Path $OutputRoot "$backupName.manifest.json"
 
@@ -31,33 +36,39 @@ if (Test-Path -LiteralPath $stagingRoot) {
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 }
 
-New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
-$stagingData = Join-Path $stagingRoot "data"
-New-Item -ItemType Directory -Force -Path $stagingData | Out-Null
+try {
+    New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+    $stagingData = Join-Path $stagingRoot "data"
+    New-Item -ItemType Directory -Force -Path $stagingData | Out-Null
 
-Copy-Item -LiteralPath (Join-Path $DataDirectory "*") -Destination $stagingData -Recurse -Force
+    Get-ChildItem -LiteralPath $DataDirectory -Force | Copy-Item -Destination $stagingData -Recurse -Force
 
-if ($IncludeLogs) {
-    $logDir = Join-Path $ProjectRoot "logs"
-    if (Test-Path -LiteralPath $logDir) {
-        Copy-Item -LiteralPath $logDir -Destination (Join-Path $stagingRoot "logs") -Recurse -Force
+    if ($IncludeLogs) {
+        $logDir = $runtimeLayout.LogDirectory
+        if (Test-Path -LiteralPath $logDir) {
+            Copy-Item -LiteralPath $logDir -Destination (Join-Path $stagingRoot "logs") -Recurse -Force
+        }
+    }
+
+    $manifest = [ordered]@{
+        backupName = $backupName
+        createdAt = (Get-Date).ToString("o")
+        machineName = $env:COMPUTERNAME
+        projectRoot = $ProjectRoot
+        runtimeRoot = $runtimeLayout.RuntimeRoot
+        dataDirectory = $DataDirectory
+        publicBaseUrl = $env:PUBLIC_BASE_URL
+        includeLogs = [bool]$IncludeLogs
+    }
+
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stagingRoot "manifest.json")
+    Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $backupZip -Force
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath
+
+    Write-Host "Backup created: $backupZip"
+    Write-Host "Manifest written: $manifestPath"
+} finally {
+    if (Test-Path -LiteralPath $stagingRoot) {
+        Remove-Item -LiteralPath $stagingRoot -Recurse -Force
     }
 }
-
-$manifest = [ordered]@{
-    backupName = $backupName
-    createdAt = (Get-Date).ToString("o")
-    machineName = $env:COMPUTERNAME
-    projectRoot = $ProjectRoot
-    dataDirectory = $DataDirectory
-    publicBaseUrl = $env:PUBLIC_BASE_URL
-    includeLogs = [bool]$IncludeLogs
-}
-
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stagingRoot "manifest.json")
-Compress-Archive -LiteralPath (Join-Path $stagingRoot "*") -DestinationPath $backupZip -Force
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath
-Remove-Item -LiteralPath $stagingRoot -Recurse -Force
-
-Write-Host "Backup created: $backupZip"
-Write-Host "Manifest written: $manifestPath"

@@ -3,8 +3,10 @@ param(
   [string]$TaskName = "CompanyBoardPWA Startup",
   [string]$ProjectRoot,
   [int]$Port = 3116,
+  [string]$RuntimeRoot = "",
   [string]$CloudflaredServiceName = "Cloudflared",
   [string]$CloudflaredConfigPath,
+  [string]$TrustedProxyAddresses = "",
   [string]$AlertWebhookUrl = $env:OPS_ALERT_WEBHOOK_URL
 )
 
@@ -15,6 +17,8 @@ if (-not $ProjectRoot) {
   $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
   $ProjectRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 }
+
+. (Join-Path $PSScriptRoot "runtime-state.ps1")
 
 $startupScript = Join-Path $ProjectRoot "scripts\windows-startup.ps1"
 if (-not (Test-Path $startupScript)) {
@@ -36,16 +40,27 @@ function Test-IsAdministrator {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+$isAdmin = Test-IsAdministrator
+
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+  $RuntimeRoot = if ($isAdmin) { Get-DefaultBoardRuntimeRoot } else { "" }
+}
+
 function New-BoardTaskAction {
   param(
     [string]$ScriptPath,
     [string]$Root,
     [int]$Port,
+    [string]$RuntimeRoot,
     [string]$PublicBaseUrl,
+    [string]$TrustedProxyAddresses,
     [string]$ConfigPath
   )
 
-  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Port $Port -ProjectRoot `"$Root`" -PublicBaseUrl `"$PublicBaseUrl`" -CloudflaredConfigPath `"$ConfigPath`""
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Port $Port -ProjectRoot `"$Root`" -RuntimeRoot `"$RuntimeRoot`" -PublicBaseUrl `"$PublicBaseUrl`" -CloudflaredConfigPath `"$ConfigPath`""
+  if ($TrustedProxyAddresses) {
+    $arguments += " -TrustedProxyAddresses `"$TrustedProxyAddresses`""
+  }
   return New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
 }
 
@@ -53,13 +68,22 @@ function New-WatchdogTaskAction {
   param(
     [string]$ScriptPath,
     [string]$Root,
+    [string]$RuntimeRoot,
     [string]$PublicBaseUrl,
+    [string]$TrustedProxyAddresses,
     [int]$Port,
     [string]$ServiceName,
+    [string]$ConfigPath,
     [string]$WebhookUrl
   )
 
-  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ProjectRoot `"$Root`" -PublicBaseUrl `"$PublicBaseUrl`" -LocalPort $Port -CloudflaredServiceName `"$ServiceName`""
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ProjectRoot `"$Root`" -RuntimeRoot `"$RuntimeRoot`" -PublicBaseUrl `"$PublicBaseUrl`" -LocalPort $Port -CloudflaredServiceName `"$ServiceName`""
+  if ($ConfigPath) {
+    $arguments += " -CloudflaredConfigPath `"$ConfigPath`""
+  }
+  if ($TrustedProxyAddresses) {
+    $arguments += " -TrustedProxyAddresses `"$TrustedProxyAddresses`""
+  }
   if ($WebhookUrl) {
     $arguments += " -AlertWebhookUrl `"$WebhookUrl`""
   }
@@ -118,21 +142,35 @@ function Configure-CloudflaredServiceRecovery {
 
 $startupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $publicBaseUrl = Get-CloudflaredPublicBaseUrl -ConfigPath $CloudflaredConfigPath
+$runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
+$resolvedTrustedProxyAddresses = if ([string]::IsNullOrWhiteSpace($TrustedProxyAddresses) -and $publicBaseUrl) {
+  "loopback"
+} else {
+  $TrustedProxyAddresses.Trim()
+}
 
-if (Test-IsAdministrator) {
+if ((-not $isAdmin) -and $runtimeLayout.IsExternal -and $env:ProgramData -and (Test-BoardPathWithin -ParentPath $env:ProgramData -ChildPath $runtimeLayout.RuntimeRoot)) {
+  throw "External runtime roots under ProgramData require Administrator privileges. Re-run this installer elevated or use a user-scoped runtime root."
+}
+
+Sync-BoardRuntimeData -SourceDirectory (Join-Path $ProjectRoot "data") -TargetDirectory $runtimeLayout.DataDirectory
+
+if ($isAdmin) {
   $startupTrigger = New-ScheduledTaskTrigger -AtStartup
   $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
   $modeLabel = "startup as SYSTEM"
   $taskConfigPath = Join-Path $env:WINDIR "System32\config\systemprofile\.cloudflared\config.yml"
+  Protect-BoardRuntimeLayoutAcl -Layout $runtimeLayout -AllowedAccounts @("SYSTEM", "BUILTIN\\Administrators", [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 } else {
   $startupTrigger = New-ScheduledTaskTrigger -AtLogOn
   $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
   $modeLabel = "logon as $currentUser"
   $taskConfigPath = $CloudflaredConfigPath
+  Write-Warning "Runtime ACL hardening was skipped because this installer is not running as Administrator."
 }
 
-$startupAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port -PublicBaseUrl $publicBaseUrl -ConfigPath $taskConfigPath
+$startupAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port -RuntimeRoot $runtimeLayout.RuntimeRoot -PublicBaseUrl $publicBaseUrl -TrustedProxyAddresses $resolvedTrustedProxyAddresses -ConfigPath $taskConfigPath
 
 Register-ScheduledTask -TaskName $TaskName -Action $startupAction -Trigger $startupTrigger -Principal $principal -Settings $startupSettings -Force | Out-Null
 
@@ -141,10 +179,12 @@ Write-Host "Registered scheduled task: $($task.TaskName)"
 Write-Host "Mode: $modeLabel"
 Write-Host "Launches: $startupScript"
 Write-Host "Public origin: $publicBaseUrl"
+Write-Host "Runtime root: $($runtimeLayout.RuntimeRoot)"
+Write-Host "Runtime data: $($runtimeLayout.DataDirectory)"
 
-if (Test-IsAdministrator) {
+if ($isAdmin) {
   $recoveryTaskName = "$TaskName Recovery"
-  $recoveryAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port -PublicBaseUrl $publicBaseUrl -ConfigPath $taskConfigPath
+  $recoveryAction = New-BoardTaskAction -ScriptPath $startupScript -Root $ProjectRoot -Port $Port -RuntimeRoot $runtimeLayout.RuntimeRoot -PublicBaseUrl $publicBaseUrl -TrustedProxyAddresses $resolvedTrustedProxyAddresses -ConfigPath $taskConfigPath
   $recoveryTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
 
   Register-ScheduledTask -TaskName $recoveryTaskName -Action $recoveryAction -Trigger $recoveryTrigger -Principal $principal -Settings $startupSettings -Force | Out-Null
@@ -154,7 +194,7 @@ if (Test-IsAdministrator) {
   Write-Host "Mode: self-heal every 5 minutes"
 
   $watchdogTaskName = "$TaskName Tunnel Watchdog"
-  $watchdogAction = New-WatchdogTaskAction -ScriptPath $watchdogScript -Root $ProjectRoot -PublicBaseUrl $publicBaseUrl -Port $Port -ServiceName $CloudflaredServiceName -WebhookUrl $AlertWebhookUrl
+  $watchdogAction = New-WatchdogTaskAction -ScriptPath $watchdogScript -Root $ProjectRoot -RuntimeRoot $runtimeLayout.RuntimeRoot -PublicBaseUrl $publicBaseUrl -TrustedProxyAddresses $resolvedTrustedProxyAddresses -Port $Port -ServiceName $CloudflaredServiceName -ConfigPath $taskConfigPath -WebhookUrl $AlertWebhookUrl
   $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
 
   Register-ScheduledTask -TaskName $watchdogTaskName -Action $watchdogAction -Trigger $watchdogTrigger -Principal $principal -Settings $startupSettings -Force | Out-Null
@@ -274,4 +314,14 @@ function Ensure-CloudflaredService {
 
 Write-Host ""
 Write-Host "==> Start cloudflared tunnel" -ForegroundColor Cyan
-Ensure-CloudflaredService -ServiceName $CloudflaredServiceName -ConfigPath $CloudflaredConfigPath -TargetPort $Port
+try {
+  Ensure-CloudflaredService -ServiceName $CloudflaredServiceName -ConfigPath $CloudflaredConfigPath -TargetPort $Port
+} catch {
+  try {
+    & (Resolve-CloudflaredExecutable) service uninstall | Out-Null
+  } catch {
+    Write-Warning "Could not uninstall the broken cloudflared service automatically. $($_.Exception.Message)"
+  }
+  Write-Warning "cloudflared service start failed during install. Falling back to the startup task, which can launch a direct tunnel process. $($_.Exception.Message)"
+  Start-ScheduledTask -TaskName $TaskName
+}

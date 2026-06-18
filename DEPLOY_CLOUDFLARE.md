@@ -66,6 +66,7 @@ Make sure both your root hostname and the `www` hostname point to the tunnel if 
 
 If you use the boot script below, it starts the app on port 3116 so the tunnel can stay pointed here.
 The boot script also checks `/api/health`, clears stale listeners on port `3116` if needed, and avoids creating duplicate tunnel processes.
+It also trusts the local loopback proxy hop for client IP forwarding so Cloudflare Tunnel traffic does not collapse all users onto `127.0.0.1` for login throttling.
 
 ## 6b. Rename The App
 
@@ -120,6 +121,7 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\admin\Documents\Codex\Project
 ```
 
 Run that from an elevated PowerShell window. A non-elevated shell will get `Access is denied` when Windows tries to register the task.
+The elevated path also moves runtime state under `C:\ProgramData\Palziv\runtime` and applies hardened ACLs there.
 
 The installer now does four things:
 

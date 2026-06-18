@@ -10,6 +10,7 @@ import { createAnalyticsStore } from "./analytics.js";
 import { createNotificationHub } from "./notifications.js";
 import { createBoardStore } from "./storage.js";
 import { createSecurityStore } from "./security.js";
+import { normalizeRelativeAppPath } from "./url-safety.js";
 import { resolveLiveWeather } from "./weather.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -19,20 +20,24 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const INDEX_HTML_TEMPLATE_PATH = path.join(PUBLIC_DIR, "index.html");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
+const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
 const APP_BASE_PATH = "/palzivalerts";
+const RUNTIME_DATA_DIR = process.env.RUNTIME_DATA_DIR ? path.resolve(process.env.RUNTIME_DATA_DIR) : "";
 const CONFIGURED_ASSET_VERSION = String(process.env.ASSET_VERSION || "")
   .replace(/[^a-zA-Z0-9._-]/g, "")
   .slice(0, 40);
-const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(__dirname, "data", "board.json");
-const PUSH_DATA_FILE = process.env.PUSH_DATA_FILE ? path.resolve(process.env.PUSH_DATA_FILE) : path.join(__dirname, "data", "push.json");
-const ANALYTICS_DATA_FILE = process.env.ANALYTICS_DATA_FILE ? path.resolve(process.env.ANALYTICS_DATA_FILE) : path.join(__dirname, "data", "analytics.json");
-const SECURITY_DATA_FILE = process.env.SECURITY_DATA_FILE ? path.resolve(process.env.SECURITY_DATA_FILE) : path.join(__dirname, "data", "security.json");
+const DATA_FILE = resolveManagedDataFile("DATA_FILE", "board.json");
+const PUSH_DATA_FILE = resolveManagedDataFile("PUSH_DATA_FILE", "push.json");
+const ANALYTICS_DATA_FILE = resolveManagedDataFile("ANALYTICS_DATA_FILE", "analytics.json");
+const SECURITY_DATA_FILE = resolveManagedDataFile("SECURITY_DATA_FILE", "security.json");
 const ADMIN_SETUP_TOKEN = String(process.env.ADMIN_SETUP_TOKEN || "");
 const ADMIN_RECOVERY_TOKEN = String(process.env.ADMIN_RECOVERY_TOKEN || process.env.ADMIN_SETUP_TOKEN || "");
 const ADMIN_DAILY_RECOVERY_SEED = String(process.env.ADMIN_DAILY_RECOVERY_SEED || "");
 const HR_RECOVERY_EMAIL = String(process.env.HR_RECOVERY_EMAIL || "");
 const RECOVERY_EMAIL_FROM = String(process.env.RECOVERY_EMAIL_FROM || process.env.EMAIL_FROM || "");
+const ADMIN_INVITE_EMAIL_FROM = String(process.env.ADMIN_INVITE_EMAIL_FROM || RECOVERY_EMAIL_FROM || process.env.EMAIL_FROM || "");
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "");
+const RESEND_API_BASE_URL = String(process.env.RESEND_API_BASE_URL || "https://api.resend.com").replace(/\/+$/, "");
 const CONFIGURED_PUBLIC_BASE_URL = parseConfiguredPublicBaseUrl(process.env.PUBLIC_BASE_URL);
 const TRUST_PROXY_ADDRESSES = parseTrustedProxyAddresses(process.env.TRUST_PROXY_ADDRESSES || "");
 const RECOVERY_TIME_ZONE = "America/New_York";
@@ -78,7 +83,8 @@ const assetVersionSeed = await Promise.all([
   stat(path.join(PUBLIC_DIR, "app.js")),
   stat(path.join(PUBLIC_DIR, "styles.css")),
   stat(INDEX_HTML_TEMPLATE_PATH),
-  stat(SERVICE_WORKER_TEMPLATE_PATH)
+  stat(SERVICE_WORKER_TEMPLATE_PATH),
+  stat(SERVICE_WORKER_ROUTING_PATH)
 ])
   .then((stats) => Math.round(Math.max(...stats.map((fileStat) => fileStat.mtimeMs))).toString(36))
   .catch(() => "dev");
@@ -221,7 +227,7 @@ async function sendRecoveryEmail({ to, code, expiresAt } = {}) {
     `If you did not request this, ignore this email.`
   ].join("\n");
 
-  const response = await fetch("https://api.resend.com/emails", {
+  const response = await fetch(`${RESEND_API_BASE_URL}/emails`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
@@ -238,6 +244,64 @@ async function sendRecoveryEmail({ to, code, expiresAt } = {}) {
 
   if (!response.ok) {
     throw createHttpError(502, "Could not send the recovery email.");
+  }
+}
+
+function adminRoleLabel(role) {
+  return role === "webmaster" ? "IT" : role === "hr" ? "HR" : "Admin";
+}
+
+function buildAdminInviteUrl(req, route, token) {
+  const inviteUrl = new URL(`${appBaseUrl(req)}${appPath(route === "webmaster" ? "webmaster" : "hr")}`);
+  inviteUrl.searchParams.set("invite", token);
+  return inviteUrl.toString();
+}
+
+async function sendAdminInviteEmail({ to, inviteUrl, displayName, username, roles, expiresAt } = {}) {
+  if (!RESEND_API_KEY || !ADMIN_INVITE_EMAIL_FROM || !to || !inviteUrl) {
+    throw createHttpError(503, "Admin invite email is not configured.");
+  }
+
+  const brandName = displayBrandName(siteConfig);
+  const expires = new Date(expiresAt || Date.now()).toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: RECOVERY_TIME_ZONE
+  });
+  const roleList = (Array.isArray(roles) ? roles : [])
+    .map((role) => adminRoleLabel(role))
+    .join(", ") || "Admin";
+  const subject = `${brandName} admin invitation`;
+  const safeDisplayName = cleanText(displayName, 120) || cleanText(username, 80) || "Admin";
+  const text = [
+    `${brandName} admin invitation`,
+    ``,
+    `Hello ${safeDisplayName},`,
+    `You have been invited to access ${brandName} as ${roleList}.`,
+    `Username: ${cleanText(username, 80)}`,
+    `Accept invite: ${inviteUrl}`,
+    `Expires: ${expires} Eastern Time`,
+    ``,
+    `If you did not expect this invitation, ignore this email.`
+  ].join("\n");
+
+  const response = await fetch(`${RESEND_API_BASE_URL}/emails`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: ADMIN_INVITE_EMAIL_FROM,
+      to: [to],
+      subject,
+      text,
+      html: `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#141a1f"><p><strong>${escapeHtml(brandName)}</strong> admin invitation</p><p>Hello ${escapeHtml(safeDisplayName)},</p><p>You have been invited to access ${escapeHtml(brandName)} as ${escapeHtml(roleList)}.</p><p><strong>Username:</strong> ${escapeHtml(cleanText(username, 80))}</p><p><a href="${escapeHtml(inviteUrl)}">Accept your invitation</a></p><p>Expires: ${escapeHtml(expires)} Eastern Time</p><p>If you did not expect this invitation, ignore this email.</p></div>`
+    })
+  });
+
+  if (!response.ok) {
+    throw createHttpError(502, "Could not send the admin invitation email.");
   }
 }
 
@@ -684,6 +748,28 @@ function normalizeRemoteAddress(value) {
   return address.startsWith('::ffff:') ? address.slice(7) : address;
 }
 
+function pathContains(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function resolveManagedDataFile(envName, fileName) {
+  const defaultDirectory = RUNTIME_DATA_DIR || path.join(__dirname, "data");
+  const configuredPath = process.env[envName]
+    ? path.resolve(process.env[envName])
+    : path.join(defaultDirectory, fileName);
+
+  if (pathContains(PUBLIC_DIR, configuredPath)) {
+    throw new Error(`${envName} must not point inside the public directory.`);
+  }
+
+  if (RUNTIME_DATA_DIR && !pathContains(RUNTIME_DATA_DIR, configuredPath)) {
+    throw new Error(`${envName} must stay within RUNTIME_DATA_DIR when runtime state is externally managed.`);
+  }
+
+  return configuredPath;
+}
+
 function parseConfiguredPublicBaseUrl(value) {
   const raw = String(value || "").trim();
 
@@ -721,8 +807,12 @@ function parseTrustedProxyAddresses(value) {
     .filter(Boolean);
 
   for (const entry of entries) {
-    if (isLoopbackAddress(entry) || !isLiteralProxyAddress(entry)) {
-      throw new Error("TRUST_PROXY_ADDRESSES must list only actual reverse proxy IP addresses.");
+    if (entry === 'loopback') {
+      continue;
+    }
+
+    if (!isLiteralProxyAddress(entry)) {
+      throw new Error("TRUST_PROXY_ADDRESSES must list literal proxy IP addresses or the loopback sentinel.");
     }
   }
 
@@ -737,6 +827,28 @@ function isLoopbackAddress(value) {
 function trustedProxyRequest(req) {
   const address = normalizeRemoteAddress(req.socket?.remoteAddress);
   return TRUST_PROXY_ADDRESSES.has(address) || (TRUST_PROXY_ADDRESSES.has('loopback') && isLoopbackAddress(address));
+}
+
+function forwardedClientIp(req) {
+  if (!trustedProxyRequest(req)) {
+    return "";
+  }
+
+  const cloudflareClientIp = normalizeRemoteAddress(req.headers["cf-connecting-ip"]);
+  if (cloudflareClientIp) {
+    return cloudflareClientIp;
+  }
+
+  const forwardedChain = String(req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((entry) => normalizeRemoteAddress(entry))
+    .find(Boolean);
+
+  return forwardedChain || "";
+}
+
+function requestClientIp(req) {
+  return forwardedClientIp(req) || normalizeRemoteAddress(req.socket?.remoteAddress);
 }
 
 function requestHost(req) {
@@ -1026,13 +1138,7 @@ function cleanText(value, maxLength) {
 }
 
 function normalizeRelativePath(value, fallback = appPath("hr")) {
-  const text = cleanText(value, 200);
-
-  if (!text || !text.startsWith("/")) {
-    return fallback;
-  }
-
-  return text;
+  return normalizeRelativeAppPath(value, fallback);
 }
 
 function cleanLongText(value, maxLength) {
@@ -1111,13 +1217,17 @@ function sortedPosts(posts) {
 async function handleApi(req, res, url) {
   try {
     const cookieNames = securityStore.getAccessCookieNames();
-    const adminCookieHeader = serializeCookie(cookieNames.hr, "", {
+    const hrCookieOptions = {
       path: "/",
       maxAge: 0,
       httpOnly: true,
       sameSite: "Lax",
       secure: isSecureRequest(req)
-    });
+    };
+    const adminCookieHeader = [
+      serializeCookie(cookieNames.hr, "", hrCookieOptions),
+      serializeCookie(cookieNames.legacyHr, "", hrCookieOptions)
+    ];
     const webmasterCookieHeader = serializeCookie(cookieNames.webmaster, "", {
       path: "/",
       maxAge: 0,
@@ -1132,9 +1242,69 @@ async function handleApi(req, res, url) {
       sameSite: "Lax",
       secure: isSecureRequest(req)
     });
+    const adminSessionCookieHeaders = (sessionId) => ([
+      serializeCookie(cookieNames.hr, sessionId, {
+        path: "/",
+        maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+        httpOnly: true,
+        sameSite: "Lax",
+        secure: isSecureRequest(req)
+      }),
+      serializeCookie(cookieNames.legacyHr, "", hrCookieOptions)
+    ]);
+    const webmasterSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.webmaster, sessionId, {
+      path: "/",
+      maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequest(req)
+    });
+    const inviteSessionCookieHeaders = (sessions = {}) => {
+      const headers = [];
+
+      if (sessions.hr?.id) {
+        headers.push(...adminSessionCookieHeaders(sessions.hr.id));
+      }
+
+      if (sessions.webmaster?.id) {
+        headers.push(webmasterSessionCookieHeader(sessions.webmaster.id));
+      }
+
+      return headers;
+    };
 
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, { ok: true, now: nowIso() });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin-invites/preview") {
+      const result = await securityStore.previewAdminInvite({
+        token: url.searchParams.get("token")
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin-invites/accept") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.acceptAdminInvite({
+        token: body.token,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        user: result.user,
+        roles: result.roles,
+        preferredRoute: result.preferredRoute
+      }, {
+        "Set-Cookie": inviteSessionCookieHeaders(result.sessions)
+      });
       return;
     }
 
@@ -1180,18 +1350,13 @@ async function handleApi(req, res, url) {
       }
 
       const result = await securityStore.setupAdminAccess({
+        username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"]
       });
 
       sendJson(res, 201, result, {
-        "Set-Cookie": serializeCookie(cookieNames.hr, result.sessionId, {
-          path: "/",
-          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
-          httpOnly: true,
-          sameSite: "Lax",
-          secure: isSecureRequest(req)
-        })
+        "Set-Cookie": adminSessionCookieHeaders(result.sessionId)
       });
       return;
     }
@@ -1201,19 +1366,14 @@ async function handleApi(req, res, url) {
 
       const body = await readJsonBody(req);
       const result = await securityStore.authenticateAdmin({
+        username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 200, result, {
-        "Set-Cookie": serializeCookie(cookieNames.hr, result.sessionId, {
-          path: "/",
-          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
-          httpOnly: true,
-          sameSite: "Lax",
-          secure: isSecureRequest(req)
-        })
+        "Set-Cookie": adminSessionCookieHeaders(result.sessionId)
       });
       return;
     }
@@ -1236,7 +1396,7 @@ async function handleApi(req, res, url) {
         currentPassword: body.currentPassword,
         password: body.password,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 200, result);
@@ -1253,7 +1413,7 @@ async function handleApi(req, res, url) {
       const result = await securityStore.issueHrRecoveryCode({
         email: HR_RECOVERY_EMAIL,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       await sendRecoveryEmail({
@@ -1282,7 +1442,7 @@ async function handleApi(req, res, url) {
           code: body.code,
           password: body.password,
           userAgent: req.headers["user-agent"],
-          clientIp: req.socket?.remoteAddress
+          clientIp: requestClientIp(req)
         });
       } else {
         if (!ADMIN_RECOVERY_TOKEN && !ADMIN_DAILY_RECOVERY_SEED) {
@@ -1296,18 +1456,12 @@ async function handleApi(req, res, url) {
         result = await securityStore.recoverAdminAccess({
           password: body.password,
           userAgent: req.headers["user-agent"],
-          clientIp: req.socket?.remoteAddress
+          clientIp: requestClientIp(req)
         });
       }
 
       sendJson(res, 200, result, {
-        "Set-Cookie": serializeCookie(cookieNames.hr, result.sessionId, {
-          path: "/",
-          maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
-          httpOnly: true,
-          sameSite: "Lax",
-          secure: isSecureRequest(req)
-        })
+        "Set-Cookie": adminSessionCookieHeaders(result.sessionId)
       });
       return;
     }
@@ -1317,6 +1471,7 @@ async function handleApi(req, res, url) {
 
       const body = await readJsonBody(req);
       const result = await securityStore.setupWebmasterAccess({
+        username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"]
       });
@@ -1338,9 +1493,10 @@ async function handleApi(req, res, url) {
 
       const body = await readJsonBody(req);
       const result = await securityStore.authenticateWebmaster({
+        username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 200, result, {
@@ -1374,7 +1530,7 @@ async function handleApi(req, res, url) {
         currentPassword: body.currentPassword,
         password: body.password,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 200, result);
@@ -1388,7 +1544,7 @@ async function handleApi(req, res, url) {
       const result = await securityStore.resetWebmasterPasswordByHr(req, {
         password: body.password,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 200, result);
@@ -1403,7 +1559,7 @@ async function handleApi(req, res, url) {
         username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 200, result, {
@@ -1424,6 +1580,158 @@ async function handleApi(req, res, url) {
       await securityStore.logoutEmployee(req);
       sendJson(res, 200, { ok: true }, {
         "Set-Cookie": employeeCookieHeader
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin-users") {
+      const hrAccess = await securityStore.checkHrAccess(req);
+
+      if (!hrAccess.authorized) {
+        sendError(res, 401, "HR sign-in required.");
+        return;
+      }
+
+      const adminUsers = await securityStore.listAdminUsers({
+        currentUserId: hrAccess.user?.id || ""
+      });
+
+      sendJson(res, 200, {
+        adminUsers
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin-users") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.createAdminUser(body);
+      sendJson(res, 201, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin-users/invite") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.inviteAdminUser({
+        ...body,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      const inviteUrl = buildAdminInviteUrl(req, result.preferredRoute, result.inviteToken);
+      let emailDelivered = true;
+
+      try {
+        await sendAdminInviteEmail({
+          to: result.adminUser.email,
+          inviteUrl,
+          displayName: result.adminUser.displayName,
+          username: result.adminUser.username,
+          roles: result.adminUser.roles,
+          expiresAt: result.inviteExpiresAt
+        });
+      } catch {
+        emailDelivered = false;
+      }
+
+      sendJson(res, 201, {
+        adminUser: result.adminUser,
+        emailDelivered
+      });
+      return;
+    }
+
+    const adminUserProfileMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)\/profile$/);
+    if (req.method === "POST" && adminUserProfileMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserProfileMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateAdminUserProfile(req, adminUserId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const adminUserStatusMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)\/status$/);
+    if (req.method === "POST" && adminUserStatusMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserStatusMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.setAdminUserActive(req, adminUserId, body.active !== false);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const adminUserRolesMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)\/roles$/);
+    if (req.method === "POST" && adminUserRolesMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserRolesMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateAdminUserRoles(req, adminUserId, body.roles);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const adminUserPasswordMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)\/password$/);
+    if (req.method === "POST" && adminUserPasswordMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserPasswordMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.resetAdminUserPassword(req, adminUserId, {
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const adminUserSessionsMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)\/sessions\/revoke$/);
+    if (req.method === "POST" && adminUserSessionsMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserSessionsMatch[1]);
+      const result = await securityStore.revokeAdminUserSessions(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const adminUserInviteMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)\/invite$/);
+    if (req.method === "POST" && adminUserInviteMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserInviteMatch[1]);
+      const result = await securityStore.resendAdminInvite(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      const inviteUrl = buildAdminInviteUrl(req, result.preferredRoute, result.inviteToken);
+      let emailDelivered = true;
+
+      try {
+        await sendAdminInviteEmail({
+          to: result.adminUser.email,
+          inviteUrl,
+          displayName: result.adminUser.displayName,
+          username: result.adminUser.username,
+          roles: result.adminUser.roles,
+          expiresAt: result.inviteExpiresAt
+        });
+      } catch {
+        emailDelivered = false;
+      }
+
+      sendJson(res, 200, {
+        adminUser: result.adminUser,
+        emailDelivered
       });
       return;
     }
@@ -1624,7 +1932,7 @@ async function handleApi(req, res, url) {
         step: cleanText(body.step, 80),
         errorMessage: cleanText(body.errorMessage, 240),
         userAgent: req.headers["user-agent"],
-        clientIp: req.socket?.remoteAddress
+        clientIp: requestClientIp(req)
       });
 
       sendJson(res, 201, {

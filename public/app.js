@@ -193,6 +193,7 @@ const state = {
       setupRequired: false,
       sessionExpiresAt: "",
       csrfToken: "",
+      user: null,
       busy: false,
       error: ""
     },
@@ -203,9 +204,21 @@ const state = {
       hrAuthorized: false,
       sessionExpiresAt: "",
       csrfToken: "",
+      user: null,
       busy: false,
       error: ""
     }
+  },
+  adminDirectory: {
+    loaded: false,
+    adminUsers: []
+  },
+  adminInvite: {
+    loaded: false,
+    token: "",
+    details: null,
+    busy: false,
+    error: ""
   },
   employeeDirectory: {
     loaded: false,
@@ -358,6 +371,17 @@ function currentRoute() {
   }
 
   return "launcher";
+}
+
+function currentInviteToken() {
+  return String(new URL(window.location.href).searchParams.get("invite") || "").trim().slice(0, 200);
+}
+
+function clearInviteToken(nextRoute = currentRoute()) {
+  const nextUrl = new URL(window.location.href);
+  nextUrl.pathname = routePath(nextRoute);
+  nextUrl.searchParams.delete("invite");
+  window.history.replaceState({}, "", nextUrl.toString());
 }
 
 function routePath(route) {
@@ -963,6 +987,8 @@ function csrfTokenForPath(pathname) {
     route === "/api/hr/logout" ||
     route === "/api/hr/password" ||
     route === "/api/webmaster/setup" ||
+    route === "/api/admin-users" ||
+    route.startsWith("/api/admin-users/") ||
     route === "/api/employees" ||
     route.startsWith("/api/employees/") ||
     route === "/api/posts" ||
@@ -1163,6 +1189,23 @@ async function loadEmployeeDirectory() {
   return state.employeeDirectory;
 }
 
+async function loadAdminDirectory() {
+  try {
+    const result = await requestJson("/api/admin-users");
+    state.adminDirectory = {
+      loaded: true,
+      adminUsers: Array.isArray(result.adminUsers) ? result.adminUsers : []
+    };
+  } catch {
+    state.adminDirectory = {
+      loaded: true,
+      adminUsers: []
+    };
+  }
+
+  return state.adminDirectory;
+}
+
 async function loadSecurityEvents() {
   try {
     const result = await requestJson("/api/security/events");
@@ -1184,6 +1227,10 @@ async function refreshAdminData() {
   const access = await loadHrAccessStatus();
 
   if (!access.authorized) {
+    state.adminDirectory = {
+      loaded: false,
+      adminUsers: []
+    };
     state.employeeDirectory = {
       loaded: false,
       employees: []
@@ -1200,12 +1247,14 @@ async function refreshAdminData() {
   const [_, pushStatus, employeeDirectory, securityEvents] = await Promise.all([
     loadBoard(),
     loadPushStatus(),
+    loadAdminDirectory(),
     loadEmployeeDirectory(),
     loadSecurityEvents()
   ]);
 
   return {
     pushStatus,
+    adminDirectory: state.adminDirectory,
     employeeDirectory,
     securityEvents
   };
@@ -1276,7 +1325,8 @@ async function loadHrAccessStatus() {
     authorized: false,
     setupRequired: false,
     sessionExpiresAt: "",
-    csrfToken: ""
+    csrfToken: "",
+    user: null
   });
 
   state.access.hr = {
@@ -1286,6 +1336,7 @@ async function loadHrAccessStatus() {
     setupRequired: Boolean(probe.body.setupRequired),
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
+    user: probe.body.user || null,
     error: ""
   };
 
@@ -1298,7 +1349,8 @@ async function loadWebmasterAccessStatus() {
     setupRequired: false,
     hrAuthorized: false,
     sessionExpiresAt: "",
-    csrfToken: ""
+    csrfToken: "",
+    user: null
   });
 
   state.access.webmaster = {
@@ -1309,10 +1361,63 @@ async function loadWebmasterAccessStatus() {
     hrAuthorized: Boolean(probe.body.hrAuthorized),
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
+    user: probe.body.user || null,
     error: ""
   };
 
   return state.access.webmaster;
+}
+
+function resetAdminInviteState() {
+  state.adminInvite = {
+    loaded: false,
+    token: "",
+    details: null,
+    busy: false,
+    error: ""
+  };
+}
+
+async function loadAdminInvitePreview(route) {
+  const inviteToken = currentInviteToken();
+
+  if (!inviteToken || (route !== "hr" && route !== "webmaster")) {
+    resetAdminInviteState();
+    return state.adminInvite;
+  }
+
+  if (state.adminInvite.token === inviteToken && state.adminInvite.loaded) {
+    return state.adminInvite;
+  }
+
+  state.adminInvite = {
+    loaded: false,
+    token: inviteToken,
+    details: null,
+    busy: false,
+    error: ""
+  };
+
+  try {
+    const result = await requestJson(`/api/admin-invites/preview?token=${encodeURIComponent(inviteToken)}`);
+    state.adminInvite = {
+      loaded: true,
+      token: inviteToken,
+      details: result,
+      busy: false,
+      error: ""
+    };
+  } catch (error) {
+    state.adminInvite = {
+      loaded: true,
+      token: inviteToken,
+      details: null,
+      busy: false,
+      error: error.message || "Could not load the invitation."
+    };
+  }
+
+  return state.adminInvite;
 }
 
 function defaultWeather() {
@@ -2460,9 +2565,69 @@ function renderEmployeeAuthGate() {
   });
 }
 
+function renderAdminInviteGate(route) {
+  const details = state.adminInvite.details || {};
+  const adminUser = details.adminUser || {};
+  const roles = Array.isArray(adminUser.roles) ? adminUser.roles.map((role) => adminRoleLabel(role)).join(", ") : "Admin";
+  const inviteError = state.adminInvite.error || state.message;
+
+  if (!state.adminInvite.loaded && currentInviteToken()) {
+    return renderAuthFrame({
+      title: "Loading invitation",
+      error: "",
+      content: '<div class="auth-form"><p class="auth-inline-meta">Checking the invitation details.</p></div>'
+    });
+  }
+
+  if (!state.adminInvite.details) {
+    return renderAuthFrame({
+      title: "Invitation unavailable",
+      error: inviteError || "That invitation link is no longer valid.",
+      content: `
+        <div class="auth-form">
+          <div class="auth-form-actions">
+            <button class="button" type="button" data-route="launcher">Launcher</button>
+            <button class="ghost-button" type="button" data-route="${escapeHtml(route)}">Back to Sign In</button>
+          </div>
+        </div>
+      `
+    });
+  }
+
+  return renderAuthFrame({
+    title: "Accept invitation",
+    error: inviteError,
+    content: `
+      <div class="auth-form auth-recovery-stack">
+        <div class="invite-summary">
+          <div class="invite-summary-row"><strong>${escapeHtml(adminUser.displayName || adminUser.username || "Admin")}</strong></div>
+          <div class="invite-summary-row">${escapeHtml(adminUser.email || "")}</div>
+          <div class="invite-summary-row">${escapeHtml(`@${adminUser.username || ""} · ${roles}`)}</div>
+          <div class="invite-summary-row">${escapeHtml(adminUser.inviteExpiresAt ? `Expires ${formatDate(adminUser.inviteExpiresAt)}` : "")}</div>
+        </div>
+        <form class="auth-form" data-accept-admin-invite-form>
+          <label class="field">
+            <span>Create password</span>
+            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="Create your password">
+          </label>
+          <label class="field">
+            <span>Confirm password</span>
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat your password">
+          </label>
+          <div class="auth-form-actions">
+            <button class="button" type="submit"${state.adminInvite.busy ? " disabled" : ""}>${escapeHtml(state.adminInvite.busy ? "Saving..." : "Accept Invite")}</button>
+            <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
+          </div>
+        </form>
+      </div>
+    `
+  });
+}
+
 function renderAdminAuthGate(route) {
   const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
   const sectionTitle = route === "webmaster" ? "IT" : "HR";
+  const inviteToken = currentInviteToken();
   const authError = access.error || state.message;
   const canSetup = route === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
   const setupBlocked = route === "webmaster" && access.setupRequired && !access.hrAuthorized;
@@ -2471,13 +2636,19 @@ function renderAdminAuthGate(route) {
     : route === "webmaster"
       ? state.authRecovery.webmaster
       : false;
-  const passwordLabel = route === "webmaster" ? "Webmaster password" : "Management password";
+  const requiresUsername = route === "hr" || route === "webmaster";
+  const passwordLabel = route === "webmaster" ? "Webmaster password" : "HR password";
+
+  if (inviteToken) {
+    return renderAdminInviteGate(route);
+  }
+
   const heading = recoveryMode
     ? "Forgot Password"
     : setupBlocked
     ? "IT login unavailable"
     : canSetup
-      ? `Set ${sectionTitle} password`
+      ? (route === "hr" ? "Set HR credentials" : `Set ${sectionTitle} credentials`)
       : `${sectionTitle} login`;
   const helperText = setupBlocked ? "Open HR to finish setup." : "";
 
@@ -2536,12 +2707,18 @@ function renderAdminAuthGate(route) {
             <input name="setupToken" type="password" required autocomplete="one-time-code" placeholder="Bootstrap secret">
           </label>
           ` : ""}
+          ${requiresUsername ? `
+          <label class="field">
+            <span>${escapeHtml(route === "webmaster" ? (canSetup ? "Webmaster username" : "Username") : (canSetup ? "HR username" : "Username"))}</span>
+            <input name="username" maxlength="80" required autocomplete="username" placeholder="${escapeHtml(route === "webmaster" ? "webmaster" : "hr")}">
+          </label>
+          ` : ""}
           <label class="field">
             <span>${escapeHtml(canSetup ? passwordLabel : "Password")}</span>
             <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? `Create the ${passwordLabel.toLowerCase()}` : passwordLabel)}">
           </label>
           <div class="auth-form-actions">
-            <button class="button" type="submit">${escapeHtml(canSetup ? "Save Password" : "Sign In")}</button>
+            <button class="button" type="submit">${escapeHtml(canSetup ? "Save Credentials" : "Sign In")}</button>
             <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
           </div>
         </form>
@@ -2591,6 +2768,216 @@ function renderEmployeeDirectoryRow(employee) {
         </div>
       </td>
     </tr>
+  `;
+}
+
+function adminRoleLabel(role) {
+  return role === "webmaster" ? "IT" : "HR";
+}
+
+function renderAdminRoleChips(roles = []) {
+  return roles.length
+    ? roles.map((role) => `<span class="admin-table-chip is-info">${escapeHtml(adminRoleLabel(role))}</span>`).join("")
+    : '<span class="admin-table-chip is-muted">No role</span>';
+}
+
+function adminInviteStatusText(adminUser) {
+  if (adminUser.credentialsConfigured) {
+    return adminUser.lastLoginAt ? `Last Login ${formatDate(adminUser.lastLoginAt)}` : "No Login Yet";
+  }
+
+  if (adminUser.inviteState === "pending") {
+    return adminUser.inviteExpiresAt
+      ? `Invite Pending Until ${formatDate(adminUser.inviteExpiresAt)}`
+      : "Invite Pending";
+  }
+
+  if (adminUser.inviteState === "expired") {
+    return adminUser.inviteExpiresAt
+      ? `Invite Expired ${formatDate(adminUser.inviteExpiresAt)}`
+      : "Invite Expired";
+  }
+
+  return "Credentials Not Configured";
+}
+
+function renderAdminDirectoryRow(adminUser) {
+  const roles = Array.isArray(adminUser.roles) ? adminUser.roles : [];
+  const isCurrentUser = Boolean(adminUser.currentUser);
+  const identitySummary = [adminUser.email || "Email required", adminUser.username ? `@${adminUser.username}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const statusSummary = isCurrentUser
+    ? `Current account${adminUser.lastLoginAt ? ` · Last Login ${formatDate(adminUser.lastLoginAt)}` : ""}`
+    : adminInviteStatusText(adminUser);
+
+  return `
+    <tr>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(adminUser.displayName || adminUser.username || "Unknown admin")}</div>
+        <div class="admin-table-secondary">${escapeHtml(identitySummary)}</div>
+        <div class="admin-table-secondary">${escapeHtml(statusSummary)}</div>
+        <form class="admin-identity-form" data-update-admin-profile-form>
+          <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+          <div class="admin-identity-grid">
+            <label class="field">
+              <span>Display name</span>
+              <input name="displayName" maxlength="120" required value="${escapeHtml(adminUser.displayName || "")}" placeholder="Admin name">
+            </label>
+            <label class="field">
+              <span>Email</span>
+              <input name="email" type="email" maxlength="200" required value="${escapeHtml(adminUser.email || "")}" placeholder="admin@company.com">
+            </label>
+          </div>
+          <button class="ghost-button" type="submit">${icon("check")} Save Identity</button>
+        </form>
+      </td>
+      <td>
+        <div class="admin-role-cell">
+          <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
+          <form class="admin-role-editor" data-update-admin-roles-form>
+            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+            <label class="checkbox-row admin-role-checkbox">
+              <input name="roles" type="checkbox" value="hr"${roles.includes("hr") ? " checked" : ""}>
+              <span>HR</span>
+            </label>
+            <label class="checkbox-row admin-role-checkbox">
+              <input name="roles" type="checkbox" value="webmaster"${roles.includes("webmaster") ? " checked" : ""}>
+              <span>IT</span>
+            </label>
+            <button class="ghost-button" type="submit">${icon("check")} Save Roles</button>
+          </form>
+        </div>
+      </td>
+      <td>
+        <span class="admin-table-chip ${adminUser.active === false ? "is-muted" : "is-positive"}">
+          ${escapeHtml(adminUser.active === false ? "Disabled" : "Active")}
+        </span>
+      </td>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(String(adminUser.activeSessions || 0))}</div>
+        <div class="admin-table-secondary">${escapeHtml(adminUser.activeSessions === 1 ? "Live session" : "Live sessions")}</div>
+      </td>
+      <td>
+        <div class="admin-access-cell">
+          <span class="admin-table-chip ${adminUser.credentialsConfigured ? "is-positive" : adminUser.inviteState === "expired" ? "is-muted" : "is-info"}">
+            ${escapeHtml(
+              adminUser.credentialsConfigured
+                ? "Configured"
+                : adminUser.inviteState === "pending"
+                  ? "Invite Pending"
+                  : adminUser.inviteState === "expired"
+                    ? "Invite Expired"
+                    : "Needs Invite"
+            )}
+          </span>
+          <form class="admin-table-inline-form admin-password-inline-form" data-reset-admin-password-form>
+            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="${escapeHtml(isCurrentUser ? "Use settings for your password" : "New Temporary Password")}"${isCurrentUser ? " disabled" : ""}>
+            <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>${icon("lock")} Reset</button>
+          </form>
+        </div>
+      </td>
+      <td>
+        <div class="admin-table-actions">
+          ${!adminUser.credentialsConfigured ? `
+          <form data-resend-admin-invite-form>
+            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+            <button class="ghost-button" type="submit">${icon("send")} ${escapeHtml(adminUser.inviteState === "pending" ? "Resend Invite" : "Send Invite")}</button>
+          </form>
+          ` : ""}
+          <form data-admin-access-form>
+            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+            <input type="hidden" name="active" value="${adminUser.active ? "false" : "true"}">
+            <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>
+              ${adminUser.active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}
+            </button>
+          </form>
+          <form data-revoke-admin-sessions-form>
+            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+            <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>${icon("refresh")} Sign Out Sessions</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderAdminDirectoryTable(adminUsers) {
+  if (!adminUsers.length) {
+    return '<div class="empty-state">No Admin Accounts Yet.</div>';
+  }
+
+  return `
+    <div class="admin-table-wrap">
+      <table class="admin-table admin-table-admins">
+        <thead>
+          <tr>
+            <th>Identity</th>
+            <th>Roles</th>
+            <th>Status</th>
+            <th>Sessions</th>
+            <th>Access</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${adminUsers.map((adminUser) => renderAdminDirectoryRow(adminUser)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAdminAccountsPanel() {
+  const adminUsers = Array.isArray(state.adminDirectory.adminUsers) ? state.adminDirectory.adminUsers : [];
+
+  return `
+    <section class="panel-card employee-access-card">
+      <div class="employee-access-head">
+        <div>
+          <h3>Admin Accounts</h3>
+        </div>
+        <span class="sync-pill">${escapeHtml(`${adminUsers.length} Admin${adminUsers.length === 1 ? "" : "s"}`)}</span>
+      </div>
+
+      <form class="employee-create-form admin-create-grid" data-create-admin-form>
+        <label class="field">
+          <span>Display name</span>
+          <input name="displayName" maxlength="120" required placeholder="Alex Morgan">
+        </label>
+        <label class="field">
+          <span>Email</span>
+          <input name="email" type="email" maxlength="200" required placeholder="alex@company.com">
+        </label>
+        <label class="field">
+          <span>Username</span>
+          <input name="username" maxlength="80" required placeholder="Admin Username">
+        </label>
+        <label class="field">
+          <span>Temporary password</span>
+          <input name="password" type="password" minlength="10" autocomplete="new-password" placeholder="Only needed for manual setup">
+        </label>
+        <fieldset class="admin-role-picker">
+          <legend>Roles</legend>
+          <label class="checkbox-row admin-role-checkbox">
+            <input name="roles" type="checkbox" value="hr" checked>
+            <span>HR</span>
+          </label>
+          <label class="checkbox-row admin-role-checkbox">
+            <input name="roles" type="checkbox" value="webmaster">
+            <span>IT</span>
+          </label>
+        </fieldset>
+        <div class="admin-create-actions">
+          <button class="button employee-create-submit" type="submit" data-admin-create-action="invite">${icon("send")} Send Invite</button>
+          <button class="ghost-button" type="submit" data-admin-create-action="password">${icon("lock")} Create With Password</button>
+        </div>
+      </form>
+      <p class="form-note admin-create-note">Email invite is the default path. Use manual password setup only when the admin cannot receive email yet.</p>
+
+      ${renderAdminDirectoryTable(adminUsers)}
+    </section>
   `;
 }
 
@@ -3052,7 +3439,7 @@ function renderRoleSettingsHero(route) {
           <div class="settings-chip">
             <span>Session rule</span>
             <strong>Contained</strong>
-            <small>Other active ${escapeHtml(role.toLowerCase())} sessions are signed out after a password change.</small>
+            <small>Other active sessions for this account are signed out after a password change.</small>
           </div>
           <div class="settings-chip">
             <span>Last password change</span>
@@ -3160,7 +3547,7 @@ function renderWebmasterSettingsPanel() {
           <div class="settings-context-item">
             <span>Credential action</span>
             <strong>Isolated under settings</strong>
-            <small>Changing the webmaster password signs out other active webmaster sessions immediately.</small>
+            <small>Changing the webmaster password signs out other active sessions for that account immediately.</small>
           </div>
         </div>
       </section>
@@ -3173,6 +3560,7 @@ function renderWebmasterSettingsPanel() {
 function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
+      ${renderAdminAccountsPanel()}
       ${renderEmployeeDirectoryPanel()}
     </section>
   `;
@@ -3736,6 +4124,7 @@ async function routeTo(route) {
   const nextPath = routePath(route);
   state.authRecovery.hr = false;
   state.authRecovery.webmaster = false;
+  resetAdminInviteState();
 
   if (route === "launcher") {
     activeAdminTab = "publish";
@@ -3770,13 +4159,25 @@ async function hydrateRoute() {
 
   if (route === "hr") {
     await refreshAdminData();
+    if (!state.access.hr.authorized && currentInviteToken()) {
+      await loadAdminInvitePreview("hr");
+    } else {
+      resetAdminInviteState();
+    }
     return;
   }
 
   if (route === "webmaster") {
     await refreshWebmasterData();
+    if (!state.access.webmaster.authorized && currentInviteToken()) {
+      await loadAdminInvitePreview("webmaster");
+    } else {
+      resetAdminInviteState();
+    }
     return;
   }
+
+  resetAdminInviteState();
 
   const access = await loadEmployeeAccessStatus();
 
@@ -4051,7 +4452,7 @@ async function handleAdminAuthSubmit(event) {
     await hydrateRoute();
     if (mode === "setup") {
       setMessage(
-        route === "webmaster" ? "Webmaster password configured." : "Management password configured.",
+        route === "webmaster" ? "Webmaster credentials configured." : "HR credentials configured.",
         "success"
       );
     } else {
@@ -4066,6 +4467,60 @@ async function handleAdminAuthSubmit(event) {
   } finally {
     state.access[targetAccess].busy = false;
     render();
+  }
+}
+
+async function handleAcceptAdminInviteSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const route = currentRoute() === "webmaster" ? "webmaster" : "hr";
+  const inviteToken = currentInviteToken();
+  const password = String(formData.get("password") || "");
+  const confirmPassword = String(formData.get("confirmPassword") || "");
+
+  if (!inviteToken) {
+    setMessage("That invitation link is missing its token.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  if (password !== confirmPassword) {
+    setMessage("Passwords do not match.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  state.adminInvite = {
+    ...state.adminInvite,
+    busy: true,
+    error: ""
+  };
+  render();
+
+  try {
+    const result = await requestJson("/api/admin-invites/accept", {
+      method: "POST",
+      body: JSON.stringify({
+        token: inviteToken,
+        password
+      })
+    });
+    clearInviteToken(result.preferredRoute === "webmaster" ? "webmaster" : route);
+    resetAdminInviteState();
+    await hydrateRoute();
+    setMessage("Invitation accepted. Password saved.", "success");
+  } catch (error) {
+    state.adminInvite = {
+      ...state.adminInvite,
+      error: error.message || "Could not accept the invitation."
+    };
+  } finally {
+    state.adminInvite.busy = false;
+    render();
+    clearMessageSoon();
   }
 }
 
@@ -4084,6 +4539,187 @@ async function handleCreateEmployeeSubmit(event) {
     setMessage("Employee account created.", "success");
   } catch (error) {
     setMessage(error.message || "Could not create the employee account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleCreateAdminSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const submitter = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
+  const action = submitter?.dataset.adminCreateAction === "password" ? "password" : "invite";
+  const payload = {
+    displayName: formData.get("displayName"),
+    email: formData.get("email"),
+    username: formData.get("username"),
+    roles: formData.getAll("roles")
+  };
+
+  try {
+    if (action === "password") {
+      const password = String(formData.get("password") || "");
+
+      if (password.length < 10) {
+        throw new Error("Temporary password must be at least 10 characters.");
+      }
+
+      const result = await requestJson("/api/admin-users", {
+        method: "POST",
+        body: JSON.stringify({
+          ...payload,
+          password
+        })
+      });
+      form.reset();
+      const defaultHrCheckbox = form.querySelector('input[name="roles"][value="hr"]');
+      if (defaultHrCheckbox) {
+        defaultHrCheckbox.checked = true;
+      }
+      await refreshAdminData();
+      setMessage("Admin account created with a temporary password.", "success");
+      render();
+      clearMessageSoon();
+      return result;
+    }
+
+    const result = await requestJson("/api/admin-users/invite", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    form.reset();
+    const defaultHrCheckbox = form.querySelector('input[name="roles"][value="hr"]');
+    if (defaultHrCheckbox) {
+      defaultHrCheckbox.checked = true;
+    }
+    await refreshAdminData();
+    setMessage(
+      result.emailDelivered === false
+        ? "Admin account created, but the invitation email could not be sent."
+        : "Admin invitation sent.",
+      result.emailDelivered === false ? "warning" : "success"
+    );
+  } catch (error) {
+    setMessage(error.message || "Could not create the admin account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleUpdateAdminProfileSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const adminUserId = String(formData.get("adminUserId") || "");
+
+  try {
+    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/profile`, {
+      method: "POST",
+      body: JSON.stringify({
+        displayName: formData.get("displayName"),
+        email: formData.get("email")
+      })
+    });
+    await refreshAdminData();
+    setMessage("Admin identity updated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update the admin identity.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleUpdateAdminRolesSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const adminUserId = String(formData.get("adminUserId") || "");
+
+  try {
+    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/roles`, {
+      method: "POST",
+      body: JSON.stringify({
+        roles: formData.getAll("roles")
+      })
+    });
+    await refreshAdminData();
+    setMessage("Admin roles updated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update admin roles.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleResendAdminInviteSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const adminUserId = String(formData.get("adminUserId") || "");
+
+  try {
+    const result = await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/invite`, {
+      method: "POST"
+    });
+    await refreshAdminData();
+    setMessage(
+      result.emailDelivered === false
+        ? "Invitation refreshed, but the email could not be sent."
+        : "Invitation sent.",
+      result.emailDelivered === false ? "warning" : "success"
+    );
+  } catch (error) {
+    setMessage(error.message || "Could not send the invitation.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleAdminAccessSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const adminUserId = String(formData.get("adminUserId") || "");
+  const active = String(formData.get("active") || "") === "true";
+
+  try {
+    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/status`, {
+      method: "POST",
+      body: JSON.stringify({
+        active
+      })
+    });
+    await refreshAdminData();
+    setMessage(active ? "Admin access restored." : "Admin access disabled.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update admin access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleResetAdminPasswordSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const adminUserId = String(formData.get("adminUserId") || "");
+
+  try {
+    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/password`, {
+      method: "POST",
+      body: JSON.stringify({
+        password: formData.get("password")
+      })
+    });
+    form.reset();
+    await refreshAdminData();
+    setMessage("Admin password reset. Existing sessions were signed out.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not reset the admin password.");
   }
 
   render();
@@ -4270,6 +4906,26 @@ async function handleRevokeEmployeeSessionsSubmit(event) {
     setMessage("Employee sessions revoked.", "success");
   } catch (error) {
     setMessage(error.message || "Could not revoke employee sessions.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleRevokeAdminSessionsSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const adminUserId = String(formData.get("adminUserId") || "");
+
+  try {
+    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/sessions/revoke`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await refreshAdminData();
+    setMessage("Admin sessions revoked.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not revoke admin sessions.");
   }
 
   render();
@@ -4506,6 +5162,11 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.matches("[data-accept-admin-invite-form]")) {
+    await handleAcceptAdminInviteSubmit(event);
+    return;
+  }
+
   if (event.target.matches("[data-privileged-password-form]")) {
     await handlePrivilegedPasswordChangeSubmit(event);
     return;
@@ -4523,6 +5184,41 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-create-employee-form]")) {
     await handleCreateEmployeeSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-create-admin-form]")) {
+    await handleCreateAdminSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-update-admin-profile-form]")) {
+    await handleUpdateAdminProfileSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-update-admin-roles-form]")) {
+    await handleUpdateAdminRolesSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-admin-access-form]")) {
+    await handleAdminAccessSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-reset-admin-password-form]")) {
+    await handleResetAdminPasswordSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-revoke-admin-sessions-form]")) {
+    await handleRevokeAdminSessionsSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-resend-admin-invite-form]")) {
+    await handleResendAdminInviteSubmit(event);
     return;
   }
 

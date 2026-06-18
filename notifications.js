@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { normalizeRelativeAppPath } from "./url-safety.js";
 
 const require = createRequire(import.meta.url);
 const webpush = require("web-push");
@@ -11,6 +12,19 @@ const DEFAULT_TITLE = "Palziv alert";
 const DEFAULT_BODY = "Open the Palziv portal for details.";
 const DEFAULT_URL = "/palzivalerts/employee";
 const DEFAULT_ICON = "/assets/palziv-logo-transparent.png?v=20260617c";
+const DEFAULT_ALLOWED_PUSH_HOSTS = Object.freeze([
+  "fcm.googleapis.com",
+  "updates.push.services.mozilla.com",
+  "push.services.mozilla.com",
+  "push.apple.com"
+]);
+const ALLOWED_PUSH_HOSTS = Object.freeze(
+  String(process.env.PUSH_ALLOWED_HOSTS || "")
+    .split(",")
+    .map((entry) => cleanText(entry, 255).toLowerCase())
+    .filter(Boolean)
+    .concat(DEFAULT_ALLOWED_PUSH_HOSTS)
+);
 
 function nowIso() {
   return new Date().toISOString();
@@ -69,16 +83,6 @@ function normalizeDeviceMetadata(input = {}, channel = "push") {
   };
 }
 
-function safeRelativeUrl(value, fallback = DEFAULT_URL) {
-  const text = cleanText(value, 200);
-
-  if (!text || !text.startsWith("/")) {
-    return fallback;
-  }
-
-  return text;
-}
-
 function normalizeSubscription(input) {
   if (!input || typeof input !== "object") {
     return null;
@@ -94,6 +98,10 @@ function normalizeSubscription(input) {
     return null;
   }
 
+  if (!isAllowedPushEndpoint(endpoint)) {
+    return null;
+  }
+
   return {
     endpoint,
     expirationTime: Number.isFinite(source.expirationTime) ? source.expirationTime : null,
@@ -103,6 +111,22 @@ function normalizeSubscription(input) {
     },
     ...normalizeDeviceMetadata(input, "push")
   };
+}
+
+function isAllowedPushHost(hostname) {
+  const normalizedHost = cleanText(hostname, 255).toLowerCase();
+  return ALLOWED_PUSH_HOSTS.some((allowedHost) => (
+    normalizedHost === allowedHost || normalizedHost.endsWith(`.${allowedHost}`)
+  ));
+}
+
+function isAllowedPushEndpoint(endpoint) {
+  try {
+    const parsed = new URL(endpoint);
+    return parsed.protocol === "https:" && isAllowedPushHost(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function dedupeSubscriptions(subscriptions) {
@@ -162,7 +186,7 @@ export function normalizeNotificationState(input) {
 }
 
 function normalizeNotificationPath(value, fallback = DEFAULT_URL) {
-  return safeRelativeUrl(value, fallback);
+  return normalizeRelativeAppPath(value, fallback);
 }
 
 async function ensureDirectory(filePath) {

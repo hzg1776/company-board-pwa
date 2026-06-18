@@ -396,6 +396,43 @@ async function removeDirectoryWithRetries(targetPath, attempts = 6) {
   }
 }
 
+async function startChromeSession(chromePath, attempts = 3) {
+  let lastError = new Error("Chrome session could not be started.");
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const chrome = await startChrome(chromePath);
+    let connection = null;
+
+    try {
+      connection = createCdpConnection(chrome.webSocketDebuggerUrl);
+      await connection.ready;
+      await connection.send("Browser.getVersion");
+      return { chrome, connection };
+    } catch (error) {
+      const detail = [
+        error instanceof Error ? error.message : String(error),
+        chrome.stderr().trim(),
+        chrome.stdout().trim()
+      ].filter(Boolean).join("\n");
+
+      lastError = new Error(`Chrome launch attempt ${attempt + 1} failed.\n${detail}`);
+
+      if (connection) {
+        await connection.close().catch(() => {});
+      }
+
+      await cleanupProcess(chrome.child);
+      await removeDirectoryWithRetries(chrome.userDataDir);
+
+      if (attempt < attempts - 1) {
+        await sleep(500 * (attempt + 1));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 async function provisionManagedAccess(tempDir, options = {}) {
   const store = createSecurityStore({
     dataFile: path.join(tempDir, "security.json")
@@ -404,6 +441,7 @@ async function provisionManagedAccess(tempDir, options = {}) {
 
   if (options.adminPassword) {
     await store.setupAdminAccess({
+      username: options.adminUsername || "hr",
       password: options.adminPassword,
       userAgent: "e2e"
     });
@@ -438,8 +476,7 @@ test(
       port: serverPort,
       tempDir
     });
-    const chrome = await startChrome(chromePath);
-    const connection = createCdpConnection(chrome.webSocketDebuggerUrl);
+    const { chrome, connection } = await startChromeSession(chromePath);
 
     t.after(async () => {
       await connection.close();
@@ -527,6 +564,7 @@ test(
   async (t) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-admin-open-e2e-"));
     await provisionManagedAccess(tempDir, {
+      adminUsername: "hr",
       adminPassword: "ManagerSecret1!"
     });
     const serverPort = await findFreePort();
@@ -534,8 +572,7 @@ test(
       port: serverPort,
       tempDir
     });
-    const chrome = await startChrome(chromePath);
-    const connection = createCdpConnection(chrome.webSocketDebuggerUrl);
+    const { chrome, connection } = await startChromeSession(chromePath);
 
     t.after(async () => {
       await connection.close();
@@ -554,12 +591,14 @@ test(
     await evaluateExpression(session, `
       (() => {
         const form = document.querySelector('[data-admin-auth-form]');
+        const username = form?.querySelector('input[name="username"]');
         const password = form?.querySelector('input[name="password"]');
 
-        if (!form || !password) {
+        if (!form || !username || !password) {
           throw new Error('Admin login form is missing required fields.');
         }
 
+        username.value = 'hr';
         password.value = 'ManagerSecret1!';
         form.requestSubmit();
         return true;
@@ -591,12 +630,14 @@ test(
     await evaluateExpression(session, `
       (() => {
         const form = document.querySelector('[data-admin-auth-form]');
+        const username = form?.querySelector('input[name="username"]');
         const password = form?.querySelector('input[name="password"]');
 
-        if (!form || !password) {
+        if (!form || !username || !password) {
           throw new Error('Webmaster setup form is missing required fields.');
         }
 
+        username.value = 'webmaster';
         password.value = 'WebmasterSecret1!';
         form.requestSubmit();
         return {

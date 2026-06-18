@@ -11,7 +11,8 @@ This runbook is the day-to-day operating guide for the live pilot deployment of 
 - Reverse proxy: Cloudflare Tunnel
 - App startup: scheduled tasks
 - Tunnel watchdog: scheduled task every 1 minute
-- Data storage: local JSON files in `data/`
+- Runtime root: `C:\ProgramData\Palziv\runtime`
+- Data storage: local JSON files in `C:\ProgramData\Palziv\runtime\data`
 
 ## Required Configuration
 
@@ -24,12 +25,13 @@ Set and maintain these values for every production restart:
 Recommended values:
 
 - `PUBLIC_BASE_URL=https://itotexpress.com`
-- `TRUST_PROXY_ADDRESSES=<real reverse proxy IPs only>`
+- `TRUST_PROXY_ADDRESSES=loopback` for the local Cloudflare Tunnel deployment path
+- `TRUST_PROXY_ADDRESSES=<real reverse proxy IPs only>` for non-local reverse proxies
 
 Do not:
 
 - leave `PUBLIC_BASE_URL` unset
-- trust `loopback` unless the proxy really terminates locally
+- trust `loopback` unless the proxy really terminates locally on the same host
 - commit runtime security state to source control
 
 ## Daily Operator Checks
@@ -52,7 +54,7 @@ Automatic tunnel recovery:
 
 - the watchdog checks local origin health against public health every minute
 - if local origin is healthy but public health is failing, it restarts `cloudflared`
-- it writes to `logs\tunnel-watchdog.log`
+- it writes to `C:\ProgramData\Palziv\runtime\logs\tunnel-watchdog.log`
 - it writes Windows Application Event Log entries under source `CompanyBoardPWA`
 - if `AlertWebhookUrl` is configured in the watchdog task, it also posts a JSON alert payload
 

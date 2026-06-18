@@ -76,6 +76,7 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 - `server.js`: Node server and API layer.
 - `storage.js`: file-backed persistence.
 - `data/board.json`: local seed and dev storage.
+- `scripts/runtime-state.ps1`: shared runtime root, migration, and ACL helper for Windows deployment scripts.
 - `public/index.html`: PWA entry point.
 - `public/app.js`: employee portal, HR portal, and webmaster logic.
 - `public/styles.css`: mobile-first UI.
@@ -84,7 +85,7 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 - `public/assets/logo.svg`: legacy SVG wrapper around the brand icon.
 - `public/assets/palziv-logo.png`: brand icon source.
 - `public/assets/palziv-wordmark.png`: brand wordmark source.
-- `data/push.json`: local push key and subscription store, generated at runtime and ignored by git.
+- `data/push.json`: local dev push key and subscription store. Production runtime state should live under `C:\ProgramData\Palziv\runtime\data`.
 - `DEPLOY_CLOUDFLARE.md`: local hardware + Cloudflare Tunnel runbook.
 - `scripts/windows-phase1-cleanup.ps1`: safe Windows cleanup and reinstall helper.
 - `scripts/windows-startup.ps1`: boot and recovery script for the app and cloudflared service.
@@ -92,7 +93,7 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 
 ## Production Upgrade Checklist
 
-- Add real HR login before production company use.
+- Replace the single shared HR account with named admin users and roles.
 - Add image/file attachments.
 - Add role-based access for HR, safety, managers, and admins.
 - Add richer weather alerts or multi-location weather portals if needed.

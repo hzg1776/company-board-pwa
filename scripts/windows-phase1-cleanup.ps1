@@ -2,7 +2,9 @@
 param(
   [int]$Port = 3116,
   [string]$ProjectRoot,
-  [switch]$ResetLockFile
+  [string]$RuntimeRoot = "",
+  [switch]$ResetLockFile,
+  [switch]$ForcePortRecovery
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,16 +21,72 @@ if (-not $ProjectRoot) {
   $ProjectRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 }
 
-function Stop-PortListener {
+. (Join-Path $PSScriptRoot "runtime-state.ps1")
+
+function Get-PortListeners {
   param([int]$TargetPort)
 
-  $listeners = Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
+  return Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
+}
+
+function Get-ProcessCommandLine {
+  param([int]$ProcessId)
+
+  try {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    return [string]$process.CommandLine
+  } catch {
+    return ""
+  }
+}
+
+function Is-BoardAppProcess {
+  param(
+    [int]$ProcessId,
+    [string]$Root
+  )
+
+  $serverPath = (Join-Path $Root "server.js")
+  $commandLine = Get-ProcessCommandLine -ProcessId $ProcessId
+
+  if (-not $commandLine) {
+    return $false
+  }
+
+  return $commandLine.IndexOf($serverPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Stop-PortListener {
+  param(
+    [int]$TargetPort,
+    [string]$Root,
+    [switch]$AllowForeignListeners
+  )
+
+  $listeners = Get-PortListeners -TargetPort $TargetPort
   if (-not $listeners) {
     Write-Host "No listener found on port $TargetPort."
     return
   }
 
   $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+  $foreignOwners = @()
+
+  foreach ($processId in $pids) {
+    if (-not (Is-BoardAppProcess -ProcessId $processId -Root $Root)) {
+      $processName = try {
+        (Get-Process -Id $processId -ErrorAction Stop).ProcessName
+      } catch {
+        "pid:$processId"
+      }
+      $foreignOwners += "$processName [$processId]"
+    }
+  }
+
+  if ($foreignOwners.Count -and -not $AllowForeignListeners) {
+    throw "Port ${TargetPort} is owned by non-board process(es): $($foreignOwners -join ', '). Resolve the conflict manually or rerun with -ForcePortRecovery."
+  }
+
   foreach ($pid in $pids) {
     Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
   }
@@ -42,13 +100,14 @@ if (-not (Test-Path $ProjectRoot)) {
 }
 Write-Host "Project root: $ProjectRoot"
 
-$dataFile = Join-Path $ProjectRoot "data\board.json"
+$runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
+$dataFile = Join-Path $runtimeLayout.DataDirectory "board.json"
 if (-not (Test-Path $dataFile)) {
   throw "Live data file not found: $dataFile"
 }
 
 Write-Step "Back up live board data"
-$backupDir = Join-Path $ProjectRoot "data\backups"
+$backupDir = $runtimeLayout.BackupDirectory
 New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupFile = Join-Path $backupDir "board-$stamp.json"
@@ -56,7 +115,7 @@ Copy-Item -Path $dataFile -Destination $backupFile -Force
 Write-Host "Backup created: $backupFile"
 
 Write-Step "Stop anything holding the app port"
-Stop-PortListener -TargetPort $Port
+Stop-PortListener -TargetPort $Port -Root $ProjectRoot -AllowForeignListeners:$ForcePortRecovery
 
 Write-Step "Remove disposable runtime artifacts"
 $nodeModules = Join-Path $ProjectRoot "node_modules"
