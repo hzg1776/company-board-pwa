@@ -1,0 +1,69 @@
+﻿<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Palziv Portal User Manual</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.45; }
+  h1, h2, h3, h4 { color: #0f172a; page-break-after: avoid; }
+  h1 { font-size: 28px; margin-bottom: 2px; }
+  h2 { font-size: 20px; margin-top: 24px; }
+  h3 { font-size: 16px; }
+  p, li { font-size: 11.5px; }
+  .meta { color: #334155; font-size: 11px; margin-bottom: 20px; }
+  .cover { border-left: 6px solid #0f172a; padding-left: 14px; margin-bottom: 28px; }
+  .toc { background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 14px; margin: 14px 0 18px; border-radius: 6px; }
+  ul { padding-left: 18px; }
+  pre { background: #0f172a; color: #f8fafc; padding: 10px; border-radius: 6px; overflow-wrap: break-word; }
+  img { max-width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; margin: 8px 0; page-break-inside: avoid; }
+  .screen img { width: 72%; max-width: 72%; display: block; }
+  .caption { font-weight: 600; color: #334155; margin-top: 2px; }
+  .shot-grid { display: block; }
+  .section { page-break-inside: avoid; margin: 14px 0; }
+  .kicker { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #64748b; font-size: 10px; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 16px 0; }
+</style>
+</head>
+<body>
+<div class="cover">
+  <div class="kicker">Palziv Portal</div>
+  <h1>Professional User Manual</h1>
+  <div class="meta">Generated: June 23, 2026 11:37:46</div>
+  <p>This manual explains core workflows for Employees, HR admins, Systems operators, and IT governance admins.</p>
+</div>
+<div class="toc">
+  <strong>Quick navigation</strong>
+  <ul>
+    <li>Employee onboarding and feed usage</li>
+    <li>HR publishing and employee management</li>
+    <li>Systems monitoring and recovery tasks</li>
+    <li>IT governance and recovery oversight</li>
+    <li>Operational checks and troubleshooting</li>
+  </ul>
+</div>
+<hr/>
+
+<h1>Palziv Portal User Manual</h1> <h2>1. Purpose</h2> <p>Palziv Portal is a secure, installable employee communication application with four operational surfaces:</p> <ul> <li><strong>Employee portal</strong> for updates, alerts, acknowledgements, and weather.</li> <li><strong>HR portal</strong> for publishing notices and managing employees.</li> <li><strong>Systems portal</strong> for operational settings, monitoring, and technical administration.</li> <li><strong>IT portal</strong> for governance, recovery oversight, and administrative account control.</li> </ul> <p>This manual is intended for non-technical operators, administrators, and support staff.</p> <hr> <h2>2. System Access and Roles</h2> <h3>2.1 Routes</h3> <ul> <li>Launcher: <code>https://&lt;your-host&gt;/palzivalerts</code></li> <li>Employee portal: <code>https://&lt;your-host&gt;/palzivalerts/employee</code></li> <li>HR portal: <code>https://&lt;your-host&gt;/palzivalerts/hr</code></li> <li>Systems portal: <code>https://&lt;your-host&gt;/palzivalerts/webmaster</code></li> <li>IT portal: <code>https://&lt;your-host&gt;/palzivalerts/it</code></li> </ul> <blockquote> <p>Notes:</p> <ul> <li>Legacy routes (<code>/employee</code>, <code>/hr</code>, <code>/webmaster</code>, <code>/admin</code>) redirect to the branded <code>/palzivalerts</code> paths.</li> <li>Public pages are only accessible after authentication.</li> </ul> </blockquote> <h3>2.2 User Roles</h3> <table> <thead> <tr> <th>Role</th> <th>Purpose</th> <th>Typical Action</th> </tr> </thead> <tbody><tr> <td>Employee</td> <td>Read only</td> <td>View posts, save/weather, acknowledge notices</td> </tr> <tr> <td>HR Admin</td> <td>HR</td> <td>Publish updates, add/edit employees, manage HR admin users</td> </tr> <tr> <td>Systems</td> <td>Operations</td> <td>Run health checks, manage diagnostics, recover services</td> </tr> <tr> <td>IT</td> <td>Governance</td> <td>Account structure, critical recovery, policy and audit oversight</td> </tr> </tbody></table> <h3>2.3 Authentication Best Practices</h3> <ul> <li>Use named accounts only (do not create shared &quot;admin&quot; credentials).</li> <li>Use strong unique passwords.</li> <li>Rotate admin recovery tokens if there is any security concern.</li> <li>Log in only over HTTPS.</li> </ul> <hr> <h2>3. How to Use the Employee Portal</h2> <h3>3.1 First Time Setup on Phone</h3> <ol> <li>Open the employee URL in Chrome or Safari.</li> <li>Sign in with your employee credentials.</li> <li>Tap <strong>Enable alerts</strong> when prompted if push notifications are supported.</li> <li>Optional: install to home screen (Add to Home Screen).</li> </ol> <h3>3.2 Everyday Use</h3> <ul> <li><strong>Feed</strong>: shows active notices in reverse chronological order.</li> <li><strong>Weather card</strong>: managed by HR; shows latest saved location forecast.</li> <li><strong>Acknowledge important posts</strong>: tap acknowledgement controls where required.</li> <li><strong>Offline behavior</strong>: app shell works offline; latest content syncs when connection returns.</li> </ul> <h3>3.3 Push Notifications</h3> <ul> <li>Employees receive alerts only after permission is granted and service worker registration succeeds.</li> <li>If alerts do not appear, verify browser support and notification permissions in device settings.</li> </ul> <hr> <h2>4. How to Use the HR Portal</h2> <h3>4.1 Sign In</h3> <ol> <li>Open HR URL.</li> <li>Sign in with your HR admin credentials.</li> <li>You will see the publishing and employee management dashboard.</li> </ol> <h3>4.2 Publish an Update</h3> <ol> <li>Create a post with title and content.</li> <li>Select severity and urgency options if applicable.</li> <li>Choose publish target (employee feed / alert / both).</li> <li>Save and confirm delivery.</li> </ol> <h3>4.3 Manage Employees</h3> <ul> <li>Add employee accounts with unique usernames.</li> <li>Update account details as people join or leave.</li> <li>Deactivate users when roles change or employment ends.</li> </ul> <h3>4.4 HR Operational Checklist</h3> <ul> <li>Post at least one test post at start of day during operational changes.</li> <li>Verify new posts appear in employee view immediately.</li> <li>Keep critical alerts concise and avoid duplicate urgent messages.</li> </ul> <hr> <h2>5. How to Use the Systems Portal</h2> <h3>5.1 Sign In</h3> <ol> <li>Open Systems URL.</li> <li>Log in with Systems credentials.</li> <li>Confirm service dashboard and health status.</li> </ol> <h3>5.2 Health Monitoring</h3> <p>Run or verify:</p> <ul> <li>Employee route returns 200.</li> <li>HR and Systems routes load successfully.</li> <li>API health endpoint is healthy.</li> <li>Logs are writing and rotating normally.</li> </ul> <h3>5.3 Recovery Tasks</h3> <ul> <li>If login or public route issues occur, start with <code>health-check</code> and service status checks.</li> <li>Restart the app only through established runbook procedures.</li> <li>Use backup/restore only with a fresh backup taken first.</li> </ul> <hr> <h2>6. IT Governance Role (When Enabled)</h2> <ul> <li>Manage governance:<ul> <li>Named admin account control and recovery.</li> <li>Audit and security event access.</li> <li>High-level company operations and governance settings.</li> </ul> </li> <li>IT actions should be limited to control-plane administration, not daily posting.</li> </ul> <hr> <h2>7. Install, Deploy, and Run</h2> <h3>7.1 Local Development</h3> <ol> <li>Install dependencies: <code>npm install</code></li> <li>Start app: <code>npm start</code></li> <li>Open the routes in section 2.1.</li> </ol> <h3>7.2 Production (Windows + Cloudflare Tunnel)</h3> <ul> <li>Run the app on port <code>3116</code>.</li> <li>Use the provided startup and tunnel scripts to enable automatic recovery.</li> <li>Ensure <code>PUBLIC_BASE_URL</code> is set correctly before startup.</li> <li>Keep scheduled tasks and cloudflared service monitoring active.</li> </ul> <h3>7.3 Required Environment Variables</h3> <ul> <li><code>PUBLIC_BASE_URL</code></li> <li><code>TRUST_PROXY_ADDRESSES</code></li> <li><code>SITE_NAME</code>, <code>SITE_SHORT_NAME</code> (branding)</li> <li><code>SITE_SUBTITLE</code> (branding)</li> <li>Recovery tokens as configured for your operational model.</li> </ul> <hr> <h2>8. Backup and Recovery</h2> <h3>8.1 Backup Frequency</h3> <ul> <li>Before each release.</li> <li>At minimum once per day.</li> </ul> <h3>8.2 Restore Process</h3> <ol> <li>Stop updates in progress.</li> <li>Take a new backup.</li> <li>Restore from selected timestamped archive.</li> <li>Restart with runbook commands.</li> <li>Run health checks before users resume normal operations.</li> </ol> <h3>8.3 Recovery Rules</h3> <ul> <li>Never restore over live data without a fresh backup.</li> <li>Never restore from unknown or modified archives.</li> <li>Validate URL and proxy settings after restore.</li> </ul> <hr> <h2>9. Security and Compliance</h2> <ul> <li>Use unique user credentials and strong passwords.</li> <li>Limit shared device usage.</li> <li>Keep admin credentials out of chat, screenshots, and source control.</li> <li>Enable alerting for repeated failed logins and lockout events.</li> <li>Rotate credentials after role changes and employee departures.</li> </ul> <hr> <h2>10. Troubleshooting</h2> <h3>10.1 Employees Cannot Sign In</h3> <ul> <li>Confirm credentials and account status.</li> <li>Check if account is disabled or password changed.</li> <li>Verify you are on the correct branded portal route.</li> </ul> <h3>10.2 Push Alerts Not Arriving</h3> <ul> <li>Confirm browser supports notifications and service workers.</li> <li>Ensure HTTPS is active.</li> <li>Confirm the employee completed registration on the device.</li> </ul> <h3>10.3 Missing Updates</h3> <ul> <li>Refresh from a stable connection.</li> <li>Check app version and network.</li> <li>Verify HR publication status and expiry rules.</li> </ul> <h3>10.4 Portal Fails to Load</h3> <ul> <li>Confirm server/host is running.</li> <li>Verify health checks for <code>/api/health</code>.</li> <li>Check runtime logs for startup or proxy errors.</li> </ul> <h3>10.5 Escalation</h3> <ul> <li>If issue persists beyond 15 minutes during work hours, escalate to the operations lead.</li> <li>Provide:<ul> <li>time range</li> <li>username/role involved</li> <li>browser/device</li> <li>exact error text</li> </ul> </li> </ul> <hr> <h2>11. Logging and Support</h2> <h3>11.1 What to include in support requests</h3> <ul> <li>User account and role.</li> <li>Time window of issue.</li> <li>Repro steps.</li> <li>Screenshots (without credentials).</li> <li>Error codes/messages.</li> </ul> <h3>11.2 Expected Standard</h3> <ul> <li>Confirm healthy access for employee, HR, and Systems routes.</li> <li>Confirm successful login and API health before deeper diagnosis.</li> </ul> <hr> <h2>12. Versioning and Stewardship</h2> <ul> <li>Keep this manual updated with every release and role/process change.</li> <li>Store it with the deployment package so operators and admins can access the same document.</li> <li>Review monthly for role changes, recovery procedures, and security updates.</li> </ul> 
+
+<div class="section">
+  <h2>Appendix: Screenshots</h2>
+  <p class="caption">Use these for quick recognition and training handoff.</p>
+  <div class="shot-grid">    <div class="section screen">
+      <div class="caption">Launcher page (/palzivalerts)</div>
+      <img src="screenshots/01-launcher.png" alt="Launcher page (/palzivalerts)" />
+    </div>    <div class="section screen">
+      <div class="caption">Employee login and feed view (/palzivalerts/employee)</div>
+      <img src="screenshots/02-employee.png" alt="Employee login and feed view (/palzivalerts/employee)" />
+    </div>    <div class="section screen">
+      <div class="caption">HR console login and publishing screen (/palzivalerts/hr)</div>
+      <img src="screenshots/03-hr.png" alt="HR console login and publishing screen (/palzivalerts/hr)" />
+    </div>    <div class="section screen">
+      <div class="caption">Systems console login and diagnostics (/palzivalerts/webmaster)</div>
+      <img src="screenshots/04-webmaster.png" alt="Systems console login and diagnostics (/palzivalerts/webmaster)" />
+    </div>    <div class="section screen">
+      <div class="caption">IT control center and governance screen (/palzivalerts/it)</div>
+      <img src="screenshots/05-it.png" alt="IT control center and governance screen (/palzivalerts/it)" />
+    </div>  </div>
+</div>
+</body></html>
