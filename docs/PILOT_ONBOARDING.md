@@ -61,7 +61,7 @@ Not included:
 Pilot support is best handled with:
 
 - one support email or phone path
-- one operator owner
+- one IT governance operator
 - one documented release window
 
 ## Expansion Triggers

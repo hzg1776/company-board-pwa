@@ -57,6 +57,37 @@ test("normalizeDataShape repairs legacy board data", () => {
   assert.equal(normalized.settings, undefined);
 });
 
+test("normalizeDataShape preserves valid acknowledgement records", () => {
+  const normalized = normalizeDataShape({
+    posts: [],
+    weather: {},
+    acknowledgements: [
+      {
+        postId: "post-123",
+        employeeId: "employee-456",
+        employeeName: "Maria Lopez",
+        username: "maria.lopez",
+        acknowledgedAt: "2026-06-22T13:45:00.000Z"
+      },
+      {
+        postId: "",
+        employeeId: "employee-789",
+        acknowledgedAt: "not-a-date"
+      }
+    ]
+  });
+
+  assert.deepEqual(normalized.acknowledgements, [
+    {
+      postId: "post-123",
+      employeeId: "employee-456",
+      employeeName: "Maria Lopez",
+      username: "maria.lopez",
+      acknowledgedAt: "2026-06-22T13:45:00.000Z"
+    }
+  ]);
+});
+
 test("file-backed store persists updates between reads", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-"));
   const dataFile = path.join(tempDir, "board.json");

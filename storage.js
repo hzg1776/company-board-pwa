@@ -111,12 +111,33 @@ function normalizeStoredPost(post = {}) {
   };
 }
 
+function normalizeAcknowledgement(acknowledgement = {}) {
+  const postId = cleanText(acknowledgement.postId, 128);
+  const employeeId = cleanText(acknowledgement.employeeId, 128);
+  const acknowledgedAt = cleanText(acknowledgement.acknowledgedAt, 40);
+
+  if (!postId || !employeeId || !isValidIsoDate(acknowledgedAt)) {
+    return null;
+  }
+
+  return {
+    postId,
+    employeeId,
+    employeeName: cleanText(acknowledgement.employeeName, 120),
+    username: cleanText(acknowledgement.username, 80),
+    acknowledgedAt
+  };
+}
+
 export function normalizeDataShape(data) {
   if (!data || typeof data !== "object") return createSeedData();
 
   const normalized = {
     ...data,
     posts: Array.isArray(data.posts) ? data.posts.map((post) => normalizeStoredPost(post)) : [],
+    acknowledgements: Array.isArray(data.acknowledgements)
+      ? data.acknowledgements.map((acknowledgement) => normalizeAcknowledgement(acknowledgement)).filter(Boolean)
+      : [],
     weather: normalizeStoredWeather(data.weather)
   };
 

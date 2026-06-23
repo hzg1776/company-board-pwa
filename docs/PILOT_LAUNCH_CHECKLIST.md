@@ -54,7 +54,7 @@ Before any onboarding session:
 1. Run a fresh backup.
 2. Verify the newest runtime backup zip exists under `C:\ProgramData\Palziv\runtime\backups`.
 3. Verify the newest runtime backup manifest exists under `C:\ProgramData\Palziv\runtime\backups`.
-4. Confirm you know the rollback owner.
+4. Confirm you know the rollback authority.
 
 Commands:
 

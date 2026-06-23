@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -18,6 +18,8 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = process.env.PUBLIC_DIR ? path.resolve(process.env.PUBLIC_DIR) : path.join(__dirname, "public");
+const LOCAL_SECRETS_DIR = path.join(__dirname, "local-secrets");
+const LOCAL_BOOTSTRAP_TOKEN_FILE = path.join(LOCAL_SECRETS_DIR, "bootstrap-token.txt");
 const INDEX_HTML_TEMPLATE_PATH = path.join(PUBLIC_DIR, "index.html");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
 const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
@@ -31,6 +33,8 @@ const PUSH_DATA_FILE = resolveManagedDataFile("PUSH_DATA_FILE", "push.json");
 const ANALYTICS_DATA_FILE = resolveManagedDataFile("ANALYTICS_DATA_FILE", "analytics.json");
 const SECURITY_DATA_FILE = resolveManagedDataFile("SECURITY_DATA_FILE", "security.json");
 const ADMIN_SETUP_TOKEN = String(process.env.ADMIN_SETUP_TOKEN || "");
+const ADMIN_MFA_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.ADMIN_MFA_ENABLED || ""));
+const LOCAL_BOOTSTRAP_TOKEN = readLocalBootstrapToken(LOCAL_BOOTSTRAP_TOKEN_FILE);
 const ADMIN_RECOVERY_TOKEN = String(process.env.ADMIN_RECOVERY_TOKEN || process.env.ADMIN_SETUP_TOKEN || "");
 const ADMIN_DAILY_RECOVERY_SEED = String(process.env.ADMIN_DAILY_RECOVERY_SEED || "");
 const HR_RECOVERY_EMAIL = String(process.env.HR_RECOVERY_EMAIL || "");
@@ -108,11 +112,24 @@ const analyticsStore = createAnalyticsStore({
   dataFile: ANALYTICS_DATA_FILE
 });
 const securityStore = createSecurityStore({
-  dataFile: SECURITY_DATA_FILE
+  dataFile: SECURITY_DATA_FILE,
+  adminMfaEnabled: ADMIN_MFA_ENABLED
 });
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function readLocalBootstrapToken(filePath) {
+  try {
+    if (!existsSync(filePath)) {
+      return "";
+    }
+
+    return String(readFileSync(filePath, "utf8") || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 function sendJson(res, statusCode, body, extraHeaders = {}) {
@@ -175,7 +192,7 @@ function buildDailyAdminRecoveryToken(baseDate = new Date(), dayOffset = 0) {
 }
 
 function matchesAdminSetupToken(value) {
-  return timingSafeTextMatch(ADMIN_SETUP_TOKEN, value);
+  return timingSafeTextMatch(ADMIN_SETUP_TOKEN, value) || timingSafeTextMatch(LOCAL_BOOTSTRAP_TOKEN, value);
 }
 
 function matchesAdminRecoveryToken(value) {
@@ -243,11 +260,11 @@ async function sendRecoveryEmail({ to, code, expiresAt } = {}) {
 }
 
 function adminRoleLabel(role) {
-  return role === "webmaster" ? "System Ops" : role === "hr" ? "HR" : "Admin";
+  return role === "it" ? "IT" : role === "webmaster" ? "System Ops" : role === "hr" ? "HR" : "Admin";
 }
 
 function buildAdminInviteUrl(req, route, token) {
-  const inviteUrl = new URL(`${appBaseUrl(req)}${appPath(route === "webmaster" ? "webmaster" : "hr")}`);
+  const inviteUrl = new URL(`${appBaseUrl(req)}${appPath(route === "it" ? "it" : route === "webmaster" ? "webmaster" : "hr")}`);
   inviteUrl.searchParams.set("invite", token);
   return inviteUrl.toString();
 }
@@ -328,7 +345,8 @@ function appPath(...segments) {
   const parts = [APP_BASE_PATH];
 
   for (const segment of segments) {
-    const cleanSegment = String(segment ?? "").replace(/^\/+|\/+$/g, "");
+    const rawSegment = String(segment ?? "").replace(/^\/+|\/+$/g, "");
+    const cleanSegment = rawSegment === "it" ? "it" : rawSegment;
 
     if (cleanSegment) {
       parts.push(cleanSegment);
@@ -362,6 +380,17 @@ function serializeCookie(name, value, options = {}) {
   }
 
   return attributes.join("; ");
+}
+
+function readCookieValue(cookieHeader = "", name = "") {
+  const target = `${name}=`;
+  for (const part of String(cookieHeader || "").split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(target)) {
+      return decodeURIComponent(trimmed.slice(target.length));
+    }
+  }
+  return "";
 }
 
 function redirectTo(res, location) {
@@ -940,8 +969,8 @@ async function requireWebmasterAccess(req, res) {
   return access;
 }
 
-async function requireOwnerAccess(req, res) {
-  const access = await securityStore.checkOwnerAccess(req);
+async function requireItAccess(req, res) {
+  const access = await securityStore.checkItAccess(req);
 
   if (!access.authorized) {
     sendJson(res, 401, access);
@@ -1110,12 +1139,12 @@ async function requireWebmasterMutationAccess(req, res) {
   return access;
 }
 
-async function requireOwnerMutationAccess(req, res) {
+async function requireItMutationAccess(req, res) {
   if (!requireSameOrigin(req, res)) {
     return null;
   }
 
-  const access = await requireOwnerAccess(req, res);
+  const access = await requireItAccess(req, res);
 
   if (!access) {
     return null;
@@ -1320,7 +1349,7 @@ async function handleApi(req, res, url) {
       serializeCookie(cookieNames.hr, "", hrCookieOptions),
       serializeCookie(cookieNames.legacyHr, "", hrCookieOptions)
     ];
-    const ownerCookieHeader = serializeCookie(cookieNames.owner, "", {
+    const itCookieHeader = serializeCookie(cookieNames.it, "", {
       path: "/",
       maxAge: 0,
       httpOnly: true,
@@ -1358,7 +1387,7 @@ async function handleApi(req, res, url) {
       sameSite: "Lax",
       secure: isSecureRequest(req)
     });
-    const ownerSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.owner, sessionId, {
+    const itSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.it, sessionId, {
       path: "/",
       maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
       httpOnly: true,
@@ -1368,8 +1397,8 @@ async function handleApi(req, res, url) {
     const inviteSessionCookieHeaders = (sessions = {}) => {
       const headers = [];
 
-      if (sessions.owner?.id) {
-        headers.push(ownerSessionCookieHeader(sessions.owner.id));
+      if (sessions.it?.id) {
+        headers.push(itSessionCookieHeader(sessions.it.id));
       }
 
       if (sessions.hr?.id) {
@@ -1381,6 +1410,10 @@ async function handleApi(req, res, url) {
       }
 
       return headers;
+    };
+    const isItApiPath = (...segments) => {
+      const suffix = segments.join("/");
+      return url.pathname === `/api/it/${suffix}`;
     };
 
     if (req.method === "GET" && url.pathname === "/api/health") {
@@ -1424,8 +1457,8 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/owner/check") {
-      const auth = await securityStore.checkOwnerAccess(req);
+    if (req.method === "GET" && isItApiPath("check")) {
+      const auth = await securityStore.checkItAccess(req);
       sendJson(res, 200, auth);
       return;
     }
@@ -1437,11 +1470,11 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/security/events") {
-      const ownerAccess = await securityStore.checkOwnerAccess(req);
-      const hrAccess = ownerAccess.authorized ? null : await securityStore.checkHrAccess(req);
+      const itAccess = await securityStore.checkItAccess(req);
+      const hrAccess = itAccess.authorized ? null : await securityStore.checkHrAccess(req);
 
-      if (!ownerAccess.authorized && !hrAccess?.authorized) {
-        sendJson(res, 401, ownerAccess.setupRequired ? ownerAccess : (hrAccess || ownerAccess));
+      if (!itAccess.authorized && !hrAccess?.authorized) {
+        sendJson(res, 401, itAccess.setupRequired ? itAccess : (hrAccess || itAccess));
         return;
       }
 
@@ -1461,7 +1494,7 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/hr/setup") {
       if (!requireSameOrigin(req, res)) return;
 
-      if (!ADMIN_SETUP_TOKEN) {
+      if (!ADMIN_SETUP_TOKEN && !LOCAL_BOOTSTRAP_TOKEN) {
         throw createHttpError(503, "Admin setup is disabled. Configure ADMIN_SETUP_TOKEN on the server first.");
       }
 
@@ -1483,11 +1516,11 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/owner/setup") {
+    if (req.method === "POST" && isItApiPath("setup")) {
       if (!requireSameOrigin(req, res)) return;
 
-      if (!ADMIN_SETUP_TOKEN) {
-        throw createHttpError(503, "Owner setup is disabled. Configure ADMIN_SETUP_TOKEN on the server first.");
+      if (!ADMIN_SETUP_TOKEN && !LOCAL_BOOTSTRAP_TOKEN) {
+        throw createHttpError(503, "IT setup is disabled. Configure ADMIN_SETUP_TOKEN on the server first.");
       }
 
       const body = await readJsonBody(req);
@@ -1496,23 +1529,23 @@ async function handleApi(req, res, url) {
         throw createHttpError(403, "Invalid setup token.");
       }
 
-      const result = await securityStore.setupOwnerAccess({
+      const result = await securityStore.setupItAccess({
         username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"]
       });
 
       sendJson(res, 201, result, {
-        "Set-Cookie": ownerSessionCookieHeader(result.sessionId)
+        "Set-Cookie": itSessionCookieHeader(result.sessionId)
       });
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/owner/login") {
+    if (req.method === "POST" && isItApiPath("login")) {
       if (!requireSameOrigin(req, res)) return;
 
       const body = await readJsonBody(req);
-      const result = await securityStore.authenticateOwner({
+      const result = await securityStore.authenticateIt({
         username: body.username,
         password: body.password,
         userAgent: req.headers["user-agent"],
@@ -1520,17 +1553,46 @@ async function handleApi(req, res, url) {
       });
 
       sendJson(res, 200, result, {
-        "Set-Cookie": ownerSessionCookieHeader(result.sessionId)
+        "Set-Cookie": itSessionCookieHeader(result.sessionId)
       });
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/owner/logout") {
+    if (req.method === "POST" && isItApiPath("mfa", "enroll")) {
       if (!requireSameOrigin(req, res)) return;
 
-      await securityStore.logoutOwner(req);
+      const result = await securityStore.beginAdminMfaEnrollment(req, {
+        role: "it"
+      });
+      sendJson(res, 200, {
+        ...result,
+        qrCodeDataUrl: await QRCode.toDataURL(result.otpauthUrl)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && isItApiPath("mfa", "verify")) {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.verifyAdminMfaChallenge(req, {
+        role: "it",
+        code: body.code,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result, {
+        "Set-Cookie": itSessionCookieHeader(result.sessionId)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && isItApiPath("logout")) {
+      if (!requireSameOrigin(req, res)) return;
+
+      await securityStore.logoutIt(req);
       sendJson(res, 200, { ok: true }, {
-        "Set-Cookie": ownerCookieHeader
+        "Set-Cookie": itCookieHeader
       });
       return;
     }
@@ -1546,6 +1608,35 @@ async function handleApi(req, res, url) {
         clientIp: requestClientIp(req)
       });
 
+      sendJson(res, 200, result, {
+        "Set-Cookie": adminSessionCookieHeaders(result.sessionId)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/mfa/enroll") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const result = await securityStore.beginAdminMfaEnrollment(req, {
+        role: "hr"
+      });
+      sendJson(res, 200, {
+        ...result,
+        qrCodeDataUrl: await QRCode.toDataURL(result.otpauthUrl)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/hr/mfa/verify") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.verifyAdminMfaChallenge(req, {
+        role: "hr",
+        code: body.code,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
       sendJson(res, 200, result, {
         "Set-Cookie": adminSessionCookieHeaders(result.sessionId)
       });
@@ -1695,6 +1786,35 @@ async function handleApi(req, res, url) {
           sameSite: "Lax",
           secure: isSecureRequest(req)
         })
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/mfa/enroll") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const result = await securityStore.beginAdminMfaEnrollment(req, {
+        role: "webmaster"
+      });
+      sendJson(res, 200, {
+        ...result,
+        qrCodeDataUrl: await QRCode.toDataURL(result.otpauthUrl)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/mfa/verify") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.verifyAdminMfaChallenge(req, {
+        role: "webmaster",
+        code: body.code,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result, {
+        "Set-Cookie": webmasterSessionCookieHeader(result.sessionId)
       });
       return;
     }
@@ -1877,16 +1997,16 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/owner/admin-users") {
-      const ownerAccess = await securityStore.checkOwnerAccess(req);
+    if (req.method === "GET" && isItApiPath("admin-users")) {
+      const itAccess = await securityStore.checkItAccess(req);
 
-      if (!ownerAccess.authorized) {
-        sendError(res, 401, "Owner sign-in required.");
+      if (!itAccess.authorized) {
+        sendError(res, 401, "IT sign-in required.");
         return;
       }
 
-      const adminUsers = await securityStore.listOwnerAdminUsers({
-        currentUserId: ownerAccess.user?.id || ""
+      const adminUsers = await securityStore.listItAdminUsers({
+        currentUserId: itAccess.user?.id || ""
       });
 
       sendJson(res, 200, {
@@ -1895,20 +2015,20 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/owner/admin-users") {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    if (req.method === "POST" && isItApiPath("admin-users")) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
       const body = await readJsonBody(req);
-      const result = await securityStore.createOwnerAdminUser(body);
+      const result = await securityStore.createItAdminUser(body);
       sendJson(res, 201, result);
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/owner/admin-users/invite") {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    if (req.method === "POST" && isItApiPath("admin-users", "invite")) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
       const body = await readJsonBody(req);
-      const result = await securityStore.inviteOwnerAdminUser({
+      const result = await securityStore.inviteItAdminUser({
         ...body,
         userAgent: req.headers["user-agent"],
         clientIp: requestClientIp(req)
@@ -1936,46 +2056,46 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const ownerAdminUserProfileMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/profile$/);
-    if (req.method === "POST" && ownerAdminUserProfileMatch) {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    const itAdminUserProfileMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)\/profile$/);
+    if (req.method === "POST" && itAdminUserProfileMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
-      const adminUserId = decodeURIComponent(ownerAdminUserProfileMatch[1]);
+      const adminUserId = decodeURIComponent(itAdminUserProfileMatch[1]);
       const body = await readJsonBody(req);
-      const result = await securityStore.updateOwnerAdminUserProfile(req, adminUserId, body);
+      const result = await securityStore.updateItAdminUserProfile(req, adminUserId, body);
       sendJson(res, 200, result);
       return;
     }
 
-    const ownerAdminUserStatusMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/status$/);
-    if (req.method === "POST" && ownerAdminUserStatusMatch) {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    const itAdminUserStatusMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)\/status$/);
+    if (req.method === "POST" && itAdminUserStatusMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
-      const adminUserId = decodeURIComponent(ownerAdminUserStatusMatch[1]);
+      const adminUserId = decodeURIComponent(itAdminUserStatusMatch[1]);
       const body = await readJsonBody(req);
-      const result = await securityStore.setOwnerAdminUserActive(req, adminUserId, body.active !== false);
+      const result = await securityStore.setItAdminUserActive(req, adminUserId, body.active !== false);
       sendJson(res, 200, result);
       return;
     }
 
-    const ownerAdminUserRolesMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/roles$/);
-    if (req.method === "POST" && ownerAdminUserRolesMatch) {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    const itAdminUserRolesMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)\/roles$/);
+    if (req.method === "POST" && itAdminUserRolesMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
-      const adminUserId = decodeURIComponent(ownerAdminUserRolesMatch[1]);
+      const adminUserId = decodeURIComponent(itAdminUserRolesMatch[1]);
       const body = await readJsonBody(req);
-      const result = await securityStore.updateOwnerAdminUserRoles(req, adminUserId, body.roles);
+      const result = await securityStore.updateItAdminUserRoles(req, adminUserId, body.roles);
       sendJson(res, 200, result);
       return;
     }
 
-    const ownerAdminUserPasswordMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/password$/);
-    if (req.method === "POST" && ownerAdminUserPasswordMatch) {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    const itAdminUserPasswordMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)\/password$/);
+    if (req.method === "POST" && itAdminUserPasswordMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
-      const adminUserId = decodeURIComponent(ownerAdminUserPasswordMatch[1]);
+      const adminUserId = decodeURIComponent(itAdminUserPasswordMatch[1]);
       const body = await readJsonBody(req);
-      const result = await securityStore.resetOwnerAdminUserPassword(req, adminUserId, {
+      const result = await securityStore.resetItAdminUserPassword(req, adminUserId, {
         password: body.password,
         userAgent: req.headers["user-agent"],
         clientIp: requestClientIp(req)
@@ -1984,12 +2104,12 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const ownerAdminUserSessionsMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/sessions\/revoke$/);
-    if (req.method === "POST" && ownerAdminUserSessionsMatch) {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    const itAdminUserSessionsMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)\/sessions\/revoke$/);
+    if (req.method === "POST" && itAdminUserSessionsMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
-      const adminUserId = decodeURIComponent(ownerAdminUserSessionsMatch[1]);
-      const result = await securityStore.revokeOwnerAdminUserSessions(req, adminUserId, {
+      const adminUserId = decodeURIComponent(itAdminUserSessionsMatch[1]);
+      const result = await securityStore.revokeItAdminUserSessions(req, adminUserId, {
         userAgent: req.headers["user-agent"],
         clientIp: requestClientIp(req)
       });
@@ -1997,12 +2117,12 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const ownerAdminUserInviteMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/invite$/);
-    if (req.method === "POST" && ownerAdminUserInviteMatch) {
-      if (!(await requireOwnerMutationAccess(req, res))) return;
+    const itAdminUserInviteMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)\/invite$/);
+    if (req.method === "POST" && itAdminUserInviteMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
 
-      const adminUserId = decodeURIComponent(ownerAdminUserInviteMatch[1]);
-      const result = await securityStore.resendOwnerAdminInvite(req, adminUserId, {
+      const adminUserId = decodeURIComponent(itAdminUserInviteMatch[1]);
+      const result = await securityStore.resendItAdminInvite(req, adminUserId, {
         userAgent: req.headers["user-agent"],
         clientIp: requestClientIp(req)
       });
@@ -2670,7 +2790,7 @@ async function runAlertRetentionCleanup() {
 }
 
 async function serveStatic(req, res, url) {
-  const staticPath = path.extname(url.pathname) ? url.pathname : "/";
+  const staticPath = url.pathname === "/" ? "/" : url.pathname;
   const requestedPath = getPublicFilePath(staticPath);
 
   if (!requestedPath) {
@@ -2727,13 +2847,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/palzivalerts/" || url.pathname === "/employee" || url.pathname === "/hr" || url.pathname === "/webmaster" || url.pathname === "/admin" || url.pathname === "/palzivalerts/admin")) {
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/palzivalerts/" || url.pathname === "/employee" || url.pathname === "/hr" || url.pathname === "/webmaster" || url.pathname === "/admin" || url.pathname === "/it" || url.pathname === "/palzivalerts/admin")) {
     const redirects = new Map([
       ["/", appPath()],
       ["/index.html", appPath()],
       ["/employee", appPath("employee")],
       ["/hr", appPath("hr")],
       ["/webmaster", appPath("webmaster")],
+      ["/it", appPath("it")],
       ["/admin", appPath("hr")],
       ["/palzivalerts/admin", appPath("hr")]
     ]);
@@ -2747,7 +2868,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster"))) {
+  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it"))) {
     await sendIndexHtml(res);
     return;
   }

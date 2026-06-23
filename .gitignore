@@ -10,3 +10,4 @@ data/push.json
 data/security.json
 data/analytics.json
 data/*.tmp
+local-secrets/

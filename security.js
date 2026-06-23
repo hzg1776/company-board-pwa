@@ -15,6 +15,18 @@ const LOGIN_LOCKOUT_STEP_MS = 1000 * 60 * 5;
 const LOGIN_LOCKOUT_MAX_MS = 1000 * 60 * 60;
 const LOGIN_GUARD_RETENTION_MS = 1000 * 60 * 60 * 24;
 const SECURITY_EVENT_LIMIT = 250;
+const ADMIN_ROLES = ["it", "hr", "webmaster"];
+const ADMIN_MFA_GRACE_MS = Math.max(
+  0,
+  Number.isFinite(Number(process.env.ADMIN_MFA_GRACE_DAYS))
+    ? Number(process.env.ADMIN_MFA_GRACE_DAYS) * 24 * 60 * 60 * 1000
+    : 14 * 24 * 60 * 60 * 1000
+);
+const MFA_ISSUER = cleanText(process.env.SITE_NAME, 80) || "Palziv";
+const TOTP_PERIOD_SECONDS = 30;
+const TOTP_DIGITS = 6;
+const TOTP_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const EMERGENCY_HR_USERNAME = "emergency.hr.recovery";
 
 function nowIso() {
   return new Date().toISOString();
@@ -93,12 +105,16 @@ function clearAdminInviteMetadata(user = {}, inviteAcceptedAt = "") {
 }
 
 function preferredAdminRoute(user = {}) {
-  if (adminUserHasRole(user, "hr")) {
-    return "hr";
+  if (adminUserHasRole(user, "it")) {
+    return "it";
   }
 
   if (adminUserHasRole(user, "webmaster")) {
     return "webmaster";
+  }
+
+  if (adminUserHasRole(user, "hr")) {
+    return "hr";
   }
 
   return "hr";
@@ -106,6 +122,10 @@ function preferredAdminRoute(user = {}) {
 
 function defaultAdminUsername() {
   return "hr";
+}
+
+function defaultItUsername() {
+  return "it";
 }
 
 function defaultWebmasterUsername() {
@@ -117,9 +137,14 @@ function accessCookieNames() {
     admin: "palziv_hr_auth",
     hr: "palziv_hr_auth",
     legacyHr: "palziv_admin_auth",
+    it: "palziv_it_auth",
     webmaster: "palziv_webmaster_auth",
     employee: "palziv_employee_auth"
   };
+}
+
+function normalizeAdminRoleName(value) {
+  return cleanText(value, 40).toLowerCase();
 }
 
 function passwordDigest(password, salt) {
@@ -145,6 +170,112 @@ function verifyPassword(password, salt, hash) {
   return crypto.timingSafeEqual(actual, expected);
 }
 
+function encodeBase32(buffer) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+  let bits = "";
+
+  for (const byte of bytes) {
+    bits += byte.toString(2).padStart(8, "0");
+  }
+
+  let output = "";
+  for (let offset = 0; offset < bits.length; offset += 5) {
+    const chunk = bits.slice(offset, offset + 5).padEnd(5, "0");
+    output += TOTP_ALPHABET[Number.parseInt(chunk, 2)];
+  }
+
+  return output;
+}
+
+function decodeBase32(secret) {
+  const normalized = cleanText(secret, 256).toUpperCase().replace(/=+$/g, "");
+  let bits = "";
+
+  for (const character of normalized) {
+    const index = TOTP_ALPHABET.indexOf(character);
+    if (index < 0) {
+      return Buffer.alloc(0);
+    }
+
+    bits += index.toString(2).padStart(5, "0");
+  }
+
+  const bytes = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) {
+    bytes.push(Number.parseInt(bits.slice(offset, offset + 8), 2));
+  }
+
+  return Buffer.from(bytes);
+}
+
+function createTotpSecret() {
+  return encodeBase32(crypto.randomBytes(20));
+}
+
+function generateTotpCode(secret, timeMs = Date.now()) {
+  const key = decodeBase32(secret);
+  if (!key.length) {
+    return "";
+  }
+
+  const counter = Math.floor(timeMs / 1000 / TOTP_PERIOD_SECONDS);
+  const counterBuffer = Buffer.alloc(8);
+  counterBuffer.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  counterBuffer.writeUInt32BE(counter >>> 0, 4);
+  const hmac = crypto.createHmac("sha1", key).update(counterBuffer).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binary = (
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff)
+  );
+  return String(binary % (10 ** TOTP_DIGITS)).padStart(TOTP_DIGITS, "0");
+}
+
+function verifyTotpCode(secret, code, nowMs = Date.now(), window = 1) {
+  const normalizedCode = cleanText(code, 16);
+
+  if (!secret || !/^\d{6}$/.test(normalizedCode)) {
+    return false;
+  }
+
+  for (let offset = -window; offset <= window; offset += 1) {
+    const candidate = generateTotpCode(secret, nowMs + (offset * TOTP_PERIOD_SECONDS * 1000));
+    if (candidate && candidate === normalizedCode) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildAdminMfaLabel(user = {}, role = "") {
+  const accountName = cleanText(user.email, 200) || cleanText(user.username, 80) || "admin";
+  const roleLabel = role === "it" ? "it" : role === "webmaster" ? "systems" : "hr";
+  return `${MFA_ISSUER}:${accountName} (${roleLabel})`;
+}
+
+function buildOtpauthUrl(user = {}, role = "", secret = "") {
+  const label = encodeURIComponent(buildAdminMfaLabel(user, role));
+  const issuer = encodeURIComponent(MFA_ISSUER);
+  return `otpauth://totp/${label}?secret=${encodeURIComponent(secret)}&issuer=${issuer}&algorithm=SHA1&digits=${TOTP_DIGITS}&period=${TOTP_PERIOD_SECONDS}`;
+}
+
+function graceUntilForNewAdmin() {
+  return ADMIN_MFA_GRACE_MS > 0
+    ? new Date(Date.now() + ADMIN_MFA_GRACE_MS).toISOString()
+    : "";
+}
+
+function isAdminRecoveryOnly(user = {}) {
+  return user.recoveryOnly === true;
+}
+
+function isAdminRecoveryExpired(user = {}) {
+  return isAdminRecoveryOnly(user) && toTimestamp(user.recoveryExpiresAt) > 0 && toTimestamp(user.recoveryExpiresAt) <= Date.now();
+}
+
 function normalizeEmployee(input = {}) {
   const createdAt = cleanText(input.createdAt, 40) || nowIso();
   const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
@@ -153,6 +284,8 @@ function normalizeEmployee(input = {}) {
   const username = normalizeUsername(input.username);
   const passwordSalt = cleanText(input.passwordSalt, 128);
   const passwordHash = cleanText(input.passwordHash, 256);
+  const email = normalizeEmail(input.email);
+  const recoveryEmail = normalizeEmail(input.recoveryEmail);
   const sessionVersion = Number.isInteger(input.sessionVersion) && input.sessionVersion >= 0
     ? input.sessionVersion
     : 0;
@@ -161,6 +294,16 @@ function normalizeEmployee(input = {}) {
     id,
     name,
     username,
+    externalEmployeeId: cleanText(input.externalEmployeeId, 80),
+    email,
+    recoveryEmail,
+    department: cleanText(input.department, 80),
+    location: cleanText(input.location, 80),
+    identityProvider: cleanText(input.identityProvider, 40).toLowerCase() || "local",
+    ssoSubject: cleanText(input.ssoSubject, 160),
+    inviteSentAt: cleanText(input.inviteSentAt, 40),
+    inviteAcceptedAt: cleanText(input.inviteAcceptedAt, 40),
+    passwordResetRequired: input.passwordResetRequired === true,
     passwordSalt,
     passwordHash,
     active: input.active !== false,
@@ -195,6 +338,14 @@ function normalizeAdmin(input = {}, defaultUsername = "") {
     createdAt,
     updatedAt,
     disabledAt: cleanText(input.disabledAt, 40),
+    mfaSecret: cleanText(input.mfaSecret, 128),
+    pendingMfaSecret: cleanText(input.pendingMfaSecret, 128),
+    pendingMfaCreatedAt: cleanText(input.pendingMfaCreatedAt, 40),
+    mfaEnabledAt: cleanText(input.mfaEnabledAt, 40),
+    mfaGraceUntil: cleanText(input.mfaGraceUntil, 40),
+    recoveryOnly: input.recoveryOnly === true,
+    recoveryIssuedAt: cleanText(input.recoveryIssuedAt, 40),
+    recoveryExpiresAt: cleanText(input.recoveryExpiresAt, 40),
     inviteTokenHash: cleanText(input.inviteTokenHash, 256),
     inviteSentAt: cleanText(input.inviteSentAt, 40),
     inviteExpiresAt: cleanText(input.inviteExpiresAt, 40),
@@ -212,10 +363,15 @@ function normalizeAdminRoles(input) {
   const roles = [];
 
   for (const rawRole of rawRoles) {
-    const role = cleanText(rawRole, 40).toLowerCase();
+    const role = normalizeAdminRoleName(rawRole);
 
-    if ((role === "hr" || role === "webmaster") && !seen.has(role)) {
+    if (ADMIN_ROLES.includes(role) && !seen.has(role)) {
       seen.add(role);
+    }
+  }
+
+  for (const role of ADMIN_ROLES) {
+    if (seen.has(role)) {
       roles.push(role);
     }
   }
@@ -224,6 +380,10 @@ function normalizeAdminRoles(input) {
 }
 
 function defaultUsernameForRoles(roles = []) {
+  if (roles.includes("it")) {
+    return defaultItUsername();
+  }
+
   if (roles.includes("hr")) {
     return defaultAdminUsername();
   }
@@ -264,7 +424,7 @@ function hasKnownAdminUser(input = {}) {
 }
 
 function adminUserHasRole(user = {}, role = "") {
-  return Array.isArray(user.roles) && user.roles.includes(role);
+  return Array.isArray(user.roles) && user.roles.includes(normalizeAdminRoleName(role));
 }
 
 function mergeAdminRoles(...roleLists) {
@@ -340,6 +500,7 @@ function normalizeAdminUsers(input = {}) {
     }
   }
 
+  insert(createLegacyRoleAdminUser(input.it, "it", defaultItUsername()));
   insert(createLegacyRoleAdminUser(selectCanonicalAdminRecord(input.hr, input.admin), "hr", defaultAdminUsername()));
   insert(createLegacyRoleAdminUser(input.webmaster, "webmaster", defaultWebmasterUsername()));
 
@@ -363,16 +524,17 @@ function normalizeAdminSession(input = {}, fallback = {}) {
   const createdAt = cleanText(input.createdAt, 40) || nowIso();
   const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
   const expiresAt = cleanText(input.expiresAt, 40);
-  const role = cleanText(input.role || fallback.role, 40).toLowerCase();
+  const role = normalizeAdminRoleName(input.role || fallback.role);
 
   return {
     id: cleanText(input.id, 120),
     adminUserId: cleanText(input.adminUserId || fallback.adminUserId, 80),
-    role: role === "webmaster" ? "webmaster" : role === "hr" ? "hr" : "",
+    role: ADMIN_ROLES.includes(role) ? role : "",
     createdAt,
     updatedAt,
     expiresAt,
     revokedAt: cleanText(input.revokedAt, 40),
+    mfaVerifiedAt: cleanText(input.mfaVerifiedAt, 40),
     csrfToken: cleanText(input.csrfToken, 120),
     userAgent: cleanText(input.userAgent, 240)
   };
@@ -405,6 +567,7 @@ function normalizeAdminSessions(input = {}, adminUsers = []) {
       }
     }
   };
+  const itUser = findConfiguredRoleUser(adminUsers, "it");
   const hrUser = findConfiguredRoleUser(adminUsers, "hr");
   const webmasterUser = findConfiguredRoleUser(adminUsers, "webmaster");
   const canonicalAdminSessions = Array.isArray(input.adminSessions) ? input.adminSessions : [];
@@ -421,6 +584,7 @@ function normalizeAdminSessions(input = {}, adminUsers = []) {
   );
   addSessions(legacyAdminSessions, hrUser ? { adminUserId: hrUser.id, role: "hr" } : {});
   addSessions(legacyWebmasterSessions, webmasterUser ? { adminUserId: webmasterUser.id, role: "webmaster" } : {});
+  addSessions(Array.isArray(input.itSessions) ? input.itSessions : [], itUser ? { adminUserId: itUser.id, role: "it" } : {});
 
   return sessions;
 }
@@ -474,6 +638,7 @@ function normalizeLoginGuardBucket(input = {}) {
 
 function normalizeLoginGuards(input = {}) {
   return {
+    it: normalizeLoginGuardBucket(input.it),
     hr: normalizeLoginGuardBucket(input.hr || input.admin),
     webmaster: normalizeLoginGuardBucket(input.webmaster),
     employee: normalizeLoginGuardBucket(input.employee)
@@ -589,6 +754,16 @@ function publicEmployeeRecord(employee, sessions = []) {
     id: employee.id,
     name: employee.name,
     username: employee.username,
+    externalEmployeeId: employee.externalEmployeeId || "",
+    email: employee.email || "",
+    recoveryEmail: employee.recoveryEmail || "",
+    department: employee.department || "",
+    location: employee.location || "",
+    identityProvider: employee.identityProvider || "local",
+    ssoSubject: employee.ssoSubject || "",
+    inviteSentAt: employee.inviteSentAt || "",
+    inviteAcceptedAt: employee.inviteAcceptedAt || "",
+    passwordResetRequired: employee.passwordResetRequired === true,
     active: employee.active !== false,
     sessionVersion: employee.sessionVersion || 0,
     activeSessions,
@@ -599,17 +774,44 @@ function publicEmployeeRecord(employee, sessions = []) {
   };
 }
 
-function publicAdminAccessUser(user = {}) {
+function buildAdminMfaProfile(user = {}, { adminMfaEnabled = true } = {}) {
+  if (!adminMfaEnabled) {
+    return {
+      available: false,
+      enabled: false,
+      enabledAt: "",
+      graceUntil: "",
+      status: "disabled"
+    };
+  }
+
+  const enabled = Boolean(cleanText(user.mfaSecret, 128));
+  const graceUntil = cleanText(user.mfaGraceUntil, 40);
+  const graceActive = !enabled && toTimestamp(graceUntil) > Date.now();
+
+  return {
+    available: true,
+    enabled,
+    enabledAt: cleanText(user.mfaEnabledAt, 40),
+    graceUntil,
+    status: enabled ? "enabled" : graceActive ? "grace" : "setup-required"
+  };
+}
+
+function buildPublicAdminAccessUser(user = {}, options = {}) {
   return {
     id: user.id || "",
     displayName: user.displayName || "",
     email: user.email || "",
     username: user.username || "",
-    roles: Array.isArray(user.roles) ? [...user.roles] : []
+    roles: Array.isArray(user.roles) ? [...user.roles] : [],
+    recoveryOnly: isAdminRecoveryOnly(user),
+    recoveryExpiresAt: user.recoveryExpiresAt || "",
+    mfa: buildAdminMfaProfile(user, options)
   };
 }
 
-function publicAdminUserRecord(user = {}, sessions = [], currentUserId = "") {
+function buildPublicAdminUserRecord(user = {}, sessions = [], currentUserId = "", options = {}) {
   const activeSessions = sessions.filter((session) => (
     session.adminUserId === user.id &&
     !session.revokedAt &&
@@ -636,6 +838,9 @@ function publicAdminUserRecord(user = {}, sessions = [], currentUserId = "") {
     inviteExpiresAt: user.inviteExpiresAt || "",
     inviteAcceptedAt: user.inviteAcceptedAt || "",
     preferredRoute: preferredAdminRoute(user),
+    recoveryOnly: isAdminRecoveryOnly(user),
+    recoveryExpiresAt: user.recoveryExpiresAt || "",
+    mfa: buildAdminMfaProfile(user, options),
     currentUser: Boolean(currentUserId) && user.id === currentUserId
   };
 }
@@ -679,8 +884,14 @@ function findAdminUserByInviteToken(users = [], token = "") {
   return users.find((user) => cleanText(user.inviteTokenHash, 256) === tokenHash) || null;
 }
 
-function findConfiguredRoleUser(users = [], role = "") {
-  return users.find((user) => user.active !== false && hasConfiguredAdminUser(user) && adminUserHasRole(user, role)) || null;
+function findConfiguredRoleUser(users = [], role = "", { includeRecoveryOnly = false } = {}) {
+  return users.find((user) => (
+    user.active !== false &&
+    !isAdminRecoveryExpired(user) &&
+    (includeRecoveryOnly || !isAdminRecoveryOnly(user)) &&
+    hasConfiguredAdminUser(user) &&
+    adminUserHasRole(user, role)
+  )) || null;
 }
 
 function findConfiguredRoleUserByUsername(users = [], role = "", username = "") {
@@ -692,6 +903,7 @@ function findConfiguredRoleUserByUsername(users = [], role = "", username = "") 
 
   return users.find((user) => (
     user.active !== false &&
+    !isAdminRecoveryExpired(user) &&
     hasConfiguredAdminUser(user) &&
     adminUserHasRole(user, role) &&
     user.username === normalizedUsername
@@ -707,6 +919,10 @@ function validateAdminRoles(roles, label = "admin account") {
 
   if (!normalizedRoles.length) {
     throw new Error(`Select at least one role for the ${label}.`);
+  }
+
+  if (normalizedRoles.length > 1) {
+    throw new Error(`Assign exactly one single privileged role for the ${label}.`);
   }
 
   return normalizedRoles;
@@ -739,6 +955,7 @@ function validateAdminEmail(email) {
 function countActiveAdminUsersWithRole(users = [], role = "") {
   return users.filter((user) => (
     user.active !== false &&
+    !isAdminRecoveryOnly(user) &&
     hasConfiguredAdminUser(user) &&
     adminUserHasRole(user, role)
   )).length;
@@ -783,6 +1000,39 @@ function upsertRoleAdminUser(data, role, username, passwordSalt, passwordHash, c
   return nextUser;
 }
 
+function upsertEmergencyHrRecoveryAccount(data, passwordSalt, passwordHash, changedAt, lastLoginAt = "") {
+  const existingRecoveryUser = findAdminUsersByUsername(data.adminUsers, EMERGENCY_HR_USERNAME)[0]
+    || data.adminUsers.find((user) => isAdminRecoveryOnly(user) && adminUserHasRole(user, "hr"))
+    || null;
+  const recoveryExpiresAt = new Date(Date.now() + (8 * 60 * 60 * 1000)).toISOString();
+  const nextUser = normalizeAdminUser(clearAdminInviteMetadata({
+    ...existingRecoveryUser,
+    username: EMERGENCY_HR_USERNAME,
+    displayName: existingRecoveryUser?.displayName || "Emergency HR Recovery",
+    email: existingRecoveryUser?.email || "",
+    passwordSalt,
+    passwordHash,
+    roles: ["hr"],
+    active: true,
+    lastLoginAt: lastLoginAt || existingRecoveryUser?.lastLoginAt || "",
+    createdAt: existingRecoveryUser?.createdAt || changedAt,
+    updatedAt: changedAt,
+    disabledAt: "",
+    recoveryOnly: true,
+    recoveryIssuedAt: changedAt,
+    recoveryExpiresAt,
+    mfaGraceUntil: graceUntilForNewAdmin()
+  }));
+
+  if (existingRecoveryUser) {
+    data.adminUsers = replaceAdminUser(data.adminUsers, nextUser);
+  } else {
+    data.adminUsers.unshift(nextUser);
+  }
+
+  return nextUser;
+}
+
 function roleAccessSummary(state = {}, role = "", initializedAt = "") {
   const roleUser = findConfiguredRoleUser(Array.isArray(state.adminUsers) ? state.adminUsers : [], role);
   const activeSessions = (Array.isArray(state.adminSessions) ? state.adminSessions : [])
@@ -804,10 +1054,12 @@ function runtimeSnapshot(state, initializedAt) {
   const adminSessions = Array.isArray(state?.adminSessions) ? state.adminSessions : [];
   const employeeSessions = Array.isArray(state?.employeeSessions) ? state.employeeSessions : [];
   const activeEmployees = employees.filter((employee) => employee.active !== false).length;
+  const itSummary = roleAccessSummary(state, "it", initializedAt);
   const adminSummary = roleAccessSummary(state, "hr", initializedAt);
   const webmasterSummary = roleAccessSummary(state, "webmaster", initializedAt);
 
   return {
+    it: itSummary,
     admin: adminSummary,
     hr: adminSummary,
     webmaster: webmasterSummary,
@@ -843,11 +1095,12 @@ function createEmployeeSession(employee, userAgent = "") {
 
 function createAdminSession(adminUser, role, userAgent = "") {
   const createdAt = nowIso();
+  const normalizedRole = ADMIN_ROLES.includes(role) ? role : "hr";
 
   return {
     id: crypto.randomBytes(32).toString("hex"),
     adminUserId: cleanText(adminUser?.id, 80),
-    role: role === "webmaster" ? "webmaster" : "hr",
+    role: normalizedRole,
     createdAt,
     updatedAt: createdAt,
     expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS).toISOString(),
@@ -930,6 +1183,8 @@ function ensureLoginGuards(data) {
 
 function pruneLoginControls(data, nowMs = Date.now()) {
   const loginGuards = ensureLoginGuards(data);
+  loginGuards.it.byIp = pruneLoginGuardEntries(loginGuards.it.byIp, nowMs);
+  loginGuards.it.byAccount = pruneLoginGuardEntries(loginGuards.it.byAccount, nowMs);
   loginGuards.hr.byIp = pruneLoginGuardEntries(loginGuards.hr.byIp, nowMs);
   loginGuards.hr.byAccount = pruneLoginGuardEntries(loginGuards.hr.byAccount, nowMs);
   loginGuards.webmaster.byIp = pruneLoginGuardEntries(loginGuards.webmaster.byIp, nowMs);
@@ -1038,19 +1293,22 @@ function appendSecurityEvent(data, event) {
 function createLoginAttemptState(data, actor, accountKey, clientIp) {
   const nowMs = Date.now();
   const loginGuards = pruneLoginControls(data, nowMs);
-  const bucket = actor === 'employee'
+  const normalizedActor = actor;
+  const bucket = normalizedActor === 'employee'
     ? loginGuards.employee
-    : actor === 'webmaster'
+    : normalizedActor === 'webmaster'
       ? loginGuards.webmaster
-      : loginGuards.hr;
+      : normalizedActor === 'it'
+        ? loginGuards.it
+        : loginGuards.hr;
   const normalizedAccountKey = normalizeUsername(accountKey)
-    || (actor === 'webmaster' ? defaultWebmasterUsername() : actor === 'employee' ? 'unknown' : defaultAdminUsername());
+    || (normalizedActor === 'it' ? defaultItUsername() : normalizedActor === 'webmaster' ? defaultWebmasterUsername() : normalizedActor === 'employee' ? 'unknown' : defaultAdminUsername());
   const normalizedSourceIp = normalizeSecurityKey(clientIp);
   const ipGuard = bucket.byIp.find((entry) => entry.key === normalizedSourceIp);
   const accountGuard = bucket.byAccount.find((entry) => entry.key === normalizedAccountKey);
 
   return {
-    actor,
+    actor: normalizedActor,
     nowMs,
     bucket,
     accountKey: normalizedAccountKey,
@@ -1160,6 +1418,10 @@ function validateAdminUsername(username) {
   return validateRoleUsername(username, "HR");
 }
 
+function validateItUsername(username) {
+  return validateRoleUsername(username, "IT");
+}
+
 function validateWebmasterUsername(username) {
   return validateRoleUsername(username, "Webmaster");
 }
@@ -1180,6 +1442,51 @@ function adminAccessResponse(session) {
     setupRequired: false,
     sessionExpiresAt: session.expiresAt,
     csrfToken: session.csrfToken
+  };
+}
+
+function resolveAdminMfaAccessState(adminUser = {}, session = {}, options = {}) {
+  const profile = buildAdminMfaProfile(adminUser, options);
+
+  if (!profile.available) {
+    return { authorized: true, mfaRequired: false, mfaMode: "", profile };
+  }
+
+  if (profile.enabled) {
+    return session.mfaVerifiedAt
+      ? { authorized: true, mfaRequired: false, mfaMode: "", profile }
+      : { authorized: false, mfaRequired: true, mfaMode: "verify", profile };
+  }
+
+  if (profile.status === "grace") {
+    return { authorized: true, mfaRequired: false, mfaMode: "", profile };
+  }
+
+  return { authorized: false, mfaRequired: true, mfaMode: "setup", profile };
+}
+
+function buildAdminMfaResponse(session, adminUser, extra = {}, options = {}) {
+  const mfaState = resolveAdminMfaAccessState(adminUser, session, options);
+
+  if (mfaState.authorized) {
+    return {
+      ...adminAccessResponse(session),
+      user: buildPublicAdminAccessUser(adminUser, options),
+      mfaRequired: false,
+      mfaMode: "",
+      ...extra
+    };
+  }
+
+  return {
+    authorized: false,
+    setupRequired: false,
+    mfaRequired: true,
+    mfaMode: mfaState.mfaMode,
+    sessionExpiresAt: session.expiresAt,
+    csrfToken: session.csrfToken,
+    user: buildPublicAdminAccessUser(adminUser, options),
+    ...extra
   };
 }
 
@@ -1206,7 +1513,7 @@ function findValidRoleSession(data, role, sessionId) {
 
   const adminUser = findAdminUserById(data.adminUsers, session.adminUserId);
 
-  if (!adminUser || adminUser.active === false || !hasConfiguredAdminUser(adminUser) || !adminUserHasRole(adminUser, role)) {
+  if (!adminUser || adminUser.active === false || isAdminRecoveryExpired(adminUser) || !hasConfiguredAdminUser(adminUser) || !adminUserHasRole(adminUser, role)) {
     return null;
   }
 
@@ -1263,13 +1570,53 @@ function requireHrManagerAccess(data, req = {}) {
   return access;
 }
 
+function requireWebmasterManagerAccess(data, req = {}) {
+  const cookieNames = accessCookieNames();
+  const access = findValidRoleSession(data, "webmaster", activeCookieValue(req, [cookieNames.webmaster]));
+
+  if (!access) {
+    throw new Error("You must be signed in as Webmaster.");
+  }
+
+  return access;
+}
+
+function requireItManagerAccess(data, req = {}) {
+  const cookieNames = accessCookieNames();
+  const access = findValidRoleSession(data, "it", activeCookieValue(req, [cookieNames.it]));
+
+  if (!access) {
+    throw new Error("You must be signed in as IT.");
+  }
+
+  return access;
+}
+
 function isHrManagedAdminUser(user = {}) {
-  return !adminUserHasRole(user, "webmaster");
+  return !adminUserHasRole(user, "it") && !adminUserHasRole(user, "webmaster");
 }
 
 function assertHrManagedAdminRoles(roles = []) {
+  if (roles.includes("it")) {
+    throw new Error("HR cannot assign IT roles.");
+  }
+
   if (roles.includes("webmaster")) {
     throw new Error("HR cannot assign webmaster roles.");
+  }
+}
+
+function isWebmasterManagedAdminUser(user = {}) {
+  return !adminUserHasRole(user, "it") && adminUserHasRole(user, "webmaster");
+}
+
+function assertWebmasterSeedAdminRoles(roles = []) {
+  if (roles.includes("it")) {
+    throw new Error("Webmaster cannot assign IT roles.");
+  }
+
+  if (!roles.includes("webmaster")) {
+    throw new Error("Webmaster admin accounts must include the webmaster role.");
   }
 }
 
@@ -1285,6 +1632,49 @@ function requireHrManagedAdminTarget(data, req = {}, adminUserId = "") {
     hrManager,
     targetUser
   };
+}
+
+function requireWebmasterManagedAdminTarget(data, req = {}, adminUserId = "") {
+  const webmasterManager = requireWebmasterManagerAccess(data, req);
+  const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+
+  if (!isWebmasterManagedAdminUser(targetUser)) {
+    throw new Error("Webmaster can only manage webmaster accounts.");
+  }
+
+  return {
+    webmasterManager,
+    targetUser
+  };
+}
+
+function requireItManagedAdminTarget(data, req = {}, adminUserId = "") {
+  const itManager = requireItManagerAccess(data, req);
+  const targetUser = findAdminUserOrThrow(data.adminUsers, adminUserId);
+
+  return {
+    itManager,
+    targetUser
+  };
+}
+
+function accessCookieNamesForRole(role = "") {
+  const cookieNames = accessCookieNames();
+  return role === "it"
+    ? [cookieNames.it]
+    : role === "webmaster"
+      ? [cookieNames.webmaster]
+      : [cookieNames.hr, cookieNames.legacyHr];
+}
+
+function requireRoleSessionForMfa(data, req = {}, role = "") {
+  const access = findValidRoleSession(data, role, activeCookieValue(req, accessCookieNamesForRole(role)));
+
+  if (!access) {
+    throw new Error(`You must be signed in as ${role === "it" ? "IT" : role === "webmaster" ? "Webmaster" : "HR"}.`);
+  }
+
+  return access;
 }
 
 function revokeOtherSessionsForUser(sessions, activeSessionId, adminUserId, changedAt) {
@@ -1336,7 +1726,9 @@ function revokeAllSessionsForUser(sessions, adminUserId, changedAt, roleFilter =
 }
 
 function loginGuardBucketForActor(loginGuards, actor) {
-  return actor === "webmaster"
+  return actor === "it"
+    ? loginGuards.it
+    : actor === "webmaster"
     ? loginGuards.webmaster
     : actor === "employee"
       ? loginGuards.employee
@@ -1372,7 +1764,7 @@ function clearAdminIdentityGuards(data, username, sourceIp = "") {
 
 export { normalizeSecurityState };
 
-export function createSecurityStore({ dataFile } = {}) {
+export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) {
   const backend = dataFile ? "file" : "memory";
   let initPromise = null;
   let writeQueue = Promise.resolve();
@@ -1382,6 +1774,18 @@ export function createSecurityStore({ dataFile } = {}) {
   const HR_RECOVERY_REQUEST_COOLDOWN_MS = 60 * 1000;
   const HR_RECOVERY_MAX_FAILURES = 5;
   const HR_RECOVERY_LOCKOUT_MS = 15 * 60 * 1000;
+  const mfaOptions = { adminMfaEnabled: Boolean(adminMfaEnabled) };
+  const publicAdminAccessUser = (user = {}) => buildPublicAdminAccessUser(user, mfaOptions);
+  const publicAdminUserRecord = (user = {}, sessions = [], currentUserId = "") => (
+    buildPublicAdminUserRecord(user, sessions, currentUserId, mfaOptions)
+  );
+  const adminMfaResponse = (session, adminUser, extra = {}) => buildAdminMfaResponse(session, adminUser, extra, mfaOptions);
+
+  function assertAdminMfaAvailable() {
+    if (!mfaOptions.adminMfaEnabled) {
+      throw new Error("Admin MFA is disabled on this server.");
+    }
+  }
 
   async function readStoredState() {
     if (!dataFile) {
@@ -1471,6 +1875,35 @@ export function createSecurityStore({ dataFile } = {}) {
     return readStoredState();
   }
 
+  async function checkItAccess(req = {}) {
+    await init();
+    const data = await readStoredState();
+    const itConfigured = findConfiguredRoleUser(data.adminUsers, "it");
+
+    if (!itConfigured) {
+      return {
+        authorized: false,
+        setupRequired: true,
+        sessionExpiresAt: "",
+        csrfToken: ""
+      };
+    }
+
+    const cookieNames = getAccessCookieNames();
+    const access = findValidRoleSession(data, "it", activeCookieValue(req, [cookieNames.it]));
+
+    if (!access) {
+      return {
+        authorized: false,
+        setupRequired: false,
+        sessionExpiresAt: "",
+        csrfToken: ""
+      };
+    }
+
+    return adminMfaResponse(access.session, access.adminUser);
+  }
+
   async function checkHrAccess(req = {}) {
     await init();
     const data = await readStoredState();
@@ -1497,10 +1930,7 @@ export function createSecurityStore({ dataFile } = {}) {
       };
     }
 
-    return {
-      ...adminAccessResponse(access.session),
-      user: publicAdminAccessUser(access.adminUser)
-    };
+    return adminMfaResponse(access.session, access.adminUser);
   }
 
   async function checkWebmasterAccess(req = {}) {
@@ -1532,11 +1962,9 @@ export function createSecurityStore({ dataFile } = {}) {
       };
     }
 
-    return {
-      ...adminAccessResponse(access.session),
-      hrAuthorized: Boolean(hrAccess.authorized),
-      user: publicAdminAccessUser(access.adminUser)
-    };
+    return adminMfaResponse(access.session, access.adminUser, {
+      hrAuthorized: Boolean(hrAccess.authorized)
+    });
   }
 
   async function checkEmployeeAccess(req = {}) {
@@ -1637,6 +2065,112 @@ export function createSecurityStore({ dataFile } = {}) {
     });
   }
 
+  async function setupItAccess({ username, password, userAgent = "" } = {}) {
+    const itUsername = validateItUsername(username);
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      if (findConfiguredRoleUser(data.adminUsers, "it")) {
+        throw new Error("IT access is already configured.");
+      }
+
+      const changedAt = nowIso();
+      const sameUsernameUsers = findAdminUsersByUsername(data.adminUsers, itUsername);
+
+      if (sameUsernameUsers.length) {
+        throw new Error("That username already belongs to another admin account.");
+      }
+
+      const nextPassword = createPasswordHash(password);
+      const adminUser = normalizeAdminUser({
+        username: itUsername,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        roles: ["it"],
+        active: true,
+        lastLoginAt: changedAt,
+        createdAt: changedAt,
+        updatedAt: changedAt,
+        mfaGraceUntil: graceUntilForNewAdmin()
+      });
+      data.adminUsers.unshift(adminUser);
+
+      const session = createAdminSession(adminUser, "it", userAgent);
+      data.adminSessions = [
+        session,
+        ...data.adminSessions.filter((entry) => entry.id !== session.id && !isSessionExpired(entry) && !entry.revokedAt)
+      ];
+      return { session, adminUser };
+    }).then(({ result }) => ({
+      ...adminMfaResponse(result.session, result.adminUser),
+      sessionId: result.session.id
+    }));
+  }
+
+  async function authenticateIt({ username, password, userAgent = "", clientIp = "" } = {}) {
+    const normalizedUsername = validateItUsername(username);
+    const passwordText = String(password || "");
+
+    if (!passwordText) {
+      throw new Error("Username and password are required.");
+    }
+
+    return updateData((data) => {
+      const attempt = createLoginAttemptState(data, "it", normalizedUsername, clientIp);
+
+      if (attempt.block) {
+        return createThrottledAttemptResult(data, attempt, userAgent);
+      }
+
+      const roleUser = findConfiguredRoleUser(data.adminUsers, "it");
+
+      if (!roleUser) {
+        throw new Error("IT access has not been configured.");
+      }
+
+      const adminUser = findConfiguredRoleUserByUsername(data.adminUsers, "it", normalizedUsername);
+
+      if (!adminUser) {
+        return createFailedAttemptResult(data, attempt, "Invalid username or password.", "unknown-username", userAgent);
+      }
+
+      if (!verifyPassword(passwordText, adminUser.passwordSalt, adminUser.passwordHash)) {
+        return createFailedAttemptResult(data, attempt, "Invalid username or password.", "invalid-password", userAgent);
+      }
+
+      clearLoginGuards(attempt.bucket, normalizedUsername, clientIp);
+      const changedAt = nowIso();
+      const session = createAdminSession(adminUser, "it", userAgent);
+      const updatedAdminUser = {
+        ...adminUser,
+        lastLoginAt: changedAt,
+        updatedAt: changedAt
+      };
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedAdminUser);
+      data.adminSessions = [
+        session,
+        ...data.adminSessions.filter((entry) => entry.id !== session.id && !isSessionExpired(entry) && !entry.revokedAt)
+      ];
+      return {
+        ok: true,
+        session,
+        adminUser: updatedAdminUser
+      };
+    }).then(({ result }) => {
+      if (!result.ok) {
+        logSecurityEvent(result.event);
+        const error = new Error(result.error);
+        error.statusCode = result.statusCode;
+        throw error;
+      }
+
+      return {
+        ...adminMfaResponse(result.session, result.adminUser),
+        sessionId: result.session.id
+      };
+    });
+  }
+
   async function setupAdminAccess({ username, password, userAgent = "" } = {}) {
     const adminUsername = validateAdminUsername(username);
     validateAdminPassword(password);
@@ -1648,37 +2182,24 @@ export function createSecurityStore({ dataFile } = {}) {
 
       const changedAt = nowIso();
       const sameUsernameUsers = findAdminUsersByUsername(data.adminUsers, adminUsername);
-      const mergeCandidate = sameUsernameUsers.find((user) => (
-        user.active !== false &&
-        hasConfiguredAdminUser(user) &&
-        verifyPassword(password, user.passwordSalt, user.passwordHash)
-      ));
-      let adminUser;
 
-      if (mergeCandidate) {
-        adminUser = {
-          ...mergeCandidate,
-          roles: mergeAdminRoles(mergeCandidate.roles, ["hr"]),
-          lastLoginAt: changedAt,
-          updatedAt: changedAt
-        };
-        data.adminUsers = replaceAdminUser(data.adminUsers, adminUser);
-      } else if (sameUsernameUsers.length) {
+      if (sameUsernameUsers.length) {
         throw new Error("That username already belongs to another admin account.");
-      } else {
-        const nextPassword = createPasswordHash(password);
-        adminUser = normalizeAdminUser({
-          username: adminUsername,
-          passwordSalt: nextPassword.salt,
-          passwordHash: nextPassword.hash,
-          roles: ["hr"],
-          active: true,
-          lastLoginAt: changedAt,
-          createdAt: changedAt,
-          updatedAt: changedAt
-        });
-        data.adminUsers.unshift(adminUser);
       }
+
+      const nextPassword = createPasswordHash(password);
+      const adminUser = normalizeAdminUser({
+        username: adminUsername,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        roles: ["hr"],
+        active: true,
+        lastLoginAt: changedAt,
+        createdAt: changedAt,
+        updatedAt: changedAt,
+        mfaGraceUntil: graceUntilForNewAdmin()
+      });
+      data.adminUsers.unshift(adminUser);
 
       const session = createAdminSession(adminUser, "hr", userAgent);
       data.adminSessions = [
@@ -1687,8 +2208,7 @@ export function createSecurityStore({ dataFile } = {}) {
       ];
       return { session, adminUser };
     }).then(({ result }) => ({
-      ...adminAccessResponse(result.session),
-      user: publicAdminAccessUser(result.adminUser),
+      ...adminMfaResponse(result.session, result.adminUser),
       sessionId: result.session.id
     }));
   }
@@ -1751,8 +2271,7 @@ export function createSecurityStore({ dataFile } = {}) {
       }
 
       return {
-        ...adminAccessResponse(result.session),
-        user: publicAdminAccessUser(result.adminUser),
+        ...adminMfaResponse(result.session, result.adminUser),
         sessionId: result.session.id
       };
     });
@@ -1769,37 +2288,24 @@ export function createSecurityStore({ dataFile } = {}) {
 
       const changedAt = nowIso();
       const sameUsernameUsers = findAdminUsersByUsername(data.adminUsers, webmasterUsername);
-      const mergeCandidate = sameUsernameUsers.find((user) => (
-        user.active !== false &&
-        hasConfiguredAdminUser(user) &&
-        verifyPassword(password, user.passwordSalt, user.passwordHash)
-      ));
-      let adminUser;
 
-      if (mergeCandidate) {
-        adminUser = {
-          ...mergeCandidate,
-          roles: mergeAdminRoles(mergeCandidate.roles, ["webmaster"]),
-          lastLoginAt: changedAt,
-          updatedAt: changedAt
-        };
-        data.adminUsers = replaceAdminUser(data.adminUsers, adminUser);
-      } else if (sameUsernameUsers.length) {
+      if (sameUsernameUsers.length) {
         throw new Error("That username already belongs to another admin account.");
-      } else {
-        const nextPassword = createPasswordHash(password);
-        adminUser = normalizeAdminUser({
-          username: webmasterUsername,
-          passwordSalt: nextPassword.salt,
-          passwordHash: nextPassword.hash,
-          roles: ["webmaster"],
-          active: true,
-          lastLoginAt: changedAt,
-          createdAt: changedAt,
-          updatedAt: changedAt
-        });
-        data.adminUsers.unshift(adminUser);
       }
+
+      const nextPassword = createPasswordHash(password);
+      const adminUser = normalizeAdminUser({
+        username: webmasterUsername,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        roles: ["webmaster"],
+        active: true,
+        lastLoginAt: changedAt,
+        createdAt: changedAt,
+        updatedAt: changedAt,
+        mfaGraceUntil: graceUntilForNewAdmin()
+      });
+      data.adminUsers.unshift(adminUser);
 
       const session = createAdminSession(adminUser, "webmaster", userAgent);
       data.adminSessions = [
@@ -1808,8 +2314,7 @@ export function createSecurityStore({ dataFile } = {}) {
       ];
       return { session, adminUser };
     }).then(({ result }) => ({
-      ...adminAccessResponse(result.session),
-      user: publicAdminAccessUser(result.adminUser),
+      ...adminMfaResponse(result.session, result.adminUser),
       sessionId: result.session.id
     }));
   }
@@ -1872,11 +2377,32 @@ export function createSecurityStore({ dataFile } = {}) {
       }
 
       return {
-        ...adminAccessResponse(result.session),
-        user: publicAdminAccessUser(result.adminUser),
+        ...adminMfaResponse(result.session, result.adminUser),
         sessionId: result.session.id
       };
     });
+  }
+
+  async function logoutIt(req = {}) {
+    await init();
+    const cookieNames = getAccessCookieNames();
+    const sessionId = activeCookieValue(req, [cookieNames.it]);
+
+    if (!sessionId) {
+      return { removed: false };
+    }
+
+    return updateData((data) => {
+      const session = data.adminSessions.find((entry) => entry.id === sessionId && entry.role === "it");
+
+      if (!session) {
+        return { removed: false };
+      }
+
+      session.revokedAt = nowIso();
+      session.updatedAt = session.revokedAt;
+      return { removed: true };
+    }).then(({ result }) => result);
   }
 
   async function logoutAdmin(req = {}) {
@@ -2017,6 +2543,156 @@ export function createSecurityStore({ dataFile } = {}) {
       ));
   }
 
+  async function listWebmasterAdminUsers({ currentUserId = "" } = {}) {
+    const data = await readSecurityState();
+    return data.adminUsers
+      .filter((adminUser) => isWebmasterManagedAdminUser(adminUser))
+      .map((adminUser) => publicAdminUserRecord(adminUser, data.adminSessions, currentUserId))
+      .sort((left, right) => (
+        Number(right.active) - Number(left.active) ||
+        left.displayName.localeCompare(right.displayName) ||
+        left.username.localeCompare(right.username)
+      ));
+  }
+
+  async function listItAdminUsers({ currentUserId = "" } = {}) {
+    const data = await readSecurityState();
+    return data.adminUsers
+      .map((adminUser) => publicAdminUserRecord(adminUser, data.adminSessions, currentUserId))
+      .sort((left, right) => (
+        Number(right.active) - Number(left.active) ||
+        left.displayName.localeCompare(right.displayName) ||
+        left.username.localeCompare(right.username)
+      ));
+  }
+
+  async function createItAdminUser({ displayName, email, username, password, roles } = {}) {
+    const adminDisplayName = validateAdminDisplayName(displayName);
+    const adminEmail = validateAdminEmail(email);
+    const adminUsername = normalizeUsername(username);
+    const adminRoles = validateAdminRoles(roles);
+
+    if (!adminUsername) {
+      throw new Error("Username is required.");
+    }
+
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      const duplicate = data.adminUsers.some((adminUser) => adminUser.username === adminUsername);
+      const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
+        .some((adminUser) => adminUser.username !== adminUsername);
+
+      if (duplicate) {
+        throw new Error("That admin username is already in use.");
+      }
+
+      if (duplicateEmail) {
+        throw new Error("That admin email is already in use.");
+      }
+
+      const nextPassword = createPasswordHash(password);
+      const createdAt = nowIso();
+      const adminUser = normalizeAdminUser({
+        id: crypto.randomUUID(),
+        displayName: adminDisplayName,
+        email: adminEmail,
+        username: adminUsername,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        roles: adminRoles,
+        active: true,
+        lastLoginAt: "",
+        createdAt,
+        updatedAt: createdAt,
+        disabledAt: "",
+        mfaGraceUntil: graceUntilForNewAdmin()
+      });
+
+      data.adminUsers.unshift(adminUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_created",
+        actor: "it",
+        accountKey: adminUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: `roles:${adminRoles.join(",")}`
+      }));
+      return adminUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function inviteItAdminUser({ displayName, email, username, roles, userAgent = "", clientIp = "" } = {}) {
+    const adminDisplayName = validateAdminDisplayName(displayName);
+    const adminEmail = validateAdminEmail(email);
+    const adminUsername = normalizeUsername(username);
+    const adminRoles = validateAdminRoles(roles);
+
+    if (!adminUsername) {
+      throw new Error("Username is required.");
+    }
+
+    return updateData((data) => {
+      const duplicate = data.adminUsers.some((adminUser) => adminUser.username === adminUsername);
+      const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
+        .some((adminUser) => adminUser.username !== adminUsername);
+
+      if (duplicate) {
+        throw new Error("That admin username is already in use.");
+      }
+
+      if (duplicateEmail) {
+        throw new Error("That admin email is already in use.");
+      }
+
+      const createdAt = nowIso();
+      const invite = createInviteSecret();
+      const adminUser = normalizeAdminUser({
+        id: crypto.randomUUID(),
+        displayName: adminDisplayName,
+        email: adminEmail,
+        username: adminUsername,
+        roles: adminRoles,
+        active: true,
+        lastLoginAt: "",
+        createdAt,
+        updatedAt: createdAt,
+        disabledAt: "",
+        mfaGraceUntil: graceUntilForNewAdmin(),
+        inviteTokenHash: invite.tokenHash,
+        inviteSentAt: createdAt,
+        inviteExpiresAt: invite.expiresAt,
+        inviteAcceptedAt: ""
+      });
+
+      data.adminUsers.unshift(adminUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_invited",
+        actor: "it",
+        accountKey: adminUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: `roles:${adminRoles.join(",")}`,
+        userAgent
+      }));
+      return {
+        adminUser,
+        inviteToken: invite.token,
+        inviteExpiresAt: invite.expiresAt,
+        preferredRoute: preferredAdminRoute(adminUser)
+      };
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result.adminUser, [], ""),
+      inviteToken: result.inviteToken,
+      inviteExpiresAt: result.inviteExpiresAt,
+      preferredRoute: result.preferredRoute,
+      snapshot
+    }));
+  }
+
   async function createAdminUser({ displayName, email, username, password, roles } = {}) {
     const adminDisplayName = validateAdminDisplayName(displayName);
     const adminEmail = validateAdminEmail(email);
@@ -2057,13 +2733,74 @@ export function createSecurityStore({ dataFile } = {}) {
         lastLoginAt: "",
         createdAt,
         updatedAt: createdAt,
-        disabledAt: ""
+        disabledAt: "",
+        mfaGraceUntil: graceUntilForNewAdmin()
       });
 
       data.adminUsers.unshift(adminUser);
       appendSecurityEvent(data, createSecurityEvent({
         type: "admin_created",
         actor: "hr",
+        accountKey: adminUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: `roles:${adminRoles.join(",")}`
+      }));
+      return adminUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function createWebmasterAdminUser({ displayName, email, username, password, roles } = {}) {
+    const adminDisplayName = validateAdminDisplayName(displayName);
+    const adminEmail = validateAdminEmail(email);
+    const adminUsername = normalizeUsername(username);
+    const adminRoles = validateAdminRoles(roles, "webmaster admin account");
+    assertWebmasterSeedAdminRoles(adminRoles);
+
+    if (!adminUsername) {
+      throw new Error("Username is required.");
+    }
+
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      const duplicate = data.adminUsers.some((adminUser) => adminUser.username === adminUsername);
+      const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
+        .some((adminUser) => adminUser.username !== adminUsername);
+
+      if (duplicate) {
+        throw new Error("That admin username is already in use.");
+      }
+
+      if (duplicateEmail) {
+        throw new Error("That admin email is already in use.");
+      }
+
+      const nextPassword = createPasswordHash(password);
+      const createdAt = nowIso();
+      const adminUser = normalizeAdminUser({
+        id: crypto.randomUUID(),
+        displayName: adminDisplayName,
+        email: adminEmail,
+        username: adminUsername,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        roles: adminRoles,
+        active: true,
+        lastLoginAt: "",
+        createdAt,
+        updatedAt: createdAt,
+        disabledAt: "",
+        mfaGraceUntil: graceUntilForNewAdmin()
+      });
+
+      data.adminUsers.unshift(adminUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_created",
+        actor: "webmaster",
         accountKey: adminUser.username,
         sourceIp: normalizeSecurityKey(""),
         outcome: "success",
@@ -2113,6 +2850,7 @@ export function createSecurityStore({ dataFile } = {}) {
         createdAt,
         updatedAt: createdAt,
         disabledAt: "",
+        mfaGraceUntil: graceUntilForNewAdmin(),
         inviteTokenHash: invite.tokenHash,
         inviteSentAt: createdAt,
         inviteExpiresAt: invite.expiresAt,
@@ -2123,6 +2861,75 @@ export function createSecurityStore({ dataFile } = {}) {
       appendSecurityEvent(data, createSecurityEvent({
         type: "admin_invited",
         actor: "hr",
+        accountKey: adminUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: `roles:${adminRoles.join(",")}`,
+        userAgent
+      }));
+      return {
+        adminUser,
+        inviteToken: invite.token,
+        inviteExpiresAt: invite.expiresAt,
+        preferredRoute: preferredAdminRoute(adminUser)
+      };
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result.adminUser, [], ""),
+      inviteToken: result.inviteToken,
+      inviteExpiresAt: result.inviteExpiresAt,
+      preferredRoute: result.preferredRoute,
+      snapshot
+    }));
+  }
+
+  async function inviteWebmasterAdminUser({ displayName, email, username, roles, userAgent = "", clientIp = "" } = {}) {
+    const adminDisplayName = validateAdminDisplayName(displayName);
+    const adminEmail = validateAdminEmail(email);
+    const adminUsername = normalizeUsername(username);
+    const adminRoles = validateAdminRoles(roles, "webmaster admin account");
+    assertWebmasterSeedAdminRoles(adminRoles);
+
+    if (!adminUsername) {
+      throw new Error("Username is required.");
+    }
+
+    return updateData((data) => {
+      const duplicate = data.adminUsers.some((adminUser) => adminUser.username === adminUsername);
+      const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
+        .some((adminUser) => adminUser.username !== adminUsername);
+
+      if (duplicate) {
+        throw new Error("That admin username is already in use.");
+      }
+
+      if (duplicateEmail) {
+        throw new Error("That admin email is already in use.");
+      }
+
+      const createdAt = nowIso();
+      const invite = createInviteSecret();
+      const adminUser = normalizeAdminUser({
+        id: crypto.randomUUID(),
+        displayName: adminDisplayName,
+        email: adminEmail,
+        username: adminUsername,
+        roles: adminRoles,
+        active: true,
+        lastLoginAt: "",
+        createdAt,
+        updatedAt: createdAt,
+        disabledAt: "",
+        mfaGraceUntil: graceUntilForNewAdmin(),
+        inviteTokenHash: invite.tokenHash,
+        inviteSentAt: createdAt,
+        inviteExpiresAt: invite.expiresAt,
+        inviteAcceptedAt: ""
+      });
+
+      data.adminUsers.unshift(adminUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_invited",
+        actor: "webmaster",
         accountKey: adminUser.username,
         sourceIp: normalizeSecurityKey(clientIp),
         outcome: "success",
@@ -2186,6 +2993,90 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
+  async function updateWebmasterAdminUserProfile(req = {}, adminUserId, { displayName, email } = {}) {
+    const adminDisplayName = validateAdminDisplayName(displayName);
+    const adminEmail = validateAdminEmail(email);
+
+    return updateData((data) => {
+      const { targetUser } = requireWebmasterManagedAdminTarget(data, req, adminUserId);
+      const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
+        .some((adminUser) => adminUser.id !== targetUser.id);
+
+      if (duplicateEmail) {
+        throw new Error("That admin email is already in use.");
+      }
+
+      const changedAt = nowIso();
+      const emailChanged = normalizeEmail(targetUser.email) !== adminEmail;
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        displayName: adminDisplayName,
+        email: adminEmail,
+        updatedAt: changedAt,
+        inviteTokenHash: emailChanged ? "" : targetUser.inviteTokenHash,
+        inviteSentAt: emailChanged ? "" : targetUser.inviteSentAt,
+        inviteExpiresAt: emailChanged ? "" : targetUser.inviteExpiresAt
+      });
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_profile_updated",
+        actor: "webmaster",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: emailChanged ? "identity-updated-invite-cleared" : "identity-updated"
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function updateItAdminUserProfile(req = {}, adminUserId, { displayName, email } = {}) {
+    const adminDisplayName = validateAdminDisplayName(displayName);
+    const adminEmail = validateAdminEmail(email);
+
+    return updateData((data) => {
+      const { targetUser } = requireItManagedAdminTarget(data, req, adminUserId);
+      const duplicateEmail = findAdminUsersByEmail(data.adminUsers, adminEmail)
+        .some((adminUser) => adminUser.id !== targetUser.id);
+
+      if (duplicateEmail) {
+        throw new Error("That admin email is already in use.");
+      }
+
+      const changedAt = nowIso();
+      const emailChanged = normalizeEmail(targetUser.email) !== adminEmail;
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        displayName: adminDisplayName,
+        email: adminEmail,
+        updatedAt: changedAt,
+        inviteTokenHash: emailChanged ? "" : targetUser.inviteTokenHash,
+        inviteSentAt: emailChanged ? "" : targetUser.inviteSentAt,
+        inviteExpiresAt: emailChanged ? "" : targetUser.inviteExpiresAt
+      });
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_profile_updated",
+        actor: "it",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: emailChanged ? "identity-updated-invite-cleared" : "identity-updated"
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
   async function resendAdminInvite(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
     return updateData((data) => {
       const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
@@ -2221,6 +3112,120 @@ export function createSecurityStore({ dataFile } = {}) {
       appendSecurityEvent(data, createSecurityEvent({
         type: "admin_invite_resent",
         actor: "hr",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: `roles:${updatedUser.roles.join(",")}`,
+        userAgent
+      }));
+
+      return {
+        adminUser: updatedUser,
+        inviteToken: invite.token,
+        inviteExpiresAt: invite.expiresAt,
+        preferredRoute: preferredAdminRoute(updatedUser)
+      };
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result.adminUser, [], ""),
+      inviteToken: result.inviteToken,
+      inviteExpiresAt: result.inviteExpiresAt,
+      preferredRoute: result.preferredRoute,
+      snapshot
+    }));
+  }
+
+  async function resendWebmasterAdminInvite(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
+    return updateData((data) => {
+      const { webmasterManager, targetUser } = requireWebmasterManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === webmasterManager.adminUser.id && hasConfiguredAdminRecord(targetUser)) {
+        throw new Error("Use account settings to manage your own credentials.");
+      }
+
+      if (targetUser.active === false) {
+        throw new Error("Enable this admin account before sending an invite.");
+      }
+
+      if (!targetUser.email) {
+        throw new Error("Add an email address before sending an invite.");
+      }
+
+      if (hasConfiguredAdminRecord(targetUser)) {
+        throw new Error("This admin already has credentials configured.");
+      }
+
+      const changedAt = nowIso();
+      const invite = createInviteSecret();
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        updatedAt: changedAt,
+        inviteTokenHash: invite.tokenHash,
+        inviteSentAt: changedAt,
+        inviteExpiresAt: invite.expiresAt,
+        inviteAcceptedAt: ""
+      });
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_invite_resent",
+        actor: "webmaster",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: `roles:${updatedUser.roles.join(",")}`,
+        userAgent
+      }));
+
+      return {
+        adminUser: updatedUser,
+        inviteToken: invite.token,
+        inviteExpiresAt: invite.expiresAt,
+        preferredRoute: preferredAdminRoute(updatedUser)
+      };
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result.adminUser, [], ""),
+      inviteToken: result.inviteToken,
+      inviteExpiresAt: result.inviteExpiresAt,
+      preferredRoute: result.preferredRoute,
+      snapshot
+    }));
+  }
+
+  async function resendItAdminInvite(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
+    return updateData((data) => {
+      const { itManager, targetUser } = requireItManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === itManager.adminUser.id && hasConfiguredAdminRecord(targetUser)) {
+        throw new Error("Use account settings to manage your own credentials.");
+      }
+
+      if (targetUser.active === false) {
+        throw new Error("Enable this admin account before sending an invite.");
+      }
+
+      if (!targetUser.email) {
+        throw new Error("Add an email address before sending an invite.");
+      }
+
+      if (hasConfiguredAdminRecord(targetUser)) {
+        throw new Error("This admin already has credentials configured.");
+      }
+
+      const changedAt = nowIso();
+      const invite = createInviteSecret();
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        updatedAt: changedAt,
+        inviteTokenHash: invite.tokenHash,
+        inviteSentAt: changedAt,
+        inviteExpiresAt: invite.expiresAt,
+        inviteAcceptedAt: ""
+      });
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_invite_resent",
+        actor: "it",
         accountKey: updatedUser.username,
         sourceIp: normalizeSecurityKey(clientIp),
         outcome: "success",
@@ -2376,6 +3381,107 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
+  async function updateWebmasterAdminUserRoles(req = {}, adminUserId, roles) {
+    const nextRoles = validateAdminRoles(roles, "webmaster admin account");
+    assertWebmasterSeedAdminRoles(nextRoles);
+
+    return updateData((data) => {
+      const { webmasterManager, targetUser } = requireWebmasterManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === webmasterManager.adminUser.id && !nextRoles.includes("webmaster")) {
+        throw new Error("You cannot remove your own webmaster role while signed in.");
+      }
+
+      const changedAt = nowIso();
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        roles: nextRoles,
+        updatedAt: changedAt,
+        disabledAt: targetUser.active === false ? (targetUser.disabledAt || changedAt) : ""
+      });
+      const projectedUsers = data.adminUsers.map((adminUser) => (
+        adminUser.id === targetUser.id ? updatedUser : adminUser
+      ));
+
+      if (countActiveAdminUsersWithRole(projectedUsers, "webmaster") === 0) {
+        throw new Error("At least one active Webmaster admin is required.");
+      }
+
+      data.adminUsers = projectedUsers;
+
+      if (!nextRoles.includes("hr")) {
+        data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt, "hr");
+      }
+
+      if (!nextRoles.includes("webmaster")) {
+        data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt, "webmaster");
+      }
+
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_roles_updated",
+        actor: "webmaster",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: `roles:${nextRoles.join(",")}`
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function updateItAdminUserRoles(req = {}, adminUserId, roles) {
+    const nextRoles = validateAdminRoles(roles, "admin");
+
+    return updateData((data) => {
+      const { itManager, targetUser } = requireItManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === itManager.adminUser.id && !nextRoles.includes("it")) {
+        throw new Error("You cannot remove your own IT role while signed in.");
+      }
+
+      const changedAt = nowIso();
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        roles: nextRoles,
+        updatedAt: changedAt,
+        disabledAt: targetUser.active === false ? (targetUser.disabledAt || changedAt) : ""
+      });
+      const projectedUsers = data.adminUsers.map((adminUser) => (
+        adminUser.id === targetUser.id ? updatedUser : adminUser
+      ));
+
+      if (countActiveAdminUsersWithRole(projectedUsers, "it") === 0) {
+        throw new Error("At least one active IT admin is required.");
+      }
+
+      data.adminUsers = projectedUsers;
+
+      for (const role of ADMIN_ROLES) {
+        if (!nextRoles.includes(role)) {
+          data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt, role);
+        }
+      }
+
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_roles_updated",
+        actor: "it",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: `roles:${nextRoles.join(",")}`
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
   async function setAdminUserActive(req = {}, adminUserId, active) {
     const nextActive = Boolean(active);
 
@@ -2411,6 +3517,102 @@ export function createSecurityStore({ dataFile } = {}) {
       appendSecurityEvent(data, createSecurityEvent({
         type: nextActive ? "admin_enabled" : "admin_disabled",
         actor: "hr",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: nextActive ? "access-restored" : "access-disabled"
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function setWebmasterAdminUserActive(req = {}, adminUserId, active) {
+    const nextActive = Boolean(active);
+
+    return updateData((data) => {
+      const { webmasterManager, targetUser } = requireWebmasterManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === webmasterManager.adminUser.id && !nextActive) {
+        throw new Error("You cannot disable your own webmaster account while signed in.");
+      }
+
+      const changedAt = nowIso();
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        active: nextActive,
+        updatedAt: changedAt,
+        disabledAt: nextActive ? "" : changedAt
+      });
+      const projectedUsers = data.adminUsers.map((adminUser) => (
+        adminUser.id === targetUser.id ? updatedUser : adminUser
+      ));
+
+      if (countActiveAdminUsersWithRole(projectedUsers, "webmaster") === 0) {
+        throw new Error("At least one active Webmaster admin is required.");
+      }
+
+      data.adminUsers = projectedUsers;
+
+      if (!nextActive) {
+        data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt);
+        clearAdminIdentityGuards(data, updatedUser.username);
+      }
+
+      appendSecurityEvent(data, createSecurityEvent({
+        type: nextActive ? "webmaster_admin_enabled" : "webmaster_admin_disabled",
+        actor: "webmaster",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: nextActive ? "access-restored" : "access-disabled"
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function setItAdminUserActive(req = {}, adminUserId, active) {
+    const nextActive = Boolean(active);
+
+    return updateData((data) => {
+      const { itManager, targetUser } = requireItManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === itManager.adminUser.id && !nextActive) {
+        throw new Error("You cannot disable your own IT account while signed in.");
+      }
+
+      const changedAt = nowIso();
+      const updatedUser = normalizeAdminUser({
+        ...targetUser,
+        active: nextActive,
+        updatedAt: changedAt,
+        disabledAt: nextActive ? "" : changedAt
+      });
+      const projectedUsers = data.adminUsers.map((adminUser) => (
+        adminUser.id === targetUser.id ? updatedUser : adminUser
+      ));
+
+      if (countActiveAdminUsersWithRole(projectedUsers, "it") === 0) {
+        throw new Error("At least one active IT admin is required.");
+      }
+
+      data.adminUsers = projectedUsers;
+
+      if (!nextActive) {
+        data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt);
+        clearAdminIdentityGuards(data, updatedUser.username);
+      }
+
+      appendSecurityEvent(data, createSecurityEvent({
+        type: nextActive ? "it_admin_enabled" : "it_admin_disabled",
+        actor: "it",
         accountKey: updatedUser.username,
         sourceIp: normalizeSecurityKey(""),
         outcome: "success",
@@ -2463,6 +3665,84 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
+  async function resetWebmasterAdminUserPassword(req = {}, adminUserId, { password, userAgent = "", clientIp = "" } = {}) {
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      const { webmasterManager, targetUser } = requireWebmasterManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === webmasterManager.adminUser.id) {
+        throw new Error("Use account settings to change your own password.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(password);
+      const updatedUser = normalizeAdminUser(clearAdminInviteMetadata({
+        ...targetUser,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      }));
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt);
+      clearAdminIdentityGuards(data, updatedUser.username, clientIp);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_password_reset",
+        actor: "webmaster",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "password-reset",
+        userAgent
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function resetItAdminUserPassword(req = {}, adminUserId, { password, userAgent = "", clientIp = "" } = {}) {
+    validateAdminPassword(password);
+
+    return updateData((data) => {
+      const { itManager, targetUser } = requireItManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === itManager.adminUser.id) {
+        throw new Error("Use account settings to change your own password.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(password);
+      const updatedUser = normalizeAdminUser(clearAdminInviteMetadata({
+        ...targetUser,
+        passwordSalt: nextPassword.salt,
+        passwordHash: nextPassword.hash,
+        updatedAt: changedAt
+      }));
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      data.adminSessions = revokeAllSessionsForUser(data.adminSessions, updatedUser.id, changedAt);
+      clearAdminIdentityGuards(data, updatedUser.username, clientIp);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_password_reset",
+        actor: "it",
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "password-reset",
+        userAgent
+      }));
+
+      return updatedUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
   async function revokeAdminUserSessions(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
     return updateData((data) => {
       const { hrManager, targetUser } = requireHrManagedAdminTarget(data, req, adminUserId);
@@ -2490,7 +3770,75 @@ export function createSecurityStore({ dataFile } = {}) {
     }));
   }
 
-  async function createEmployeeAccount({ name, username, password } = {}) {
+  async function revokeWebmasterAdminUserSessions(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
+    return updateData((data) => {
+      const { webmasterManager, targetUser } = requireWebmasterManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === webmasterManager.adminUser.id) {
+        throw new Error("Use Sign Out to end your own current admin session.");
+      }
+
+      const changedAt = nowIso();
+      data.adminSessions = revokeAllSessionsForUser(data.adminSessions, targetUser.id, changedAt);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "webmaster_admin_sessions_revoked",
+        actor: "webmaster",
+        accountKey: targetUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "sessions-revoked",
+        userAgent
+      }));
+
+      return targetUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function revokeItAdminUserSessions(req = {}, adminUserId, { userAgent = "", clientIp = "" } = {}) {
+    return updateData((data) => {
+      const { itManager, targetUser } = requireItManagedAdminTarget(data, req, adminUserId);
+
+      if (targetUser.id === itManager.adminUser.id) {
+        throw new Error("Use Sign Out to end your own current IT session.");
+      }
+
+      const changedAt = nowIso();
+      data.adminSessions = revokeAllSessionsForUser(data.adminSessions, targetUser.id, changedAt);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "it_admin_sessions_revoked",
+        actor: "it",
+        accountKey: targetUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "sessions-revoked",
+        userAgent
+      }));
+
+      return targetUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function createEmployeeAccount({
+    name,
+    username,
+    password,
+    externalEmployeeId,
+    email,
+    recoveryEmail,
+    department,
+    location,
+    identityProvider,
+    ssoSubject,
+    inviteSentAt,
+    inviteAcceptedAt,
+    passwordResetRequired
+  } = {}) {
     const employeeName = cleanText(name, 120);
     const employeeUsername = normalizeUsername(username);
 
@@ -2517,6 +3865,16 @@ export function createSecurityStore({ dataFile } = {}) {
         id: crypto.randomUUID(),
         name: employeeName,
         username: employeeUsername,
+        externalEmployeeId,
+        email,
+        recoveryEmail,
+        department,
+        location,
+        identityProvider,
+        ssoSubject,
+        inviteSentAt,
+        inviteAcceptedAt,
+        passwordResetRequired,
         passwordSalt: passwordHash.salt,
         passwordHash: passwordHash.hash,
         active: true,
@@ -2750,6 +4108,168 @@ export function createSecurityStore({ dataFile } = {}) {
     }).then(({ result }) => result);
   }
 
+  async function beginAdminMfaEnrollment(req = {}, { role = "hr" } = {}) {
+    assertAdminMfaAvailable();
+
+    return updateData((data) => {
+      const access = requireRoleSessionForMfa(data, req, role);
+      const changedAt = nowIso();
+      const secret = createTotpSecret();
+      const updatedUser = normalizeAdminUser({
+        ...access.adminUser,
+        pendingMfaSecret: secret,
+        pendingMfaCreatedAt: changedAt,
+        updatedAt: changedAt
+      });
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: `${role}_mfa_enrollment_started`,
+        actor: role,
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "issued",
+        detail: "totp"
+      }));
+
+      return {
+        adminUser: updatedUser,
+        manualEntryKey: secret,
+        otpauthUrl: buildOtpauthUrl(updatedUser, role, secret)
+      };
+    }).then(({ result }) => result);
+  }
+
+  async function verifyAdminMfaEnrollment(req = {}, { role = "hr", code, userAgent = "", clientIp = "" } = {}) {
+    assertAdminMfaAvailable();
+
+    return updateData((data) => {
+      const access = requireRoleSessionForMfa(data, req, role);
+      const secret = cleanText(access.adminUser.pendingMfaSecret, 128);
+
+      if (!secret) {
+        throw new Error("Start MFA setup before verifying a code.");
+      }
+
+      if (!verifyTotpCode(secret, code)) {
+        throw new Error("Authenticator code is invalid.");
+      }
+
+      const changedAt = nowIso();
+      const updatedUser = normalizeAdminUser({
+        ...access.adminUser,
+        mfaSecret: secret,
+        pendingMfaSecret: "",
+        pendingMfaCreatedAt: "",
+        mfaEnabledAt: changedAt,
+        mfaGraceUntil: "",
+        updatedAt: changedAt
+      });
+      const updatedSession = {
+        ...access.session,
+        mfaVerifiedAt: changedAt,
+        updatedAt: changedAt
+      };
+
+      data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+      data.adminSessions = data.adminSessions.map((session) => (
+        session.id === updatedSession.id ? updatedSession : session
+      ));
+      clearAdminIdentityGuards(data, updatedUser.username, clientIp);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: `${role}_mfa_enabled`,
+        actor: role,
+        accountKey: updatedUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "totp",
+        userAgent
+      }));
+
+      return {
+        session: updatedSession,
+        adminUser: updatedUser
+      };
+    }).then(({ result }) => ({
+      ...adminMfaResponse(result.session, result.adminUser),
+      sessionId: result.session.id
+    }));
+  }
+
+  async function verifyAdminMfaChallenge(req = {}, { role = "hr", code, userAgent = "", clientIp = "" } = {}) {
+    assertAdminMfaAvailable();
+
+    return updateData((data) => {
+      const access = requireRoleSessionForMfa(data, req, role);
+      const changedAt = nowIso();
+
+      if (cleanText(access.adminUser.pendingMfaSecret, 128) && !cleanText(access.adminUser.mfaSecret, 128)) {
+        if (!verifyTotpCode(access.adminUser.pendingMfaSecret, code)) {
+          throw new Error("Authenticator code is invalid.");
+        }
+
+        const updatedUser = normalizeAdminUser({
+          ...access.adminUser,
+          mfaSecret: access.adminUser.pendingMfaSecret,
+          pendingMfaSecret: "",
+          pendingMfaCreatedAt: "",
+          mfaEnabledAt: changedAt,
+          mfaGraceUntil: "",
+          updatedAt: changedAt
+        });
+        const updatedSession = {
+          ...access.session,
+          mfaVerifiedAt: changedAt,
+          updatedAt: changedAt
+        };
+
+        data.adminUsers = replaceAdminUser(data.adminUsers, updatedUser);
+        data.adminSessions = data.adminSessions.map((session) => (
+          session.id === updatedSession.id ? updatedSession : session
+        ));
+        appendSecurityEvent(data, createSecurityEvent({
+          type: `${role}_mfa_enrollment_completed`,
+          actor: role,
+          accountKey: updatedUser.username,
+          sourceIp: normalizeSecurityKey(clientIp),
+          outcome: "success",
+          detail: "totp",
+          userAgent
+        }));
+
+        return { session: updatedSession, adminUser: updatedUser };
+      }
+
+      if (!verifyTotpCode(access.adminUser.mfaSecret, code)) {
+        throw new Error("Authenticator code is invalid.");
+      }
+
+      const updatedSession = {
+        ...access.session,
+        mfaVerifiedAt: changedAt,
+        updatedAt: changedAt
+      };
+
+      data.adminSessions = data.adminSessions.map((session) => (
+        session.id === updatedSession.id ? updatedSession : session
+      ));
+      appendSecurityEvent(data, createSecurityEvent({
+        type: `${role}_mfa_verified`,
+        actor: role,
+        accountKey: access.adminUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: "totp",
+        userAgent
+      }));
+
+      return { session: updatedSession, adminUser: access.adminUser };
+    }).then(({ result }) => ({
+      ...adminMfaResponse(result.session, result.adminUser),
+      sessionId: result.session.id
+    }));
+  }
+
   async function issueHrRecoveryCode({ email, userAgent = "", clientIp = "" } = {}) {
     const targetEmail = cleanText(email, 200);
 
@@ -2875,10 +4395,8 @@ export function createSecurityStore({ dataFile } = {}) {
 
       const changedAt = nowIso();
       const nextPassword = createPasswordHash(nextPasswordText);
-      const adminUser = upsertRoleAdminUser(
+      const adminUser = upsertEmergencyHrRecoveryAccount(
         data,
-        "hr",
-        defaultAdminUsername(),
         nextPassword.salt,
         nextPassword.hash,
         changedAt,
@@ -2927,8 +4445,7 @@ export function createSecurityStore({ dataFile } = {}) {
       }
 
       return {
-        ...adminAccessResponse(result.session),
-        user: publicAdminAccessUser(result.adminUser),
+        ...adminMfaResponse(result.session, result.adminUser),
         sessionId: result.session.id
       };
     });
@@ -2941,10 +4458,8 @@ export function createSecurityStore({ dataFile } = {}) {
     return updateData((data) => {
       const changedAt = nowIso();
       const nextPassword = createPasswordHash(nextPasswordText);
-      const adminUser = upsertRoleAdminUser(
+      const adminUser = upsertEmergencyHrRecoveryAccount(
         data,
-        "hr",
-        defaultAdminUsername(),
         nextPassword.salt,
         nextPassword.hash,
         changedAt,
@@ -2981,8 +4496,7 @@ export function createSecurityStore({ dataFile } = {}) {
 
       return { session, adminUser };
     }).then(({ result }) => ({
-      ...adminAccessResponse(result.session),
-      user: publicAdminAccessUser(result.adminUser),
+      ...adminMfaResponse(result.session, result.adminUser),
       sessionId: result.session.id
     }));
   }
@@ -3077,12 +4591,16 @@ export function createSecurityStore({ dataFile } = {}) {
     updateData,
     close,
     getAccessCookieNames,
+    setupItAccess,
     setupAdminAccess,
     setupWebmasterAccess,
+    authenticateIt,
     authenticateAdmin,
     authenticateWebmaster,
+    logoutIt,
     logoutAdmin,
     logoutWebmaster,
+    checkItAccess,
     checkHrAccess,
     checkWebmasterAccess,
     checkEmployeeAccess,
@@ -3090,22 +4608,43 @@ export function createSecurityStore({ dataFile } = {}) {
     logoutEmployee,
     listSecurityEvents,
     recordPushSubscriptionFailure,
+    listItAdminUsers,
     listAdminUsers,
+    listWebmasterAdminUsers,
+    createItAdminUser,
     createAdminUser,
+    createWebmasterAdminUser,
+    inviteItAdminUser,
     inviteAdminUser,
+    inviteWebmasterAdminUser,
+    updateItAdminUserProfile,
     updateAdminUserProfile,
+    updateWebmasterAdminUserProfile,
     updateAdminUserRoles,
+    updateWebmasterAdminUserRoles,
+    updateItAdminUserRoles,
     setAdminUserActive,
+    setWebmasterAdminUserActive,
+    setItAdminUserActive,
+    resendItAdminInvite,
     resendAdminInvite,
+    resendWebmasterAdminInvite,
     previewAdminInvite,
     acceptAdminInvite,
     resetAdminUserPassword,
+    resetWebmasterAdminUserPassword,
+    resetItAdminUserPassword,
     revokeAdminUserSessions,
+    revokeWebmasterAdminUserSessions,
+    revokeItAdminUserSessions,
     listEmployees,
     createEmployeeAccount,
     setEmployeeActive,
     changeAdminPassword,
     changeWebmasterPassword,
+    beginAdminMfaEnrollment,
+    verifyAdminMfaEnrollment,
+    verifyAdminMfaChallenge,
     issueHrRecoveryCode,
     recoverAdminAccessByCode,
     resetHrPasswordByWebmaster,

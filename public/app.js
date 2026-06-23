@@ -152,7 +152,7 @@ document.title = APP_DISPLAY_TITLE;
 const historyFilters = ["All", "Active", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeAdminTab = "publish";
 let activeWebmasterTab = "overview";
-let activeOwnerTab = "accounts";
+let activeItTab = "accounts";
 let activeHistoryFilter = "All";
 let activePushRosterFilter = "active";
 let expandedAcknowledgementPostId = "";
@@ -170,7 +170,7 @@ const webmasterTabs = [
   { id: "codex", label: "Codex", icon: "clipboard" },
   { id: "settings", label: "Settings", icon: "lock" }
 ];
-const ownerTabs = [
+const itTabs = [
   { id: "accounts", label: "Admin Accounts", icon: "users" },
   { id: "company", label: "Company Settings", icon: "board" },
   { id: "audit", label: "Audit Log", icon: "clipboard" },
@@ -199,16 +199,20 @@ const state = {
       loaded: false,
       authorized: false,
       setupRequired: false,
+      mfaRequired: false,
+      mfaMode: "",
       sessionExpiresAt: "",
       csrfToken: "",
       user: null,
       busy: false,
       error: ""
     },
-    owner: {
+    it: {
       loaded: false,
       authorized: false,
       setupRequired: false,
+      mfaRequired: false,
+      mfaMode: "",
       sessionExpiresAt: "",
       csrfToken: "",
       user: null,
@@ -219,6 +223,8 @@ const state = {
       loaded: false,
       authorized: false,
       setupRequired: false,
+      mfaRequired: false,
+      mfaMode: "",
       hrAuthorized: false,
       sessionExpiresAt: "",
       csrfToken: "",
@@ -235,7 +241,7 @@ const state = {
     loaded: false,
     adminUsers: []
   },
-  ownerAdminDirectory: {
+  itAdminDirectory: {
     loaded: false,
     adminUsers: []
   },
@@ -245,6 +251,20 @@ const state = {
     details: null,
     busy: false,
     error: ""
+  },
+  adminMfa: {
+    hr: {
+      busy: false,
+      details: null
+    },
+    it: {
+      busy: false,
+      details: null
+    },
+    webmaster: {
+      busy: false,
+      details: null
+    }
   },
   employeeDirectory: {
     loaded: false,
@@ -281,7 +301,7 @@ const state = {
   messageType: "",
   authRecovery: {
     hr: false,
-    owner: false,
+    it: false,
     webmaster: false
   },
   employeeInstallGuideOpen: false,
@@ -375,7 +395,8 @@ function appPath(...segments) {
   const parts = [APP_BASE_PATH];
 
   for (const segment of segments) {
-    const cleanSegment = String(segment ?? "").replace(/^\/+|\/+$/g, "");
+    const rawSegment = String(segment ?? "").replace(/^\/+|\/+$/g, "");
+    const cleanSegment = rawSegment === "it" ? "it" : rawSegment;
 
     if (cleanSegment) {
       parts.push(cleanSegment);
@@ -397,8 +418,8 @@ function currentRoute() {
     return "webmaster";
   }
 
-  if (pathname === `${APP_BASE_PATH}/owner` || pathname === "/owner" || hash === "#owner") {
-    return "owner";
+  if (pathname === `${APP_BASE_PATH}/it` || pathname === "/it" || hash === "#it") {
+    return "it";
   }
 
   if (pathname === `${APP_BASE_PATH}/hr` || pathname === `${APP_BASE_PATH}/admin` || pathname === "/hr" || pathname === "/admin" || hash === "#hr" || hash === "#admin") {
@@ -428,7 +449,7 @@ function clearInviteToken(nextRoute = currentRoute()) {
 }
 
 function routePath(route) {
-  if (route === "owner") return appPath("owner");
+  if (route === "it") return appPath("it");
   if (route === "webmaster") return appPath("webmaster");
   if (route === "hr") return appPath("hr");
   if (route === "admin") return appPath("hr");
@@ -438,7 +459,7 @@ function routePath(route) {
 
 function routeTitle(route) {
   if (route === "launcher") return "Launcher";
-  if (route === "owner") return "Owner";
+  if (route === "it") return "IT";
   if (route === "webmaster") return "Systems";
   if (route === "hr") return "HR";
   if (route === "admin") return "HR";
@@ -845,7 +866,7 @@ function renderAuthFrame({
 }
 
 function renderAdminAuthFrame({ route, title, description = "", error = "", content, footer = "" }) {
-  const routeLabel = route === "webmaster" ? "System Ops admin" : route === "owner" ? "Owner admin" : "HR admin";
+  const routeLabel = route === "webmaster" ? "System Ops admin" : route === "it" ? "IT admin" : "HR admin";
 
   return `
     <main class="admin-auth-shell">
@@ -1064,12 +1085,12 @@ function csrfTokenForPath(pathname) {
   const route = new URL(String(pathname || "/"), window.location.origin).pathname;
 
   if (
-    route === "/api/owner/logout" ||
-    route === "/api/owner/password" ||
-    route === "/api/owner/admin-users" ||
-    route.startsWith("/api/owner/admin-users/")
+    route === "/api/it/logout" ||
+    route === "/api/it/password" ||
+    route === "/api/it/admin-users" ||
+    route.startsWith("/api/it/admin-users/")
   ) {
-    return String(state.access.owner?.csrfToken || "");
+    return String(state.access.it?.csrfToken || "");
   }
 
   if (
@@ -1102,27 +1123,27 @@ function csrfTokenForPath(pathname) {
 }
 
 function normalizeAdminScope(scope = "hr") {
-  return scope === "owner" ? "owner" : scope === "webmaster" ? "webmaster" : "hr";
+  return scope === "it" ? "it" : scope === "webmaster" ? "webmaster" : "hr";
 }
 
 function adminApiBase(scope = "hr") {
   const normalizedScope = normalizeAdminScope(scope);
-  if (normalizedScope === "owner") return "/api/owner/admin-users";
+  if (normalizedScope === "it") return "/api/it/admin-users";
   if (normalizedScope === "webmaster") return "/api/webmaster/admin-users";
   return "/api/admin-users";
 }
 
 function readAdminDirectory(scope = "hr") {
   const normalizedScope = normalizeAdminScope(scope);
-  if (normalizedScope === "owner") return state.ownerAdminDirectory;
+  if (normalizedScope === "it") return state.itAdminDirectory;
   if (normalizedScope === "webmaster") return state.webmasterAdminDirectory;
   return state.adminDirectory;
 }
 
 function writeAdminDirectory(scope = "hr", nextDirectory) {
   const normalizedScope = normalizeAdminScope(scope);
-  if (normalizedScope === "owner") {
-    state.ownerAdminDirectory = nextDirectory;
+  if (normalizedScope === "it") {
+    state.itAdminDirectory = nextDirectory;
   } else if (normalizedScope === "webmaster") {
     state.webmasterAdminDirectory = nextDirectory;
   } else {
@@ -1132,8 +1153,8 @@ function writeAdminDirectory(scope = "hr", nextDirectory) {
 
 async function refreshAdminManagementScope(scope = "hr") {
   const normalizedScope = normalizeAdminScope(scope);
-  if (normalizedScope === "owner") {
-    await refreshOwnerData();
+  if (normalizedScope === "it") {
+    await refreshItData();
   } else if (normalizedScope === "webmaster") {
     await refreshWebmasterData();
   } else {
@@ -1466,11 +1487,11 @@ async function refreshWebmasterData() {
   return state.webmaster;
 }
 
-async function refreshOwnerData() {
-  const access = await loadOwnerAccessStatus();
+async function refreshItData() {
+  const access = await loadItAccessStatus();
 
   if (!access.authorized) {
-    writeAdminDirectory("owner", {
+    writeAdminDirectory("it", {
       loaded: false,
       adminUsers: []
     });
@@ -1483,44 +1504,50 @@ async function refreshOwnerData() {
     };
   }
 
-  const [ownerAdminDirectory, securityEvents] = await Promise.all([
-    loadAdminDirectory("owner"),
+  const [itAdminDirectory, securityEvents] = await Promise.all([
+    loadAdminDirectory("it"),
     loadSecurityEvents()
   ]);
 
   return {
-    ownerAdminDirectory,
+    itAdminDirectory,
     securityEvents
   };
 }
 
-async function loadOwnerAccessStatus() {
-  const probe = await safeTimedRequestJson("/api/owner/check", {
+async function loadItAccessStatus() {
+  const probe = await safeTimedRequestJson("/api/it/check", {
     authorized: false,
     setupRequired: false,
+    mfaRequired: false,
+    mfaMode: "",
     sessionExpiresAt: "",
     csrfToken: "",
     user: null
   });
 
-  state.access.owner = {
-    ...state.access.owner,
+  state.access.it = {
+    ...state.access.it,
     loaded: true,
     authorized: Boolean(probe.body.authorized),
     setupRequired: Boolean(probe.body.setupRequired),
+    mfaRequired: Boolean(probe.body.mfaRequired),
+    mfaMode: String(probe.body.mfaMode || ""),
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
     user: probe.body.user || null,
     error: ""
   };
 
-  return state.access.owner;
+  return state.access.it;
 }
 
 async function loadHrAccessStatus() {
   const probe = await safeTimedRequestJson("/api/hr/check", {
     authorized: false,
     setupRequired: false,
+    mfaRequired: false,
+    mfaMode: "",
     sessionExpiresAt: "",
     csrfToken: "",
     user: null
@@ -1531,6 +1558,8 @@ async function loadHrAccessStatus() {
     loaded: true,
     authorized: Boolean(probe.body.authorized),
     setupRequired: Boolean(probe.body.setupRequired),
+    mfaRequired: Boolean(probe.body.mfaRequired),
+    mfaMode: String(probe.body.mfaMode || ""),
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
     user: probe.body.user || null,
@@ -1544,6 +1573,8 @@ async function loadWebmasterAccessStatus() {
   const probe = await safeTimedRequestJson("/api/webmaster/check", {
     authorized: false,
     setupRequired: false,
+    mfaRequired: false,
+    mfaMode: "",
     hrAuthorized: false,
     sessionExpiresAt: "",
     csrfToken: "",
@@ -1555,6 +1586,8 @@ async function loadWebmasterAccessStatus() {
     loaded: true,
     authorized: Boolean(probe.body.authorized),
     setupRequired: Boolean(probe.body.setupRequired),
+    mfaRequired: Boolean(probe.body.mfaRequired),
+    mfaMode: String(probe.body.mfaMode || ""),
     hrAuthorized: Boolean(probe.body.hrAuthorized),
     sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
     csrfToken: String(probe.body.csrfToken || ""),
@@ -1575,10 +1608,31 @@ function resetAdminInviteState() {
   };
 }
 
+function readAdminMfaState(route = "hr") {
+  const normalizedRoute = route === "it" ? "it" : route === "webmaster" ? "webmaster" : "hr";
+  return state.adminMfa[normalizedRoute] || { busy: false, details: null };
+}
+
+function writeAdminMfaState(route = "hr", nextState = {}) {
+  const normalizedRoute = route === "it" ? "it" : route === "webmaster" ? "webmaster" : "hr";
+  state.adminMfa[normalizedRoute] = {
+    ...readAdminMfaState(normalizedRoute),
+    ...nextState
+  };
+  return state.adminMfa[normalizedRoute];
+}
+
+function clearAdminMfaState(route = "hr") {
+  writeAdminMfaState(route, {
+    busy: false,
+    details: null
+  });
+}
+
 async function loadAdminInvitePreview(route) {
   const inviteToken = currentInviteToken();
 
-  if (!inviteToken || (route !== "hr" && route !== "webmaster")) {
+  if (!inviteToken || (route !== "hr" && route !== "webmaster" && route !== "it")) {
     resetAdminInviteState();
     return state.adminInvite;
   }
@@ -2876,13 +2930,77 @@ function renderAdminInviteGate(route) {
   });
 }
 
-function renderAdminAuthGate(route) {
-  const normalizedRoute = route === "owner" ? "owner" : route === "webmaster" ? "webmaster" : "hr";
+function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
+  const normalizedRoute = route === "it" ? "it" : route === "webmaster" ? "webmaster" : "hr";
   const access = state.access[normalizedRoute] || state.access.hr;
-  const sectionTitle = normalizedRoute === "owner" ? "Owner" : normalizedRoute === "webmaster" ? "System Ops" : "HR";
+  const mfa = access.user?.mfa || {};
+  if (mfa.available === false) {
+    return "";
+  }
+  const setup = readAdminMfaState(normalizedRoute);
+  const roleLabel = normalizedRoute === "it" ? "IT" : normalizedRoute === "webmaster" ? "System Ops" : "HR";
+  const needsVerify = access.mfaRequired && access.mfaMode === "verify";
+  const needsSetup = access.mfaRequired && access.mfaMode === "setup";
+  const showEnrollment = Boolean(setup.details);
+  const graceNote = mfa.status === "grace" && mfa.graceUntil
+    ? `Google Authenticator is recommended before ${formatDate(mfa.graceUntil)}.`
+    : mfa.status === "enabled"
+      ? "Google Authenticator is enabled for this account."
+      : "Google Authenticator is required before the grace window ends.";
+
+  return `
+    <section class="panel-card settings-credential-card">
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("shield")} Multi-factor authentication</p>
+          <h3>${escapeHtml(roleLabel)} Google Authenticator</h3>
+          <p>${escapeHtml(graceNote)}</p>
+        </div>
+        <span class="admin-table-chip ${mfa.status === "enabled" ? "is-positive" : mfa.status === "grace" ? "is-info" : "is-muted"}">${escapeHtml(mfa.status === "enabled" ? "Enabled" : mfa.status === "grace" ? "Grace" : "Required")}</span>
+      </div>
+      ${showEnrollment ? `
+        <div class="auth-recovery-stack">
+          <div class="invite-summary">
+            <div class="invite-summary-row"><strong>1. Scan with Google Authenticator</strong></div>
+            <div class="invite-summary-row">${setup.details.qrCodeDataUrl ? `<img src="${escapeHtml(setup.details.qrCodeDataUrl)}" alt="Authenticator QR code" style="max-width:220px;width:100%;height:auto;">` : ""}</div>
+            <div class="invite-summary-row">${escapeHtml(setup.details.manualEntryKey || "")}</div>
+          </div>
+          <form class="auth-form" data-admin-mfa-verify-form data-admin-route="${escapeHtml(normalizedRoute)}">
+            <label class="field">
+              <span>6-digit code</span>
+              <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code" placeholder="123456">
+            </label>
+            <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Verifying..." : "Verify Authenticator")}</button>
+          </form>
+        </div>
+      ` : needsVerify ? `
+        <form class="auth-form" data-admin-mfa-verify-form data-admin-route="${escapeHtml(normalizedRoute)}">
+          <label class="field">
+            <span>6-digit code</span>
+            <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code" placeholder="123456">
+          </label>
+          <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Verifying..." : "Verify Code")}</button>
+        </form>
+      ` : mfa.status === "enabled" && !needsSetup ? `
+        <div class="admin-auth-message">
+          Google Authenticator is active for this account. Use the current 6-digit code whenever this role requires step-up verification.
+        </div>
+      ` : `
+        <form class="auth-form" data-admin-mfa-enroll-form data-admin-route="${escapeHtml(normalizedRoute)}">
+          <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Preparing..." : compact ? "Set Up Google Authenticator" : "Generate Google Authenticator QR")}</button>
+        </form>
+      `}
+    </section>
+  `;
+}
+
+function renderAdminAuthGate(route) {
+  const normalizedRoute = route === "it" ? "it" : route === "webmaster" ? "webmaster" : "hr";
+  const access = state.access[normalizedRoute] || state.access.hr;
+  const sectionTitle = normalizedRoute === "it" ? "IT" : normalizedRoute === "webmaster" ? "System Ops" : "HR";
   const inviteToken = currentInviteToken();
   const authError = access.error || state.message;
-  const canSetup = normalizedRoute === "owner" || normalizedRoute === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
+  const canSetup = normalizedRoute === "it" || normalizedRoute === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
   const setupBlocked = normalizedRoute === "webmaster" && access.setupRequired && !access.hrAuthorized;
   const recoveryMode = normalizedRoute === "hr"
     ? state.authRecovery.hr
@@ -2890,18 +3008,26 @@ function renderAdminAuthGate(route) {
       ? state.authRecovery.webmaster
       : false;
 
-  if (inviteToken && normalizedRoute !== "owner") {
+  if (inviteToken) {
     return renderAdminInviteGate(normalizedRoute);
   }
 
-  const heading = recoveryMode
+  const heading = access.mfaRequired
+    ? access.mfaMode === "verify"
+      ? `${sectionTitle} authenticator check`
+      : `Set up ${sectionTitle} Google Authenticator`
+    : recoveryMode
     ? `Reset ${sectionTitle} access`
     : setupBlocked
       ? `${sectionTitle} not ready`
       : canSetup
         ? `Create first ${sectionTitle} admin`
         : `${sectionTitle} sign in`;
-  const description = recoveryMode
+  const description = access.mfaRequired
+    ? access.mfaMode === "verify"
+      ? "Enter the current 6-digit code from Google Authenticator to finish signing in."
+      : "Scan the QR code with Google Authenticator, then enter the 6-digit code to finish access setup."
+    : recoveryMode
     ? normalizedRoute === "hr"
       ? "Use the current HR recovery key to set a new password."
       : "A different active System Ops admin must reset this password from Systems Settings."
@@ -2909,8 +3035,8 @@ function renderAdminAuthGate(route) {
       ? "HR must finish setup or grant Systems access before this screen can be used."
       : canSetup
         ? `Create the first named admin account for ${sectionTitle}.`
-        : normalizedRoute === "owner"
-          ? "Use the named business owner account to continue."
+        : normalizedRoute === "it"
+          ? "Use the named IT account to continue."
         : `Use your named admin account to continue.`;
 
   return renderAdminAuthFrame({
@@ -2918,7 +3044,9 @@ function renderAdminAuthGate(route) {
     title: heading,
     description,
     error: authError,
-    content: recoveryMode
+    content: access.mfaRequired
+      ? renderAdminMfaPanel(normalizedRoute, { compact: true })
+      : recoveryMode
       ? normalizedRoute === "hr"
         ? `
           <form class="auth-form admin-auth-form" data-hr-master-recovery-form>
@@ -2956,7 +3084,7 @@ function renderAdminAuthGate(route) {
       `
       : `
         <form class="auth-form admin-auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(normalizedRoute)}">
-          ${(normalizedRoute === "owner" || normalizedRoute === "hr") && canSetup ? `
+          ${(normalizedRoute === "it" || normalizedRoute === "hr") && canSetup ? `
           <label class="field">
             <span>Deployment setup secret</span>
             <input name="setupToken" type="password" required autocomplete="one-time-code" placeholder="Bootstrap secret">
@@ -2973,7 +3101,13 @@ function renderAdminAuthGate(route) {
           <button class="button admin-auth-submit" type="submit">${escapeHtml(canSetup ? "Save Credentials" : "Sign In")}</button>
         </form>
       `,
-    footer: recoveryMode
+    footer: access.mfaRequired
+      ? `
+        <div class="admin-auth-footer-actions">
+          <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
+        </div>
+      `
+      : recoveryMode
       ? `
         <div class="admin-auth-footer-actions">
           <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(normalizedRoute)}">Back to Sign In</button>
@@ -2991,8 +3125,8 @@ function renderAdminAuthGate(route) {
         <p class="admin-auth-footer-note">${escapeHtml(
           normalizedRoute === "webmaster"
             ? "Finish HR setup first if Systems access has not been assigned yet."
-            : normalizedRoute === "owner"
-              ? "After setup, create backup Owner access and keep daily operations work in scoped accounts."
+            : normalizedRoute === "it"
+              ? "After setup, create backup IT access and keep daily operations work in scoped accounts."
             : "After setup, use Admin Management to create or invite additional admins."
         )}</p>
         <div class="admin-auth-footer-actions">
@@ -3001,7 +3135,7 @@ function renderAdminAuthGate(route) {
       `
       : `
         <div class="admin-auth-footer-actions">
-          ${normalizedRoute === "owner" ? "" : `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(normalizedRoute)}">Forgot Password?</button>`}
+          ${normalizedRoute === "it" ? "" : `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(normalizedRoute)}">Forgot Password?</button>`}
           <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
         </div>
       `
@@ -3009,13 +3143,23 @@ function renderAdminAuthGate(route) {
 }
 
 function renderEmployeeDirectoryRow(employee) {
+  const identitySummary = [employee.email || "", employee.department || "", employee.location || ""]
+    .filter(Boolean)
+    .join(" · ");
+  const accountSummary = [employee.externalEmployeeId ? `ID ${employee.externalEmployeeId}` : "", employee.identityProvider && employee.identityProvider !== "local" ? employee.identityProvider : ""]
+    .filter(Boolean)
+    .join(" · ");
+
   return `
     <tr>
       <td>
         <div class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</div>
+        ${identitySummary ? `<div class="admin-table-secondary">${escapeHtml(identitySummary)}</div>` : ""}
+        ${accountSummary ? `<div class="admin-table-secondary">${escapeHtml(accountSummary)}</div>` : ""}
       </td>
       <td>
         <div class="admin-table-primary">@${escapeHtml(employee.username)}</div>
+        <div class="admin-table-secondary">${escapeHtml(employee.passwordResetRequired ? "Password reset required" : "Password ready")}</div>
       </td>
       <td>
         <span class="admin-table-chip ${employee.active ? "is-positive" : "is-muted"}">${escapeHtml(employee.active ? "Active" : "Disabled")}</span>
@@ -3053,7 +3197,7 @@ function renderEmployeeDirectoryRow(employee) {
 }
 
 function adminRoleLabel(role) {
-  return role === "owner" ? "Owner" : role === "webmaster" ? "System Ops" : "HR";
+  return role === "it" ? "IT" : role === "webmaster" ? "System Ops" : "HR";
 }
 
 function renderAdminRoleChips(roles = []) {
@@ -3086,32 +3230,33 @@ function renderAdminRoleCell(adminUser, scope = "hr") {
   const roles = Array.isArray(adminUser.roles) ? adminUser.roles : [];
   const isCurrentUser = Boolean(adminUser.currentUser);
   const normalizedScope = normalizeAdminScope(scope);
+  const selectedRole = roles[0] || "";
 
-  if (normalizedScope === "owner") {
+  if (normalizedScope === "it") {
     return `
       <div class="admin-role-cell">
         <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
-        <form class="admin-role-editor" data-update-admin-roles-form data-admin-scope="owner">
+        <form class="admin-role-editor" data-update-admin-roles-form data-admin-scope="it">
           <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
           <label class="admin-role-checkbox">
-            <input type="checkbox" name="roles" value="owner" ${roles.includes("owner") ? "checked" : ""}>
-            Owner
+            <input type="radio" name="roles" value="it" ${selectedRole === "it" ? "checked" : ""}>
+            IT
           </label>
-            <label class="admin-role-checkbox">
-              <input type="checkbox" name="roles" value="hr" ${roles.includes("hr") ? "checked" : ""}>
-              HR
-            </label>
-            <label class="admin-role-checkbox">
-              <input type="checkbox" name="roles" value="webmaster" ${roles.includes("webmaster") ? "checked" : ""}>
-              System Ops
-            </label>
+          <label class="admin-role-checkbox">
+            <input type="radio" name="roles" value="hr" ${selectedRole === "hr" ? "checked" : ""}>
+            HR
+          </label>
+          <label class="admin-role-checkbox">
+            <input type="radio" name="roles" value="webmaster" ${selectedRole === "webmaster" ? "checked" : ""}>
+            System Ops
+          </label>
           <button class="ghost-button" type="submit">${icon("check")} Save Roles</button>
         </form>
         <div class="admin-table-secondary">
           ${escapeHtml(
             isCurrentUser
-              ? "Current account must keep Owner access while this session is active."
-              : "Owner can assign Business, HR, and System Ops permissions."
+              ? "Current account must keep IT access while this session is active."
+              : "IT assigns exactly one privileged role per named account."
           )}
         </div>
       </div>
@@ -3122,7 +3267,7 @@ function renderAdminRoleCell(adminUser, scope = "hr") {
     return `
       <div class="admin-role-cell">
         <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
-        <div class="admin-table-secondary">System Ops roles stay outside the HR console.</div>
+        <div class="admin-table-secondary">System Ops and IT roles stay outside the HR console.</div>
       </div>
     `;
   }
@@ -3130,23 +3275,11 @@ function renderAdminRoleCell(adminUser, scope = "hr") {
   return `
     <div class="admin-role-cell">
       <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
-      <form class="admin-role-editor" data-update-admin-roles-form data-admin-scope="webmaster">
-        <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
-        <label class="admin-role-checkbox">
-          <input type="checkbox" name="roles" value="webmaster" ${roles.includes("webmaster") ? "checked" : ""}>
-          System Ops
-        </label>
-        <label class="admin-role-checkbox">
-          <input type="checkbox" name="roles" value="hr" ${roles.includes("hr") ? "checked" : ""}>
-          HR
-        </label>
-        <button class="ghost-button" type="submit">${icon("check")} Save Roles</button>
-      </form>
       <div class="admin-table-secondary">
         ${escapeHtml(
           isCurrentUser
             ? "Current account must keep System Ops access while this session is active."
-            : "Removing System Ops access returns the account to HR ownership."
+            : "System Ops accounts stay single-purpose and cannot be reclassified here."
         )}
       </div>
     </div>
@@ -3241,7 +3374,7 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
 
 function renderAdminDirectoryTable(adminUsers, scope = "hr") {
   if (!adminUsers.length) {
-    const emptyText = normalizeAdminScope(scope) === "owner"
+    const emptyText = normalizeAdminScope(scope) === "it"
       ? "No Admin Accounts Yet."
       : normalizeAdminScope(scope) === "webmaster"
         ? "No System Ops Admin Accounts Yet."
@@ -3273,33 +3406,33 @@ function renderAdminDirectoryTable(adminUsers, scope = "hr") {
 function renderAdminAccountsPanel(scope = "hr") {
   const normalizedScope = normalizeAdminScope(scope);
   const adminUsers = Array.isArray(readAdminDirectory(normalizedScope).adminUsers) ? readAdminDirectory(normalizedScope).adminUsers : [];
-  const title = normalizedScope === "owner" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
-  const countLabel = normalizedScope === "owner" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
-  const summaryText = normalizedScope === "owner"
-    ? "Manage all named Owner, HR, and System Ops admin accounts from this governance surface."
+  const title = normalizedScope === "it" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
+  const countLabel = normalizedScope === "it" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
+  const summaryText = normalizedScope === "it"
+    ? "Manage named IT, HR, and System Ops identities here. Each account carries exactly one privileged role."
     : normalizedScope === "webmaster"
-      ? "Manage system ops-role accounts here. Removing System Ops access returns the identity to HR ownership."
-      : "System Ops accounts are intentionally hidden from the HR console.";
-  const createNote = normalizedScope === "owner"
-    ? "Create a backup Owner account first, then keep day-to-day HR and System Ops access scoped to the right teams."
+      ? "Manage named System Ops identities here. These accounts stay separate from HR and IT access."
+      : "Manage named HR identities here. System Ops and IT accounts stay outside the HR console.";
+  const createNote = normalizedScope === "it"
+    ? "Create one role per account. Keep backup IT access separate from day-to-day HR and System Ops work."
     : normalizedScope === "webmaster"
-      ? "This surface creates System Ops admin accounts. Add HR only when the account should hold both roles."
-      : "This surface creates HR admin accounts. System Ops accounts stay outside the HR console.";
-  const roleControl = normalizedScope === "owner"
+      ? "This surface creates System Ops-only admin accounts."
+      : "This surface creates HR-only admin accounts.";
+  const roleControl = normalizedScope === "it"
     ? `
         <div class="field">
-          <span>Roles</span>
+          <span>Role</span>
           <div class="admin-role-chip-row">
             <label class="admin-role-checkbox">
-              <input name="roles" type="checkbox" value="owner">
-              Owner
+              <input name="roles" type="radio" value="it">
+              IT
             </label>
             <label class="admin-role-checkbox">
-              <input name="roles" type="checkbox" value="hr" checked>
+              <input name="roles" type="radio" value="hr" checked>
               HR
             </label>
             <label class="admin-role-checkbox">
-              <input name="roles" type="checkbox" value="webmaster">
+              <input name="roles" type="radio" value="webmaster">
               System Ops
             </label>
           </div>
@@ -3307,16 +3440,10 @@ function renderAdminAccountsPanel(scope = "hr") {
       `
     : normalizedScope === "webmaster"
     ? `
+        <input name="roles" type="hidden" value="webmaster">
         <div class="field">
-          <span>Roles</span>
-          <div class="admin-role-chip-row">
-            <span class="admin-table-chip is-info">System Ops</span>
-            <label class="admin-role-checkbox">
-              <input name="roles" type="checkbox" value="hr">
-              HR
-            </label>
-          </div>
-          <input name="roles" type="hidden" value="webmaster">
+          <span>Role</span>
+          <div class="admin-role-chip-row">${renderAdminRoleChips(["webmaster"])}</div>
         </div>
       `
     : `
@@ -3407,19 +3534,56 @@ function renderEmployeeDirectoryPanel() {
       </div>
 
       <form class="employee-create-form employee-create-grid" data-create-employee-form>
-          <label class="field">
-            <span>Name</span>
-            <input name="name" maxlength="120" required placeholder="Employee Name">
-          </label>
-          <label class="field">
-            <span>Username</span>
-            <input name="username" maxlength="80" required placeholder="Username">
-          </label>
-          <label class="field">
-            <span>Temporary password</span>
-            <input name="password" type="password" minlength="10" required placeholder="Temporary Password">
-          </label>
-          <button class="button employee-create-submit" type="submit">${icon("users")} Create Account</button>
+        <label class="field">
+          <span>Name</span>
+          <input name="name" maxlength="120" required placeholder="Employee Name">
+        </label>
+        <label class="field">
+          <span>Username</span>
+          <input name="username" maxlength="80" required placeholder="Username">
+        </label>
+        <label class="field">
+          <span>Email</span>
+          <input name="email" type="email" maxlength="200" placeholder="employee@company.com">
+        </label>
+        <label class="field">
+          <span>Recovery email</span>
+          <input name="recoveryEmail" type="email" maxlength="200" placeholder="personal@example.com">
+        </label>
+        <label class="field">
+          <span>Employee ID</span>
+          <input name="externalEmployeeId" maxlength="80" placeholder="EMP-1024">
+        </label>
+        <label class="field">
+          <span>Department</span>
+          <input name="department" maxlength="80" placeholder="Operations">
+        </label>
+        <label class="field">
+          <span>Location</span>
+          <input name="location" maxlength="80" placeholder="Boston">
+        </label>
+        <label class="field">
+          <span>Identity provider</span>
+          <select name="identityProvider">
+            <option value="local" selected>Local</option>
+            <option value="google">Google Workspace</option>
+            <option value="microsoft">Microsoft Entra ID</option>
+            <option value="okta">Okta</option>
+          </select>
+        </label>
+        <label class="field field-span-2">
+          <span>SSO subject</span>
+          <input name="ssoSubject" maxlength="160" placeholder="Optional external identity subject">
+        </label>
+        <label class="field field-span-2">
+          <span>Temporary password</span>
+          <input name="password" type="password" minlength="10" required placeholder="Temporary Password">
+        </label>
+        <label class="checkbox-row field-span-2">
+          <input name="passwordResetRequired" type="checkbox" checked>
+          <span>Require password reset on first use</span>
+        </label>
+        <button class="button employee-create-submit" type="submit">${icon("users")} Create Account</button>
       </form>
 
       ${renderEmployeeDirectoryTable(employees)}
@@ -3472,6 +3636,21 @@ function renderLauncherCard(route, title) {
   `;
 }
 
+function renderLauncherModule(title, actions = []) {
+  return `
+    <section class="launch-card launch-card-module" data-route="webmaster" aria-label="${escapeHtml(title)}">
+      <strong class="launch-card-label">${escapeHtml(title)}</strong>
+      <div class="launch-card-module-links">
+        ${actions.map(({ route, title: actionTitle }) => `
+          <a class="launch-card-module-link" href="${escapeHtml(routePath(route))}" data-route="${escapeHtml(route)}">
+            ${escapeHtml(actionTitle)}
+          </a>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderLauncher() {
   return `
     <main class="page-shell launcher-shell">
@@ -3485,10 +3664,12 @@ function renderLauncher() {
 
         <div class="launcher-panel">
           <div class="launcher-grid">
-            ${renderLauncherCard("employee", "Employee login")}
-            ${renderLauncherCard("owner", "Owner login")}
-            ${renderLauncherCard("hr", "HR login")}
-            ${renderLauncherCard("webmaster", "Systems login")}
+            ${renderLauncherCard("employee", "Employee Login")}
+            ${renderLauncherCard("hr", "HR Login")}
+            ${renderLauncherModule("Systems / IT", [
+              { route: "webmaster", title: "Systems Login" },
+              { route: "it", title: "IT Login" }
+            ])}
           </div>
         </div>
       </section>
@@ -4012,6 +4193,8 @@ function renderWebmasterHrResetPanel() {
 function renderAdminSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
+      ${renderRoleSettingsHero("hr")}
+      ${state.access.hr.user?.mfa?.available ? renderAdminMfaPanel("hr") : ""}
       ${renderPrivilegedPasswordPanel("hr")}
     </section>
   `;
@@ -4046,6 +4229,7 @@ function renderWebmasterSettingsPanel() {
       </section>
 
       ${renderPrivilegedPasswordPanel("webmaster")}
+      ${state.access.webmaster.user?.mfa?.available ? renderAdminMfaPanel("webmaster") : ""}
       ${renderAdminAccountsPanel("webmaster")}
       ${renderWebmasterHrResetPanel()}
     </section>
@@ -4550,7 +4734,7 @@ function renderWebmaster() {
   `;
 }
 
-function renderOwnerCompanySettingsPanel() {
+function renderItCompanySettingsPanel() {
   return `
     <section class="panel-stack">
       <section class="panel-card">
@@ -4558,12 +4742,12 @@ function renderOwnerCompanySettingsPanel() {
           <div>
             <p class="eyebrow">${icon("board")} Company Settings</p>
             <h3>Business Control</h3>
-            <p>Use this area for company profile, billing owner, data-retention, and compliance defaults once those services are connected.</p>
+            <p>Use this area for company profile, billing contact, data-retention, and compliance defaults once those services are connected.</p>
           </div>
           <span class="sync-pill">Planned</span>
         </div>
         <div class="hero-strip hero-strip-hr" aria-label="Company settings readiness">
-          ${renderStatCard("Ready", "Role Model", "Owner is active server-side")}
+          ${renderStatCard("Ready", "Role Model", "IT is active server-side")}
           ${renderStatCard("Next", "Billing", "Connect payment settings")}
           ${renderStatCard("Next", "Retention", "Set audit and post retention")}
         </div>
@@ -4572,9 +4756,25 @@ function renderOwnerCompanySettingsPanel() {
   `;
 }
 
-function renderOwnerEmergencyPanel() {
-  const owners = (state.ownerAdminDirectory.adminUsers || []).filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("owner"));
-  const activeOwners = owners.filter((adminUser) => adminUser.active !== false);
+function renderItEmergencyPanel() {
+  const itAdmins = (state.itAdminDirectory.adminUsers || []).filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("it"));
+  const activeItAdmins = itAdmins.filter((adminUser) => adminUser.active !== false);
+  const itMfaAvailable = state.access.it.user?.mfa?.available !== false;
+  const itMfaStatus = state.access.it.user?.mfa?.status || "setup-required";
+  const itMfaLabel = !itMfaAvailable
+    ? "Off"
+    : itMfaStatus === "enabled"
+      ? "Enabled"
+      : itMfaStatus === "grace"
+        ? "Grace"
+        : "Required";
+  const itMfaNote = !itMfaAvailable
+    ? "Google Authenticator is currently disabled for admin accounts."
+    : itMfaStatus === "enabled"
+      ? "IT authenticator is active."
+      : itMfaStatus === "grace"
+        ? "Finish enrollment before the grace window ends."
+        : "Enrollment is required before IT access is fully active.";
 
   return `
     <section class="panel-stack">
@@ -4583,31 +4783,32 @@ function renderOwnerEmergencyPanel() {
           <div>
             <p class="eyebrow">${icon("alert")} Emergency Access</p>
             <h3>Recovery Readiness</h3>
-            <p>Keep at least two active named Owner accounts. Do not use shared master credentials for emergency access.</p>
+            <p>Keep at least two active named IT accounts. Do not use shared master credentials for emergency access.</p>
           </div>
-          <span class="sync-pill">${escapeHtml(`${activeOwners.length} Active Owner${activeOwners.length === 1 ? "" : "s"}`)}</span>
+          <span class="sync-pill">${escapeHtml(`${activeItAdmins.length} Active IT Account${activeItAdmins.length === 1 ? "" : "s"}`)}</span>
         </div>
         <div class="hero-strip hero-strip-hr" aria-label="Emergency access summary">
-          ${renderStatCard(String(activeOwners.length), "Active Owners", "Named business-owner access")}
-          ${renderStatCard(activeOwners.length >= 2 ? "Healthy" : "Needs Backup", "Backup Owner", "Create one backup Owner account")}
-          ${renderStatCard("Future", "MFA", "Require stronger owner authentication")}
+          ${renderStatCard(String(activeItAdmins.length), "Active IT Accounts", "Named IT governance access")}
+          ${renderStatCard(activeItAdmins.length >= 2 ? "Healthy" : "Needs Backup", "Backup IT", "Create one backup IT account")}
+          ${renderStatCard(itMfaLabel, "MFA", itMfaNote)}
         </div>
       </section>
+      ${itMfaAvailable ? renderAdminMfaPanel("it") : ""}
     </section>
   `;
 }
 
-function renderOwner() {
-  const adminUsers = Array.isArray(state.ownerAdminDirectory.adminUsers) ? state.ownerAdminDirectory.adminUsers : [];
+function renderIt() {
+  const adminUsers = Array.isArray(state.itAdminDirectory.adminUsers) ? state.itAdminDirectory.adminUsers : [];
   const activeAdmins = adminUsers.filter((adminUser) => adminUser.active !== false);
-  const ownerCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("owner")).length;
+  const itCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("it")).length;
   const hrCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("hr")).length;
   const webmasterCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("webmaster")).length;
 
   return `
-    <main class="page-shell owner-shell">
+    <main class="page-shell it-shell">
       <header class="page-head">
-        ${brandBlock("Owner Control Center")}
+        ${brandBlock("IT Control Center")}
         <div class="page-actions">
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
@@ -4618,26 +4819,26 @@ function renderOwner() {
       </header>
 
       ${renderAppUpdateBanner()}
-      <section class="hero-strip hero-strip-webmaster" aria-label="Owner summary">
+      <section class="hero-strip hero-strip-webmaster" aria-label="IT summary">
         ${renderStatCard(String(adminUsers.length), "Admin Accounts", "All named admin identities")}
-        ${renderStatCard(String(ownerCount), "Owners", "Business-control accounts")}
+        ${renderStatCard(String(itCount), "IT Admins", "Governance and recovery access")}
         ${renderStatCard(String(hrCount), "HR Admins", "HR and communication access")}
         ${renderStatCard(String(webmasterCount), "System Ops Admins", "System operations access")}
       </section>
 
       ${state.message ? `<div class="webmaster-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
-      ${renderTabBar(ownerTabs, activeOwnerTab, "owner", "Owner sections")}
+      ${renderTabBar(itTabs, activeItTab, "it", "IT sections")}
 
       <section class="panel-surface">
         ${
-          activeOwnerTab === "company"
-            ? renderOwnerCompanySettingsPanel()
-            : activeOwnerTab === "audit"
+          activeItTab === "company"
+            ? renderItCompanySettingsPanel()
+            : activeItTab === "audit"
               ? renderAdminSecurityPanel()
-              : activeOwnerTab === "emergency"
-                ? renderOwnerEmergencyPanel()
-                : renderAdminAccountsPanel("owner")
+              : activeItTab === "emergency"
+                ? renderItEmergencyPanel()
+                : renderAdminAccountsPanel("it")
         }
       </section>
     </main>
@@ -4712,7 +4913,7 @@ function clearMessageSoon() {
 async function routeTo(route) {
   const nextPath = routePath(route);
   state.authRecovery.hr = false;
-  state.authRecovery.owner = false;
+  state.authRecovery.it = false;
   state.authRecovery.webmaster = false;
   resetAdminInviteState();
 
@@ -4720,14 +4921,14 @@ async function routeTo(route) {
     activeAdminTab = "publish";
     activeHistoryFilter = "All";
     activeWebmasterTab = "overview";
-    activeOwnerTab = "accounts";
+    activeItTab = "accounts";
   }
 
   if (route === "hr") {
     activeAdminTab = "publish";
     activeHistoryFilter = "All";
-  } else if (route === "owner") {
-    activeOwnerTab = "accounts";
+  } else if (route === "it") {
+    activeItTab = "accounts";
   } else if (route === "webmaster") {
     activeWebmasterTab = "overview";
   }
@@ -4760,8 +4961,8 @@ async function hydrateRoute() {
     return;
   }
 
-  if (route === "owner") {
-    await refreshOwnerData();
+  if (route === "it") {
+    await refreshItData();
     resetAdminInviteState();
     return;
   }
@@ -4810,15 +5011,15 @@ function render() {
       ? renderLauncher()
     : route === "hr"
         ? (state.access.hr.authorized ? renderAdmin() : renderAdminAuthGate("hr"))
-      : route === "owner"
-        ? (state.access.owner.authorized ? renderOwner() : renderAdminAuthGate("owner"))
+      : route === "it"
+        ? (state.access.it.authorized ? renderIt() : renderAdminAuthGate("it"))
       : route === "webmaster"
           ? (state.access.webmaster.authorized ? renderWebmaster() : renderAdminAuthGate("webmaster"))
           : (state.access.employee.authorized ? renderEmployee() : renderEmployeeAuthGate());
   document.title = route === "launcher"
     ? APP_DISPLAY_TITLE
-    : route === "owner"
-    ? `${APP_DISPLAY_TITLE} Owner`
+    : route === "it"
+    ? `${APP_DISPLAY_TITLE} IT`
     : route === "hr"
       ? `${APP_DISPLAY_TITLE} HR`
     : route === "webmaster"
@@ -5057,8 +5258,8 @@ async function handleAdminAuthSubmit(event) {
   const mode = form.dataset.adminAuthMode === "setup" ? "setup" : "login";
   const route = normalizeAdminScope(form.dataset.adminRoute);
   const targetAccess = route;
-  const endpoint = route === "owner"
-    ? (mode === "setup" ? "/api/owner/setup" : "/api/owner/login")
+  const endpoint = route === "it"
+    ? (mode === "setup" ? "/api/it/setup" : "/api/it/login")
     : route === "webmaster"
     ? (mode === "setup" ? "/api/webmaster/setup" : "/api/webmaster/login")
     : (mode === "setup" ? "/api/hr/setup" : "/api/hr/login");
@@ -5071,14 +5272,22 @@ async function handleAdminAuthSubmit(event) {
   render();
 
   try {
-    await requestJson(endpoint, {
+    const result = await requestJson(endpoint, {
       method: "POST",
       body: JSON.stringify(data)
     });
+    clearAdminMfaState(route);
     await hydrateRoute();
-    if (mode === "setup") {
+    if (result.mfaRequired) {
       setMessage(
-        route === "owner" ? "Owner credentials configured." : route === "webmaster" ? "Systems credentials configured." : "HR credentials configured.",
+        result.mfaMode === "verify"
+          ? "Enter the current Google Authenticator code to finish sign in."
+          : "Set up Google Authenticator to finish access setup.",
+        "success"
+      );
+    } else if (mode === "setup") {
+      setMessage(
+        route === "it" ? "IT credentials configured." : route === "webmaster" ? "Systems credentials configured." : "HR credentials configured.",
         "success"
       );
     } else {
@@ -5100,7 +5309,7 @@ async function handleAcceptAdminInviteSubmit(event) {
   event.preventDefault();
   const form = event.target;
   const formData = new FormData(form);
-  const route = currentRoute() === "webmaster" ? "webmaster" : "hr";
+  const route = currentRoute() === "it" ? "it" : currentRoute() === "webmaster" ? "webmaster" : "hr";
   const inviteToken = currentInviteToken();
   const password = String(formData.get("password") || "");
   const confirmPassword = String(formData.get("confirmPassword") || "");
@@ -5134,7 +5343,8 @@ async function handleAcceptAdminInviteSubmit(event) {
         password
       })
     });
-    clearInviteToken(result.preferredRoute === "webmaster" ? "webmaster" : route);
+    clearAdminMfaState(result.preferredRoute || route);
+    clearInviteToken(result.preferredRoute || route);
     resetAdminInviteState();
     await hydrateRoute();
     setMessage("Invitation accepted. Password saved.", "success");
@@ -5153,7 +5363,9 @@ async function handleAcceptAdminInviteSubmit(event) {
 async function handleCreateEmployeeSubmit(event) {
   event.preventDefault();
   const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
+  const formData = new FormData(form);
+  const data = Object.fromEntries(formData);
+  data.passwordResetRequired = formData.get("passwordResetRequired") !== null;
 
   try {
     await requestJson("/api/employees", {
@@ -5171,6 +5383,102 @@ async function handleCreateEmployeeSubmit(event) {
   clearMessageSoon();
 }
 
+function resetAdminCreateFormDefaults(form, scope) {
+  if (scope === "it") {
+    const defaultRole = form.querySelector('input[name="roles"][value="hr"]');
+    if (defaultRole instanceof HTMLInputElement) {
+      defaultRole.checked = true;
+    }
+  }
+}
+
+function adminMfaApiBase(route) {
+  return route === "it"
+    ? "/api/it/mfa"
+    : route === "webmaster"
+      ? "/api/webmaster/mfa"
+      : "/api/hr/mfa";
+}
+
+async function handleAdminMfaEnrollSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const route = normalizeAdminScope(form.dataset.adminRoute);
+
+  writeAdminMfaState(route, {
+    busy: true
+  });
+  state.access[route] = {
+    ...state.access[route],
+    error: ""
+  };
+  render();
+
+  try {
+    const result = await requestJson(`${adminMfaApiBase(route)}/enroll`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    writeAdminMfaState(route, {
+      busy: false,
+      details: result
+    });
+    setMessage("Scan the QR code with Google Authenticator, then verify the current code.", "success");
+  } catch (error) {
+    writeAdminMfaState(route, {
+      busy: false
+    });
+    state.access[route] = {
+      ...state.access[route],
+      error: error.message || "Could not start Google Authenticator setup."
+    };
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleAdminMfaVerifySubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const route = normalizeAdminScope(form.dataset.adminRoute);
+  const access = state.access[route];
+  const enabling = Boolean(readAdminMfaState(route).details) || access.mfaMode === "setup";
+
+  writeAdminMfaState(route, {
+    busy: true
+  });
+  state.access[route] = {
+    ...state.access[route],
+    error: ""
+  };
+  render();
+
+  try {
+    await requestJson(`${adminMfaApiBase(route)}/verify`, {
+      method: "POST",
+      body: JSON.stringify({
+        code: String(formData.get("code") || "")
+      })
+    });
+    clearAdminMfaState(route);
+    await hydrateRoute();
+    setMessage(enabling ? "Google Authenticator enabled." : "Google Authenticator verified.", "success");
+  } catch (error) {
+    writeAdminMfaState(route, {
+      busy: false
+    });
+    state.access[route] = {
+      ...state.access[route],
+      error: error.message || "Could not verify the authenticator code."
+    };
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleCreateAdminSubmit(event) {
   event.preventDefault();
   const form = event.target;
@@ -5179,7 +5487,6 @@ async function handleCreateAdminSubmit(event) {
   const action = submitter?.dataset.adminCreateAction === "password" ? "password" : "invite";
   const scope = normalizeAdminScope(form.dataset.adminScope);
   const adminApi = adminApiBase(scope);
-  const defaultHrCheckbox = form.querySelector('input[name="roles"][value="hr"]');
   const payload = {
     displayName: formData.get("displayName"),
     email: formData.get("email"),
@@ -5203,12 +5510,10 @@ async function handleCreateAdminSubmit(event) {
         })
       });
       form.reset();
-      if (defaultHrCheckbox) {
-        defaultHrCheckbox.checked = true;
-      }
+      resetAdminCreateFormDefaults(form, scope);
       await refreshAdminManagementScope(scope);
       setMessage(
-        scope === "owner"
+        scope === "it"
           ? "Admin account created with a temporary password."
           : scope === "webmaster"
           ? "System Ops admin account created with a temporary password."
@@ -5225,18 +5530,16 @@ async function handleCreateAdminSubmit(event) {
       body: JSON.stringify(payload)
     });
     form.reset();
-    if (defaultHrCheckbox) {
-      defaultHrCheckbox.checked = true;
-    }
+    resetAdminCreateFormDefaults(form, scope);
     await refreshAdminManagementScope(scope);
     setMessage(
       result.emailDelivered === false
-        ? scope === "owner"
+        ? scope === "it"
           ? "Admin account created, but the invitation email could not be sent."
           : scope === "webmaster"
           ? "System Ops admin account created, but the invitation email could not be sent."
           : "Admin account created, but the invitation email could not be sent."
-        : scope === "owner"
+        : scope === "it"
           ? "Admin invitation sent."
         : scope === "webmaster"
           ? "System Ops admin invitation sent."
@@ -5290,12 +5593,12 @@ async function handleResendAdminInviteSubmit(event) {
     await refreshAdminManagementScope(scope);
     setMessage(
       result.emailDelivered === false
-        ? scope === "owner"
+        ? scope === "it"
           ? "Invitation refreshed, but the email could not be sent."
           : scope === "webmaster"
           ? "System Ops invitation refreshed, but the email could not be sent."
           : "Invitation refreshed, but the email could not be sent."
-        : scope === "owner"
+        : scope === "it"
           ? "Invitation sent."
         : scope === "webmaster"
           ? "System Ops invitation sent."
@@ -5669,8 +5972,8 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     if (tabButton.dataset.tabGroup === "hr") {
       activeAdminTab = tabButton.dataset.tab || "publish";
-    } else if (tabButton.dataset.tabGroup === "owner") {
-      activeOwnerTab = tabButton.dataset.tab || "accounts";
+    } else if (tabButton.dataset.tabGroup === "it") {
+      activeItTab = tabButton.dataset.tab || "accounts";
     } else if (tabButton.dataset.tabGroup === "webmaster") {
       activeWebmasterTab = tabButton.dataset.tab || "overview";
     }
@@ -5747,14 +6050,15 @@ document.addEventListener("click", async (event) => {
 
   if (adminLogoutButton) {
     event.preventDefault();
-    const route = currentRoute() === "owner" ? "owner" : currentRoute() === "webmaster" ? "webmaster" : "hr";
-    await requestJson(route === "owner" ? "/api/owner/logout" : route === "webmaster" ? "/api/webmaster/logout" : "/api/hr/logout", {
+    const route = currentRoute() === "it" ? "it" : currentRoute() === "webmaster" ? "webmaster" : "hr";
+    await requestJson(route === "it" ? "/api/it/logout" : route === "webmaster" ? "/api/webmaster/logout" : "/api/hr/logout", {
       method: "POST",
       body: JSON.stringify({})
     });
-    if (route === "owner") {
-      state.access.owner = {
-        ...state.access.owner,
+    clearAdminMfaState(route);
+    if (route === "it") {
+      state.access.it = {
+        ...state.access.it,
         authorized: false,
         sessionExpiresAt: "",
         csrfToken: "",
@@ -5784,8 +6088,8 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.closest("[data-refresh]")) {
-    if (currentRoute() === "owner") {
-      await refreshOwnerData();
+    if (currentRoute() === "it") {
+      await refreshItData();
     } else if (currentRoute() === "webmaster") {
       await refreshWebmasterData();
     } else if (currentRoute() === "hr") {
@@ -5879,6 +6183,16 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-admin-auth-form]")) {
     await handleAdminAuthSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-admin-mfa-enroll-form]")) {
+    await handleAdminMfaEnrollSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-admin-mfa-verify-form]")) {
+    await handleAdminMfaVerifySubmit(event);
     return;
   }
 
