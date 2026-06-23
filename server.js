@@ -17,7 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PUBLIC_DIR = process.env.PUBLIC_DIR ? path.resolve(process.env.PUBLIC_DIR) : path.join(__dirname, "public");
 const INDEX_HTML_TEMPLATE_PATH = path.join(PUBLIC_DIR, "index.html");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
 const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
@@ -77,8 +77,6 @@ function readSiteConfig() {
 }
 
 const siteConfig = readSiteConfig();
-const indexHtmlTemplate = await readFile(INDEX_HTML_TEMPLATE_PATH, "utf8");
-const serviceWorkerTemplate = await readFile(SERVICE_WORKER_TEMPLATE_PATH, "utf8");
 const ASSET_VERSION_PATHS = [
   path.join(PUBLIC_DIR, "app.js"),
   path.join(PUBLIC_DIR, "styles.css"),
@@ -245,7 +243,7 @@ async function sendRecoveryEmail({ to, code, expiresAt } = {}) {
 }
 
 function adminRoleLabel(role) {
-  return role === "webmaster" ? "IT" : role === "hr" ? "HR" : "Admin";
+  return role === "webmaster" ? "System Ops" : role === "hr" ? "HR" : "Admin";
 }
 
 function buildAdminInviteUrl(req, route, token) {
@@ -662,6 +660,7 @@ async function resolveAssetVersion() {
 
 async function renderIndexHtml() {
   const assetVersion = await resolveAssetVersion();
+  const indexHtmlTemplate = await readFile(INDEX_HTML_TEMPLATE_PATH, "utf8");
 
   return indexHtmlTemplate
     .replaceAll("__SITE_NAME__", escapeHtml(displayBrandName(siteConfig)))
@@ -679,6 +678,7 @@ async function renderIndexHtml() {
 
 async function renderServiceWorker() {
   const assetVersion = await resolveAssetVersion();
+  const serviceWorkerTemplate = await readFile(SERVICE_WORKER_TEMPLATE_PATH, "utf8");
   return serviceWorkerTemplate.replaceAll("__ASSET_VERSION__", assetVersion);
 }
 
@@ -710,7 +710,7 @@ function sendManifest(res) {
     name: displayBrandName(siteConfig),
     short_name: siteConfig.shortName,
     description: siteConfig.description,
-    start_url: appPath(),
+    start_url: `${appPath()}/`,
     scope: `${APP_BASE_PATH}/`,
     display: "standalone",
     background_color: siteConfig.backgroundColor,
@@ -739,9 +739,9 @@ function sendManifest(res) {
         icons: [icon]
       },
       {
-        name: "Webmaster",
+        name: "Systems",
         short_name: "Web",
-        description: "Open analytics and site diagnostics",
+        description: "Open systems analytics and diagnostics",
         url: appPath("webmaster"),
         icons: [icon]
       }
@@ -940,6 +940,17 @@ async function requireWebmasterAccess(req, res) {
   return access;
 }
 
+async function requireOwnerAccess(req, res) {
+  const access = await securityStore.checkOwnerAccess(req);
+
+  if (!access.authorized) {
+    sendJson(res, 401, access);
+    return null;
+  }
+
+  return access;
+}
+
 async function requireEmployeeAccess(req, res) {
   const access = await securityStore.checkEmployeeAccess(req);
 
@@ -1099,6 +1110,25 @@ async function requireWebmasterMutationAccess(req, res) {
   return access;
 }
 
+async function requireOwnerMutationAccess(req, res) {
+  if (!requireSameOrigin(req, res)) {
+    return null;
+  }
+
+  const access = await requireOwnerAccess(req, res);
+
+  if (!access) {
+    return null;
+  }
+
+  if (!access.csrfToken || requestCsrfToken(req) !== access.csrfToken) {
+    sendError(res, 403, "Invalid CSRF token.");
+    return null;
+  }
+
+  return access;
+}
+
 async function disableEmployeePushAccess(employeeId) {
   const targetEmployeeId = cleanText(employeeId, 80);
 
@@ -1227,6 +1257,55 @@ function sortedPosts(posts) {
   return [...posts].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
+function acknowledgementsForPost(data, postId) {
+  return (Array.isArray(data.acknowledgements) ? data.acknowledgements : [])
+    .filter((acknowledgement) => acknowledgement.postId === postId)
+    .sort((a, b) => new Date(b.acknowledgedAt) - new Date(a.acknowledgedAt));
+}
+
+function postRequiresAcknowledgement(post = {}) {
+  return post.priority === "Important" || post.priority === "Urgent" || Boolean(post.notifyEmployees);
+}
+
+function postForAccess(post, { data, access, employees = [] } = {}) {
+  const acknowledgements = acknowledgementsForPost(data || {}, post.id);
+  const requiresAcknowledgement = postRequiresAcknowledgement(post);
+
+  if (access?.role === "employee") {
+    const employeeId = access.employee?.id || "";
+    const acknowledgement = acknowledgements.find((entry) => entry.employeeId === employeeId) || null;
+
+    return {
+      ...post,
+      requiresAcknowledgement,
+      acknowledgedByCurrentEmployee: Boolean(acknowledgement),
+      acknowledgedAt: acknowledgement?.acknowledgedAt || ""
+    };
+  }
+
+  const activeEmployees = employees.filter((employee) => employee.active !== false);
+  const acknowledgedEmployeeIds = new Set(acknowledgements.map((entry) => entry.employeeId));
+  const pendingAcknowledgements = activeEmployees
+    .filter((employee) => !acknowledgedEmployeeIds.has(employee.id))
+    .map((employee) => ({
+      employeeId: employee.id,
+      employeeName: employee.name,
+      username: employee.username
+    }));
+
+  return {
+    ...post,
+    requiresAcknowledgement,
+    acknowledgementSummary: {
+      acknowledged: acknowledgedEmployeeIds.size,
+      totalEmployees: activeEmployees.length,
+      pending: Math.max(0, activeEmployees.length - acknowledgedEmployeeIds.size)
+    },
+    acknowledgements,
+    pendingAcknowledgements
+  };
+}
+
 async function handleApi(req, res, url) {
   try {
     const cookieNames = securityStore.getAccessCookieNames();
@@ -1241,6 +1320,13 @@ async function handleApi(req, res, url) {
       serializeCookie(cookieNames.hr, "", hrCookieOptions),
       serializeCookie(cookieNames.legacyHr, "", hrCookieOptions)
     ];
+    const ownerCookieHeader = serializeCookie(cookieNames.owner, "", {
+      path: "/",
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequest(req)
+    });
     const webmasterCookieHeader = serializeCookie(cookieNames.webmaster, "", {
       path: "/",
       maxAge: 0,
@@ -1272,8 +1358,19 @@ async function handleApi(req, res, url) {
       sameSite: "Lax",
       secure: isSecureRequest(req)
     });
+    const ownerSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.owner, sessionId, {
+      path: "/",
+      maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequest(req)
+    });
     const inviteSessionCookieHeaders = (sessions = {}) => {
       const headers = [];
+
+      if (sessions.owner?.id) {
+        headers.push(ownerSessionCookieHeader(sessions.owner.id));
+      }
 
       if (sessions.hr?.id) {
         headers.push(...adminSessionCookieHeaders(sessions.hr.id));
@@ -1327,6 +1424,12 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/owner/check") {
+      const auth = await securityStore.checkOwnerAccess(req);
+      sendJson(res, 200, auth);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/webmaster/check") {
       const auth = await securityStore.checkWebmasterAccess(req);
       sendJson(res, 200, auth);
@@ -1334,7 +1437,13 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/security/events") {
-      if (!(await requireHrAccess(req, res))) return;
+      const ownerAccess = await securityStore.checkOwnerAccess(req);
+      const hrAccess = ownerAccess.authorized ? null : await securityStore.checkHrAccess(req);
+
+      if (!ownerAccess.authorized && !hrAccess?.authorized) {
+        sendJson(res, 401, ownerAccess.setupRequired ? ownerAccess : (hrAccess || ownerAccess));
+        return;
+      }
 
       const result = await securityStore.listSecurityEvents({
         limit: Number(url.searchParams.get('limit') || 100)
@@ -1370,6 +1479,58 @@ async function handleApi(req, res, url) {
 
       sendJson(res, 201, result, {
         "Set-Cookie": adminSessionCookieHeaders(result.sessionId)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/owner/setup") {
+      if (!requireSameOrigin(req, res)) return;
+
+      if (!ADMIN_SETUP_TOKEN) {
+        throw createHttpError(503, "Owner setup is disabled. Configure ADMIN_SETUP_TOKEN on the server first.");
+      }
+
+      const body = await readJsonBody(req);
+
+      if (!matchesAdminSetupToken(body.setupToken)) {
+        throw createHttpError(403, "Invalid setup token.");
+      }
+
+      const result = await securityStore.setupOwnerAccess({
+        username: body.username,
+        password: body.password,
+        userAgent: req.headers["user-agent"]
+      });
+
+      sendJson(res, 201, result, {
+        "Set-Cookie": ownerSessionCookieHeader(result.sessionId)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/owner/login") {
+      if (!requireSameOrigin(req, res)) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.authenticateOwner({
+        username: body.username,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+
+      sendJson(res, 200, result, {
+        "Set-Cookie": ownerSessionCookieHeader(result.sessionId)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/owner/logout") {
+      if (!requireSameOrigin(req, res)) return;
+
+      await securityStore.logoutOwner(req);
+      sendJson(res, 200, { ok: true }, {
+        "Set-Cookie": ownerCookieHeader
       });
       return;
     }
@@ -1561,6 +1722,310 @@ async function handleApi(req, res, url) {
       });
 
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/webmaster/admin-users") {
+      const webmasterAccess = await securityStore.checkWebmasterAccess(req);
+
+      if (!webmasterAccess.authorized) {
+        sendError(res, 401, "Webmaster sign-in required.");
+        return;
+      }
+
+      const adminUsers = await securityStore.listWebmasterAdminUsers({
+        currentUserId: webmasterAccess.user?.id || ""
+      });
+
+      sendJson(res, 200, {
+        adminUsers
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/admin-users") {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.createWebmasterAdminUser(body);
+      sendJson(res, 201, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webmaster/admin-users/invite") {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.inviteWebmasterAdminUser({
+        ...body,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      const inviteUrl = buildAdminInviteUrl(req, result.preferredRoute, result.inviteToken);
+      let emailDelivered = true;
+
+      try {
+        await sendAdminInviteEmail({
+          to: result.adminUser.email,
+          inviteUrl,
+          displayName: result.adminUser.displayName,
+          username: result.adminUser.username,
+          roles: result.adminUser.roles,
+          expiresAt: result.inviteExpiresAt
+        });
+      } catch {
+        emailDelivered = false;
+      }
+
+      sendJson(res, 201, {
+        adminUser: result.adminUser,
+        emailDelivered
+      });
+      return;
+    }
+
+    const webmasterAdminUserProfileMatch = url.pathname.match(/^\/api\/webmaster\/admin-users\/([^/]+)\/profile$/);
+    if (req.method === "POST" && webmasterAdminUserProfileMatch) {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(webmasterAdminUserProfileMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateWebmasterAdminUserProfile(req, adminUserId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const webmasterAdminUserStatusMatch = url.pathname.match(/^\/api\/webmaster\/admin-users\/([^/]+)\/status$/);
+    if (req.method === "POST" && webmasterAdminUserStatusMatch) {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(webmasterAdminUserStatusMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.setWebmasterAdminUserActive(req, adminUserId, body.active !== false);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const webmasterAdminUserRolesMatch = url.pathname.match(/^\/api\/webmaster\/admin-users\/([^/]+)\/roles$/);
+    if (req.method === "POST" && webmasterAdminUserRolesMatch) {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(webmasterAdminUserRolesMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateWebmasterAdminUserRoles(req, adminUserId, body.roles);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const webmasterAdminUserPasswordMatch = url.pathname.match(/^\/api\/webmaster\/admin-users\/([^/]+)\/password$/);
+    if (req.method === "POST" && webmasterAdminUserPasswordMatch) {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(webmasterAdminUserPasswordMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.resetWebmasterAdminUserPassword(req, adminUserId, {
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const webmasterAdminUserSessionsMatch = url.pathname.match(/^\/api\/webmaster\/admin-users\/([^/]+)\/sessions\/revoke$/);
+    if (req.method === "POST" && webmasterAdminUserSessionsMatch) {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(webmasterAdminUserSessionsMatch[1]);
+      const result = await securityStore.revokeWebmasterAdminUserSessions(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const webmasterAdminUserInviteMatch = url.pathname.match(/^\/api\/webmaster\/admin-users\/([^/]+)\/invite$/);
+    if (req.method === "POST" && webmasterAdminUserInviteMatch) {
+      if (!(await requireWebmasterMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(webmasterAdminUserInviteMatch[1]);
+      const result = await securityStore.resendWebmasterAdminInvite(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      const inviteUrl = buildAdminInviteUrl(req, result.preferredRoute, result.inviteToken);
+      let emailDelivered = true;
+
+      try {
+        await sendAdminInviteEmail({
+          to: result.adminUser.email,
+          inviteUrl,
+          displayName: result.adminUser.displayName,
+          username: result.adminUser.username,
+          roles: result.adminUser.roles,
+          expiresAt: result.inviteExpiresAt
+        });
+      } catch {
+        emailDelivered = false;
+      }
+
+      sendJson(res, 200, {
+        adminUser: result.adminUser,
+        emailDelivered
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/owner/admin-users") {
+      const ownerAccess = await securityStore.checkOwnerAccess(req);
+
+      if (!ownerAccess.authorized) {
+        sendError(res, 401, "Owner sign-in required.");
+        return;
+      }
+
+      const adminUsers = await securityStore.listOwnerAdminUsers({
+        currentUserId: ownerAccess.user?.id || ""
+      });
+
+      sendJson(res, 200, {
+        adminUsers
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/owner/admin-users") {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.createOwnerAdminUser(body);
+      sendJson(res, 201, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/owner/admin-users/invite") {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.inviteOwnerAdminUser({
+        ...body,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      const inviteUrl = buildAdminInviteUrl(req, result.preferredRoute, result.inviteToken);
+      let emailDelivered = true;
+
+      try {
+        await sendAdminInviteEmail({
+          to: result.adminUser.email,
+          inviteUrl,
+          displayName: result.adminUser.displayName,
+          username: result.adminUser.username,
+          roles: result.adminUser.roles,
+          expiresAt: result.inviteExpiresAt
+        });
+      } catch {
+        emailDelivered = false;
+      }
+
+      sendJson(res, 201, {
+        adminUser: result.adminUser,
+        emailDelivered
+      });
+      return;
+    }
+
+    const ownerAdminUserProfileMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/profile$/);
+    if (req.method === "POST" && ownerAdminUserProfileMatch) {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(ownerAdminUserProfileMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateOwnerAdminUserProfile(req, adminUserId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const ownerAdminUserStatusMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/status$/);
+    if (req.method === "POST" && ownerAdminUserStatusMatch) {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(ownerAdminUserStatusMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.setOwnerAdminUserActive(req, adminUserId, body.active !== false);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const ownerAdminUserRolesMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/roles$/);
+    if (req.method === "POST" && ownerAdminUserRolesMatch) {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(ownerAdminUserRolesMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateOwnerAdminUserRoles(req, adminUserId, body.roles);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const ownerAdminUserPasswordMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/password$/);
+    if (req.method === "POST" && ownerAdminUserPasswordMatch) {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(ownerAdminUserPasswordMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.resetOwnerAdminUserPassword(req, adminUserId, {
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const ownerAdminUserSessionsMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/sessions\/revoke$/);
+    if (req.method === "POST" && ownerAdminUserSessionsMatch) {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(ownerAdminUserSessionsMatch[1]);
+      const result = await securityStore.revokeOwnerAdminUserSessions(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const ownerAdminUserInviteMatch = url.pathname.match(/^\/api\/owner\/admin-users\/([^/]+)\/invite$/);
+    if (req.method === "POST" && ownerAdminUserInviteMatch) {
+      if (!(await requireOwnerMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(ownerAdminUserInviteMatch[1]);
+      const result = await securityStore.resendOwnerAdminInvite(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      const inviteUrl = buildAdminInviteUrl(req, result.preferredRoute, result.inviteToken);
+      let emailDelivered = true;
+
+      try {
+        await sendAdminInviteEmail({
+          to: result.adminUser.email,
+          inviteUrl,
+          displayName: result.adminUser.displayName,
+          username: result.adminUser.username,
+          roles: result.adminUser.roles,
+          expiresAt: result.inviteExpiresAt
+        });
+      } catch {
+        emailDelivered = false;
+      }
+
+      sendJson(res, 200, {
+        adminUser: result.adminUser,
+        emailDelivered
+      });
       return;
     }
 
@@ -1826,10 +2291,20 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/posts") {
-      if (!(await requireBoardReadAccess(req, res))) return;
+      const boardAccess = await requireBoardReadAccess(req, res);
+      if (!boardAccess) return;
 
-      const data = await boardStore.readData();
-      sendJson(res, 200, { posts: sortedPosts(data.posts) });
+      const [data, employees] = await Promise.all([
+        boardStore.readData(),
+        boardAccess.role === "employee" ? Promise.resolve([]) : securityStore.listEmployees()
+      ]);
+      sendJson(res, 200, {
+        posts: sortedPosts(data.posts).map((post) => postForAccess(post, {
+          data,
+          access: boardAccess,
+          employees
+        }))
+      });
       return;
     }
 
@@ -2052,6 +2527,61 @@ async function handleApi(req, res, url) {
       }
 
       sendJson(res, 201, { post, notification });
+      return;
+    }
+
+    const acknowledgementMatch = url.pathname.match(/^\/api\/posts\/([^/]+)\/acknowledgements$/);
+    if (req.method === "POST" && acknowledgementMatch) {
+      if (!requireSameOrigin(req, res)) return;
+
+      const employeeAccess = await requireEmployeeAccess(req, res);
+      if (!employeeAccess) return;
+
+      const postId = decodeURIComponent(acknowledgementMatch[1]);
+      const employee = employeeAccess.employee || {};
+      const result = await boardStore.updateData((data) => {
+        const post = data.posts.find((entry) => entry.id === postId);
+
+        if (!post) {
+          throw createHttpError(404, "Post not found.");
+        }
+
+        if (!postRequiresAcknowledgement(post)) {
+          throw createHttpError(400, "This post does not require acknowledgement.");
+        }
+
+        data.acknowledgements = Array.isArray(data.acknowledgements) ? data.acknowledgements : [];
+        const existing = data.acknowledgements.find((entry) => (
+          entry.postId === postId &&
+          entry.employeeId === employee.id
+        ));
+
+        if (existing) {
+          return {
+            created: false,
+            acknowledgement: existing
+          };
+        }
+
+        const acknowledgement = {
+          postId,
+          employeeId: employee.id,
+          employeeName: employee.name,
+          username: employee.username,
+          acknowledgedAt: nowIso()
+        };
+
+        data.acknowledgements.push(acknowledgement);
+        return {
+          created: true,
+          acknowledgement
+        };
+      });
+
+      sendJson(res, result.created ? 201 : 200, {
+        ok: true,
+        acknowledgement: result.acknowledgement
+      });
       return;
     }
 

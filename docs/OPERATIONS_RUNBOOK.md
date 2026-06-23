@@ -16,11 +16,15 @@ This runbook is the day-to-day operating guide for the live pilot deployment of 
 
 ## Required Configuration
 
-Set and maintain these values for every production restart:
+Set and maintain these core values for every production restart:
 
 - `PUBLIC_BASE_URL`
-- `ADMIN_SETUP_TOKEN`
 - `TRUST_PROXY_ADDRESSES`
+
+Keep these security controls configured on the host when you rely on bootstrap or recovery workflows:
+
+- `ADMIN_SETUP_TOKEN` for protected first-admin bootstrap
+- `ADMIN_RECOVERY_TOKEN` or `ADMIN_DAILY_RECOVERY_SEED` for operator-driven HR recovery
 
 Recommended values:
 
@@ -70,7 +74,7 @@ Automatic tunnel recovery:
 
 1. Run [health-check.ps1](C:/Users/admin/Documents/Codex/Project-A/scripts/health-check.ps1).
 2. Confirm launcher returns `200`, not `308`.
-3. Confirm HR, Employee, and Webmaster pages load.
+3. Confirm HR, Employee, and Systems pages load.
 4. Review application stderr/stdout for startup or proxy warnings.
 
 ## Backup Policy
@@ -86,7 +90,7 @@ Automatic tunnel recovery:
 Run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot C:\ProgramData\Palziv\runtime
 ```
 
 ## Recovery Policy

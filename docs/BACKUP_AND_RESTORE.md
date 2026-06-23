@@ -5,13 +5,14 @@
 Use the automation script:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot C:\ProgramData\Palziv\runtime
 ```
 
 Default behavior:
 
-- reads data from the configured runtime data directory
-- writes timestamped zip archives into the configured runtime backup directory
+- when run elevated on the Windows host, targets `C:\ProgramData\Palziv\runtime` automatically if that runtime exists
+- otherwise reads data from the repo-local runtime data directory
+- writes timestamped zip archives into the selected runtime backup directory
 - writes a manifest JSON next to the zip
 
 Optional parameters:
@@ -55,5 +56,5 @@ Confirm:
 - launcher loads
 - employee page loads
 - HR page loads
-- webmaster page loads
+- Systems page loads
 - API health returns `200`

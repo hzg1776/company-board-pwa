@@ -152,8 +152,10 @@ document.title = APP_DISPLAY_TITLE;
 const historyFilters = ["All", "Active", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
 let activeAdminTab = "publish";
 let activeWebmasterTab = "overview";
+let activeOwnerTab = "accounts";
 let activeHistoryFilter = "All";
 let activePushRosterFilter = "active";
+let expandedAcknowledgementPostId = "";
 const adminTabs = [
   { id: "publish", label: "Publish", icon: "megaphone" },
   { id: "share", label: "Users", icon: "users" },
@@ -167,6 +169,12 @@ const webmasterTabs = [
   { id: "content", label: "Content", icon: "board" },
   { id: "codex", label: "Codex", icon: "clipboard" },
   { id: "settings", label: "Settings", icon: "lock" }
+];
+const ownerTabs = [
+  { id: "accounts", label: "Admin Accounts", icon: "users" },
+  { id: "company", label: "Company Settings", icon: "board" },
+  { id: "audit", label: "Audit Log", icon: "clipboard" },
+  { id: "emergency", label: "Emergency Access", icon: "alert" }
 ];
 const EMPLOYEE_REFRESH_MS = 60_000;
 
@@ -197,6 +205,16 @@ const state = {
       busy: false,
       error: ""
     },
+    owner: {
+      loaded: false,
+      authorized: false,
+      setupRequired: false,
+      sessionExpiresAt: "",
+      csrfToken: "",
+      user: null,
+      busy: false,
+      error: ""
+    },
     webmaster: {
       loaded: false,
       authorized: false,
@@ -210,6 +228,14 @@ const state = {
     }
   },
   adminDirectory: {
+    loaded: false,
+    adminUsers: []
+  },
+  webmasterAdminDirectory: {
+    loaded: false,
+    adminUsers: []
+  },
+  ownerAdminDirectory: {
     loaded: false,
     adminUsers: []
   },
@@ -255,6 +281,7 @@ const state = {
   messageType: "",
   authRecovery: {
     hr: false,
+    owner: false,
     webmaster: false
   },
   employeeInstallGuideOpen: false,
@@ -317,6 +344,18 @@ function formatDate(value) {
   }).format(date);
 }
 
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function safeFilename(value) {
+  return String(value || "acknowledgements")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "acknowledgements";
+}
+
 function formatWeatherUpdatedAt(value) {
   if (!value) return "Not yet fetched";
   return formatDate(value);
@@ -358,6 +397,10 @@ function currentRoute() {
     return "webmaster";
   }
 
+  if (pathname === `${APP_BASE_PATH}/owner` || pathname === "/owner" || hash === "#owner") {
+    return "owner";
+  }
+
   if (pathname === `${APP_BASE_PATH}/hr` || pathname === `${APP_BASE_PATH}/admin` || pathname === "/hr" || pathname === "/admin" || hash === "#hr" || hash === "#admin") {
     return "hr";
   }
@@ -385,6 +428,7 @@ function clearInviteToken(nextRoute = currentRoute()) {
 }
 
 function routePath(route) {
+  if (route === "owner") return appPath("owner");
   if (route === "webmaster") return appPath("webmaster");
   if (route === "hr") return appPath("hr");
   if (route === "admin") return appPath("hr");
@@ -394,7 +438,8 @@ function routePath(route) {
 
 function routeTitle(route) {
   if (route === "launcher") return "Launcher";
-  if (route === "webmaster") return "Webmaster";
+  if (route === "owner") return "Owner";
+  if (route === "webmaster") return "Systems";
   if (route === "hr") return "HR";
   if (route === "admin") return "HR";
   return "Employee";
@@ -711,7 +756,7 @@ function buildCodexBrief(snapshot = buildWebmasterSnapshot()) {
     issues.push("No obvious runtime issue surfaced in the latest snapshot. Focus on the most recent traffic and content changes.");
   }
 
-  return `# ${APP_DISPLAY_TITLE} Webmaster Brief
+  return `# ${APP_DISPLAY_TITLE} Systems Brief
 Generated: ${snapshot.generatedAt}
 Route: ${snapshot.route}
 Base URL: ${launcherUrl}
@@ -747,7 +792,7 @@ ${issues.map((issue) => `- ${issue}`).join("\n")}
 - Launcher: ${launcherUrl}
 - Employee feed: ${urls.employee || `${origin}${appPath("employee")}`}
 - HR console: ${urls.hr || `${origin}${appPath("hr")}`}
-- Webmaster console: ${urls.webmaster || `${origin}${appPath("webmaster")}`}
+- Systems console: ${urls.webmaster || `${origin}${appPath("webmaster")}`}
 
 ## Raw Notes
 Copying this into Codex should give it enough context to trace the site health and likely failure points quickly.
@@ -800,7 +845,7 @@ function renderAuthFrame({
 }
 
 function renderAdminAuthFrame({ route, title, description = "", error = "", content, footer = "" }) {
-  const routeLabel = route === "webmaster" ? "Webmaster admin" : "HR admin";
+  const routeLabel = route === "webmaster" ? "System Ops admin" : route === "owner" ? "Owner admin" : "HR admin";
 
   return `
     <main class="admin-auth-shell">
@@ -888,7 +933,7 @@ function renderWebmasterDrilldownStatCard({ value, label, note = "", tab, cardId
       type="button"
       data-webmaster-drilldown-tab="${escapeHtml(tab)}"
       data-webmaster-drilldown-cards="${escapeHtml(cardIds.join(","))}"
-      aria-label="${escapeHtml(`${label}. ${note ? `${note}. ` : ""}Open detailed webmaster data.`)}"
+      aria-label="${escapeHtml(`${label}. ${note ? `${note}. ` : ""}Open detailed systems data.`)}"
     >
       <strong>${escapeHtml(value)}</strong>
       <span>${escapeHtml(label)}</span>
@@ -1019,10 +1064,21 @@ function csrfTokenForPath(pathname) {
   const route = new URL(String(pathname || "/"), window.location.origin).pathname;
 
   if (
+    route === "/api/owner/logout" ||
+    route === "/api/owner/password" ||
+    route === "/api/owner/admin-users" ||
+    route.startsWith("/api/owner/admin-users/")
+  ) {
+    return String(state.access.owner?.csrfToken || "");
+  }
+
+  if (
     route === "/api/push/test" ||
     route === "/api/webmaster/logout" ||
     route === "/api/webmaster/password" ||
-    route === "/api/hr/password/reset"
+    route === "/api/hr/password/reset" ||
+    route === "/api/webmaster/admin-users" ||
+    route.startsWith("/api/webmaster/admin-users/")
   ) {
     return String(state.access.webmaster?.csrfToken || "");
   }
@@ -1043,6 +1099,46 @@ function csrfTokenForPath(pathname) {
   }
 
   return "";
+}
+
+function normalizeAdminScope(scope = "hr") {
+  return scope === "owner" ? "owner" : scope === "webmaster" ? "webmaster" : "hr";
+}
+
+function adminApiBase(scope = "hr") {
+  const normalizedScope = normalizeAdminScope(scope);
+  if (normalizedScope === "owner") return "/api/owner/admin-users";
+  if (normalizedScope === "webmaster") return "/api/webmaster/admin-users";
+  return "/api/admin-users";
+}
+
+function readAdminDirectory(scope = "hr") {
+  const normalizedScope = normalizeAdminScope(scope);
+  if (normalizedScope === "owner") return state.ownerAdminDirectory;
+  if (normalizedScope === "webmaster") return state.webmasterAdminDirectory;
+  return state.adminDirectory;
+}
+
+function writeAdminDirectory(scope = "hr", nextDirectory) {
+  const normalizedScope = normalizeAdminScope(scope);
+  if (normalizedScope === "owner") {
+    state.ownerAdminDirectory = nextDirectory;
+  } else if (normalizedScope === "webmaster") {
+    state.webmasterAdminDirectory = nextDirectory;
+  } else {
+    state.adminDirectory = nextDirectory;
+  }
+}
+
+async function refreshAdminManagementScope(scope = "hr") {
+  const normalizedScope = normalizeAdminScope(scope);
+  if (normalizedScope === "owner") {
+    await refreshOwnerData();
+  } else if (normalizedScope === "webmaster") {
+    await refreshWebmasterData();
+  } else {
+    await refreshAdminData();
+  }
 }
 
 async function requestJson(path, options = {}) {
@@ -1233,21 +1329,21 @@ async function loadEmployeeDirectory() {
   return state.employeeDirectory;
 }
 
-async function loadAdminDirectory() {
+async function loadAdminDirectory(scope = "hr") {
   try {
-    const result = await requestJson("/api/admin-users");
-    state.adminDirectory = {
+    const result = await requestJson(adminApiBase(scope));
+    writeAdminDirectory(scope, {
       loaded: true,
       adminUsers: Array.isArray(result.adminUsers) ? result.adminUsers : []
-    };
+    });
   } catch {
-    state.adminDirectory = {
+    writeAdminDirectory(scope, {
       loaded: true,
       adminUsers: []
-    };
+    });
   }
 
-  return state.adminDirectory;
+  return readAdminDirectory(scope);
 }
 
 async function loadSecurityEvents() {
@@ -1271,10 +1367,10 @@ async function refreshAdminData() {
   const access = await loadHrAccessStatus();
 
   if (!access.authorized) {
-    state.adminDirectory = {
+    writeAdminDirectory("hr", {
       loaded: false,
       adminUsers: []
-    };
+    });
     state.employeeDirectory = {
       loaded: false,
       employees: []
@@ -1291,7 +1387,7 @@ async function refreshAdminData() {
   const [_, pushStatus, employeeDirectory, securityEvents] = await Promise.all([
     loadBoard(),
     loadPushStatus(),
-    loadAdminDirectory(),
+    loadAdminDirectory("hr"),
     loadEmployeeDirectory(),
     loadSecurityEvents()
   ]);
@@ -1311,17 +1407,22 @@ async function refreshWebmasterData() {
   ]);
 
   if (!access.authorized) {
+    writeAdminDirectory("webmaster", {
+      loaded: false,
+      adminUsers: []
+    });
     return {
       locked: true
     };
   }
 
-  const [summaryProbe, postsProbe, weatherProbe, pushProbe, healthProbe] = await Promise.all([
+  const [summaryProbe, postsProbe, weatherProbe, pushProbe, healthProbe, webmasterAdminDirectory] = await Promise.all([
     safeTimedRequestJson("/api/webmaster/summary", null),
     safeTimedRequestJson("/api/posts", { posts: [] }),
     safeTimedRequestJson("/api/weather", { weather: defaultWeather() }),
     safeTimedRequestJson("/api/push/status", { supported: false, subscriptions: 0 }),
-    safeTimedRequestJson("/api/health", { ok: false, now: nowIso() })
+    safeTimedRequestJson("/api/health", { ok: false, now: nowIso() }),
+    loadAdminDirectory("webmaster")
   ]);
 
   if (!summaryProbe.body) {
@@ -1361,7 +1462,59 @@ async function refreshWebmasterData() {
   };
 
   await syncPushState();
+  state.webmasterAdminDirectory = webmasterAdminDirectory;
   return state.webmaster;
+}
+
+async function refreshOwnerData() {
+  const access = await loadOwnerAccessStatus();
+
+  if (!access.authorized) {
+    writeAdminDirectory("owner", {
+      loaded: false,
+      adminUsers: []
+    });
+    state.securityEvents = {
+      loaded: false,
+      events: []
+    };
+    return {
+      locked: true
+    };
+  }
+
+  const [ownerAdminDirectory, securityEvents] = await Promise.all([
+    loadAdminDirectory("owner"),
+    loadSecurityEvents()
+  ]);
+
+  return {
+    ownerAdminDirectory,
+    securityEvents
+  };
+}
+
+async function loadOwnerAccessStatus() {
+  const probe = await safeTimedRequestJson("/api/owner/check", {
+    authorized: false,
+    setupRequired: false,
+    sessionExpiresAt: "",
+    csrfToken: "",
+    user: null
+  });
+
+  state.access.owner = {
+    ...state.access.owner,
+    loaded: true,
+    authorized: Boolean(probe.body.authorized),
+    setupRequired: Boolean(probe.body.setupRequired),
+    sessionExpiresAt: String(probe.body.sessionExpiresAt || ""),
+    csrfToken: String(probe.body.csrfToken || ""),
+    user: probe.body.user || null,
+    error: ""
+  };
+
+  return state.access.owner;
 }
 
 async function loadHrAccessStatus() {
@@ -2127,11 +2280,23 @@ function renderCurrentPushStatusCard(currentPush) {
   `;
 }
 
-function renderDeviceChecklistItem(item) {
+function compactDeviceChecklistTitle(title) {
+  return {
+    "Install on phone": "Install",
+    "Install On Phone": "App",
+    "Employee name": "Name",
+    Notifications: "Notify",
+    "Alert delivery": "Delivery"
+  }[title] || title;
+}
+
+function renderDeviceChecklistItem(item, compact = false) {
+  const title = compact ? compactDeviceChecklistTitle(item.title) : item.title;
+
   return `
-    <article class="device-setup-step ${item.complete ? "complete" : "missing"}">
+    <article class="device-setup-step ${compact ? "compact" : ""} ${item.complete ? "complete" : "missing"}">
       <div class="device-setup-step-head">
-        <strong>${escapeHtml(item.title)}</strong>
+        <strong>${escapeHtml(title)}</strong>
         <span class="status-chip ${item.complete ? "muted" : "warning"}">${item.complete ? icon("check") : icon("alert")} ${escapeHtml(item.value)}</span>
       </div>
     </article>
@@ -2188,10 +2353,10 @@ function renderEmployeeSubscriptionBanner(setup) {
   const incompleteSteps = setup.checklist.filter((item) => !item.complete);
   const firstIncomplete = incompleteSteps[0];
   const headline = firstIncomplete?.title === "Install on phone"
-    ? "Install the Palziv app on this phone before alerts can work."
+    ? "Finish phone install to receive alerts."
     : firstIncomplete?.title === "Employee name"
-      ? "Enter name to subscribe."
-    : "This phone is not fully subscribed for urgent alerts yet.";
+      ? "Add your name to finish setup."
+    : "Finish alert setup for this phone.";
 
   return `
     <section class="employee-subscription-banner warning" aria-label="Not subscribed">
@@ -2205,7 +2370,7 @@ function renderEmployeeSubscriptionBanner(setup) {
         </div>
       </div>
       <div class="employee-subscription-banner-checklist">
-        ${incompleteSteps.map((item) => renderDeviceChecklistItem(item)).join("")}
+        ${incompleteSteps.map((item) => renderDeviceChecklistItem(item, true)).join("")}
       </div>
       ${renderEmployeeSetupWizard()}
     </section>
@@ -2365,6 +2530,7 @@ function priorityClass(priority) {
 
 function typeIcon(type) {
   return {
+    "HR": "users",
     HR: "users",
     News: "news",
     Safety: "shield",
@@ -2401,6 +2567,11 @@ function formatAlertRetentionLabel(value) {
 
 function renderNotice(post, includeControls = false) {
   const safePriority = priorityClass(post.priority);
+  const acknowledgementSummary = post.acknowledgementSummary || null;
+  const acknowledged = Number(acknowledgementSummary?.acknowledged || 0);
+  const totalEmployees = Number(acknowledgementSummary?.totalEmployees || 0);
+  const pending = Number(acknowledgementSummary?.pending || Math.max(0, totalEmployees - acknowledged));
+  const acknowledgementList = Array.isArray(post.acknowledgements) ? post.acknowledgements : [];
 
   return `
     <article class="notice-card priority-${safePriority}">
@@ -2408,6 +2579,7 @@ function renderNotice(post, includeControls = false) {
         <span class="notice-type">${icon(typeIcon(post.type))}${escapeHtml(post.type)}</span>
         <span class="priority-pill ${safePriority}">${escapeHtml(post.priority)}</span>
         ${post.notifyEmployees ? `<span class="sync-pill">${icon("bell")} Alert sent</span>` : ""}
+        ${post.requiresAcknowledgement ? `<span class="sync-pill acknowledgement-pill">${icon("check")} Read ${acknowledged}/${totalEmployees}</span>` : ""}
         <span class="notice-date">${escapeHtml(formatDate(post.createdAt))}</span>
       </div>
       <h2>${escapeHtml(post.title)}</h2>
@@ -2415,7 +2587,17 @@ function renderNotice(post, includeControls = false) {
       <div class="notice-footer">
         <span>${escapeHtml(post.audience || "All employees")}</span>
         <span>Expires: ${escapeHtml(formatDate(post.expiresAt))}</span>
+        ${post.requiresAcknowledgement ? `<span>${escapeHtml(`${pending} pending acknowledgement${pending === 1 ? "" : "s"}`)}</span>` : ""}
       </div>
+      ${post.requiresAcknowledgement ? `
+        <div class="acknowledgement-roster">
+          ${
+            acknowledgementList.length
+              ? acknowledgementList.slice(0, 8).map((entry) => `<span>${escapeHtml(entry.employeeName || entry.username || "Employee")} · ${escapeHtml(formatDate(entry.acknowledgedAt))}</span>`).join("")
+              : "<span>No acknowledgements yet.</span>"
+          }
+        </div>
+      ` : ""}
       ${
         includeControls
           ? `<form class="post-controls" data-delete-post-form>
@@ -2438,6 +2620,8 @@ function renderFeedItem(post) {
   const feedBody = String(post.body || "");
   const feedPriority = String(post.priority || "Normal");
   const createdAt = String(post.createdAt || "");
+  const requiresAcknowledgement = Boolean(post.requiresAcknowledgement);
+  const acknowledged = Boolean(post.acknowledgedByCurrentEmployee);
 
   return `
     <article class="feed-item priority-${safePriority}">
@@ -2453,11 +2637,35 @@ function renderFeedItem(post) {
         <div class="feed-badges">
           ${feedPriority !== "Normal" ? `<span class="priority-pill ${safePriority}">${escapeHtml(feedPriority)}</span>` : ""}
           ${post.notifyEmployees ? `<span class="sync-pill">Alert sent</span>` : ""}
+          ${requiresAcknowledgement ? `<span class="sync-pill acknowledgement-pill">${acknowledged ? `${icon("check")} Read` : `${icon("alert")} Needs read`}</span>` : ""}
         </div>
         ` : ""}
         <p class="feed-body">${escapeHtml(feedBody)}</p>
+        ${requiresAcknowledgement ? `
+          <div class="feed-actions">
+            <button class="${acknowledged ? "ghost-button" : "button"} acknowledgement-button" type="button" data-acknowledge-post="${escapeHtml(post.id)}" ${acknowledged ? "disabled aria-disabled=\"true\"" : ""}>
+              ${acknowledged ? `${icon("check")} Read` : `${icon("check")} Mark read`}
+            </button>
+          </div>
+        ` : ""}
       </div>
     </article>
+  `;
+}
+
+function renderEmployeeStatusStrip(notices, setup) {
+  const urgentCount = notices.filter((post) => post.priority === "Urgent").length;
+  const weather = state.weather || defaultWeather();
+  const weatherLevel = String(weather.level || "Clear");
+  const alertState = setup.ready ? "Alerts on" : "Setup";
+
+  return `
+    <section class="employee-status-strip" aria-label="Employee portal status">
+      <span>${icon("cloud")} ${escapeHtml(weatherLevel)}</span>
+      <span>${icon("bell")} ${escapeHtml(alertState)}</span>
+      <span>${icon("alert")} ${urgentCount} urgent</span>
+      <span>${icon("news")} ${notices.length} live</span>
+    </section>
   `;
 }
 
@@ -2470,7 +2678,7 @@ function renderEmployeeSharePanel() {
         <div>
           <p class="eyebrow">${icon("users")} Employee access</p>
           <h2>Scan to open the portal</h2>
-          <p>Workers can scan this code to open the read-only portal on their phone.</p>
+          <p>Employees can scan this code to open the portal on their phone and sign in.</p>
         </div>
       </div>
       <div class="qr-panel compact">
@@ -2669,20 +2877,21 @@ function renderAdminInviteGate(route) {
 }
 
 function renderAdminAuthGate(route) {
-  const access = route === "webmaster" ? state.access.webmaster : state.access.hr;
-  const sectionTitle = route === "webmaster" ? "Webmaster" : "HR";
+  const normalizedRoute = route === "owner" ? "owner" : route === "webmaster" ? "webmaster" : "hr";
+  const access = state.access[normalizedRoute] || state.access.hr;
+  const sectionTitle = normalizedRoute === "owner" ? "Owner" : normalizedRoute === "webmaster" ? "System Ops" : "HR";
   const inviteToken = currentInviteToken();
   const authError = access.error || state.message;
-  const canSetup = route === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
-  const setupBlocked = route === "webmaster" && access.setupRequired && !access.hrAuthorized;
-  const recoveryMode = route === "hr"
+  const canSetup = normalizedRoute === "owner" || normalizedRoute === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
+  const setupBlocked = normalizedRoute === "webmaster" && access.setupRequired && !access.hrAuthorized;
+  const recoveryMode = normalizedRoute === "hr"
     ? state.authRecovery.hr
-    : route === "webmaster"
+    : normalizedRoute === "webmaster"
       ? state.authRecovery.webmaster
       : false;
 
-  if (inviteToken) {
-    return renderAdminInviteGate(route);
+  if (inviteToken && normalizedRoute !== "owner") {
+    return renderAdminInviteGate(normalizedRoute);
   }
 
   const heading = recoveryMode
@@ -2693,27 +2902,29 @@ function renderAdminAuthGate(route) {
         ? `Create first ${sectionTitle} admin`
         : `${sectionTitle} sign in`;
   const description = recoveryMode
-    ? route === "hr"
-      ? "Use today's master key to set a new password."
-      : "Password resets for Webmaster admins are handled from HR."
+    ? normalizedRoute === "hr"
+      ? "Use the current HR recovery key to set a new password."
+      : "A different active System Ops admin must reset this password from Systems Settings."
     : setupBlocked
-      ? "HR must finish setup or grant Webmaster access before this screen can be used."
+      ? "HR must finish setup or grant Systems access before this screen can be used."
       : canSetup
         ? `Create the first named admin account for ${sectionTitle}.`
+        : normalizedRoute === "owner"
+          ? "Use the named business owner account to continue."
         : `Use your named admin account to continue.`;
 
   return renderAdminAuthFrame({
-    route,
+    route: normalizedRoute,
     title: heading,
     description,
     error: authError,
     content: recoveryMode
-      ? route === "hr"
+      ? normalizedRoute === "hr"
         ? `
           <form class="auth-form admin-auth-form" data-hr-master-recovery-form>
             <label class="field">
-              <span>Master key</span>
-              <input name="recoveryToken" type="password" required autocomplete="one-time-code" placeholder="Today's master key">
+              <span>Recovery key</span>
+              <input name="recoveryToken" type="password" required autocomplete="one-time-code" placeholder="Current HR recovery key">
             </label>
             <label class="field">
               <span>New password</span>
@@ -2723,29 +2934,29 @@ function renderAdminAuthGate(route) {
               <span>Confirm new password</span>
               <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
             </label>
-            <button class="button admin-auth-submit" type="submit">Recover With Master Key</button>
+            <button class="button admin-auth-submit" type="submit">Recover With Recovery Key</button>
           </form>
         `
         : `
           <div class="admin-auth-message">
-            HR handles password resets for Webmaster admins from Admin Management.
+            Another active System Ops admin must reset this password from Systems Settings and the System Ops Admin Accounts panel.
           </div>
           <div class="admin-auth-primary-actions">
-            <button class="button admin-auth-submit" type="button" data-route="hr">Open HR</button>
+          <button class="button admin-auth-submit" type="button" data-route="webmaster">Back to Systems Sign In</button>
           </div>
         `
       : setupBlocked
       ? `
         <div class="admin-auth-message">
-          HR must finish the first admin setup or assign Webmaster access before this sign-in becomes available.
+          HR must finish the first admin setup or assign Systems access before this sign-in becomes available.
         </div>
         <div class="admin-auth-primary-actions">
           <button class="button admin-auth-submit" type="button" data-route="hr">Open HR</button>
         </div>
       `
       : `
-        <form class="auth-form admin-auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(route)}">
-          ${route === "hr" && canSetup ? `
+        <form class="auth-form admin-auth-form" data-admin-auth-form data-admin-auth-mode="${escapeHtml(canSetup ? "setup" : "login")}" data-admin-route="${escapeHtml(normalizedRoute)}">
+          ${(normalizedRoute === "owner" || normalizedRoute === "hr") && canSetup ? `
           <label class="field">
             <span>Deployment setup secret</span>
             <input name="setupToken" type="password" required autocomplete="one-time-code" placeholder="Bootstrap secret">
@@ -2765,7 +2976,7 @@ function renderAdminAuthGate(route) {
     footer: recoveryMode
       ? `
         <div class="admin-auth-footer-actions">
-          <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(route)}">Back to Sign In</button>
+          <button class="auth-inline-action" type="button" data-close-auth-recovery="${escapeHtml(normalizedRoute)}">Back to Sign In</button>
           <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
         </div>
       `
@@ -2778,8 +2989,10 @@ function renderAdminAuthGate(route) {
       : canSetup
       ? `
         <p class="admin-auth-footer-note">${escapeHtml(
-          route === "webmaster"
-            ? "Finish HR setup first if Webmaster access has not been assigned yet."
+          normalizedRoute === "webmaster"
+            ? "Finish HR setup first if Systems access has not been assigned yet."
+            : normalizedRoute === "owner"
+              ? "After setup, create backup Owner access and keep daily operations work in scoped accounts."
             : "After setup, use Admin Management to create or invite additional admins."
         )}</p>
         <div class="admin-auth-footer-actions">
@@ -2788,7 +3001,7 @@ function renderAdminAuthGate(route) {
       `
       : `
         <div class="admin-auth-footer-actions">
-          <button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(route)}">Forgot Password?</button>
+          ${normalizedRoute === "owner" ? "" : `<button class="auth-inline-action" type="button" data-open-auth-recovery="${escapeHtml(normalizedRoute)}">Forgot Password?</button>`}
           <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
         </div>
       `
@@ -2840,7 +3053,7 @@ function renderEmployeeDirectoryRow(employee) {
 }
 
 function adminRoleLabel(role) {
-  return role === "webmaster" ? "IT" : "HR";
+  return role === "owner" ? "Owner" : role === "webmaster" ? "System Ops" : "HR";
 }
 
 function renderAdminRoleChips(roles = []) {
@@ -2869,8 +3082,78 @@ function adminInviteStatusText(adminUser) {
   return "Credentials Not Configured";
 }
 
-function renderAdminDirectoryRow(adminUser) {
+function renderAdminRoleCell(adminUser, scope = "hr") {
   const roles = Array.isArray(adminUser.roles) ? adminUser.roles : [];
+  const isCurrentUser = Boolean(adminUser.currentUser);
+  const normalizedScope = normalizeAdminScope(scope);
+
+  if (normalizedScope === "owner") {
+    return `
+      <div class="admin-role-cell">
+        <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
+        <form class="admin-role-editor" data-update-admin-roles-form data-admin-scope="owner">
+          <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+          <label class="admin-role-checkbox">
+            <input type="checkbox" name="roles" value="owner" ${roles.includes("owner") ? "checked" : ""}>
+            Owner
+          </label>
+            <label class="admin-role-checkbox">
+              <input type="checkbox" name="roles" value="hr" ${roles.includes("hr") ? "checked" : ""}>
+              HR
+            </label>
+            <label class="admin-role-checkbox">
+              <input type="checkbox" name="roles" value="webmaster" ${roles.includes("webmaster") ? "checked" : ""}>
+              System Ops
+            </label>
+          <button class="ghost-button" type="submit">${icon("check")} Save Roles</button>
+        </form>
+        <div class="admin-table-secondary">
+          ${escapeHtml(
+            isCurrentUser
+              ? "Current account must keep Owner access while this session is active."
+              : "Owner can assign Business, HR, and System Ops permissions."
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  if (normalizedScope !== "webmaster") {
+    return `
+      <div class="admin-role-cell">
+        <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
+        <div class="admin-table-secondary">System Ops roles stay outside the HR console.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="admin-role-cell">
+      <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
+      <form class="admin-role-editor" data-update-admin-roles-form data-admin-scope="webmaster">
+        <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+        <label class="admin-role-checkbox">
+          <input type="checkbox" name="roles" value="webmaster" ${roles.includes("webmaster") ? "checked" : ""}>
+          System Ops
+        </label>
+        <label class="admin-role-checkbox">
+          <input type="checkbox" name="roles" value="hr" ${roles.includes("hr") ? "checked" : ""}>
+          HR
+        </label>
+        <button class="ghost-button" type="submit">${icon("check")} Save Roles</button>
+      </form>
+      <div class="admin-table-secondary">
+        ${escapeHtml(
+          isCurrentUser
+            ? "Current account must keep System Ops access while this session is active."
+            : "Removing System Ops access returns the account to HR ownership."
+        )}
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminDirectoryRow(adminUser, scope = "hr") {
   const isCurrentUser = Boolean(adminUser.currentUser);
   const identitySummary = [adminUser.email || "Email required", adminUser.username ? `@${adminUser.username}` : ""]
     .filter(Boolean)
@@ -2878,6 +3161,7 @@ function renderAdminDirectoryRow(adminUser) {
   const statusSummary = isCurrentUser
     ? `Current account${adminUser.lastLoginAt ? ` · Last Login ${formatDate(adminUser.lastLoginAt)}` : ""}`
     : adminInviteStatusText(adminUser);
+  const scopeValue = normalizeAdminScope(scope);
 
   return `
     <tr>
@@ -2885,7 +3169,7 @@ function renderAdminDirectoryRow(adminUser) {
         <div class="admin-table-primary">${escapeHtml(adminUser.displayName || adminUser.username || "Unknown admin")}</div>
         <div class="admin-table-secondary">${escapeHtml(identitySummary)}</div>
         <div class="admin-table-secondary">${escapeHtml(statusSummary)}</div>
-        <form class="admin-identity-form" data-update-admin-profile-form>
+        <form class="admin-identity-form" data-update-admin-profile-form data-admin-scope="${escapeHtml(scopeValue)}">
           <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
           <div class="admin-identity-grid">
             <label class="field">
@@ -2900,12 +3184,7 @@ function renderAdminDirectoryRow(adminUser) {
           <button class="ghost-button" type="submit">${icon("check")} Save Identity</button>
         </form>
       </td>
-      <td>
-        <div class="admin-role-cell">
-          <div class="admin-role-chip-row">${renderAdminRoleChips(roles)}</div>
-          <div class="admin-table-secondary">Webmaster roles stay outside the HR console.</div>
-        </div>
-      </td>
+      <td>${renderAdminRoleCell(adminUser, scope)}</td>
       <td>
         <span class="admin-table-chip ${adminUser.active === false ? "is-muted" : "is-positive"}">
           ${escapeHtml(adminUser.active === false ? "Disabled" : "Active")}
@@ -2923,12 +3202,12 @@ function renderAdminDirectoryRow(adminUser) {
                 ? "Configured"
                 : adminUser.inviteState === "pending"
                   ? "Invite Pending"
-                  : adminUser.inviteState === "expired"
+                : adminUser.inviteState === "expired"
                     ? "Invite Expired"
                     : "Needs Invite"
             )}
           </span>
-          <form class="admin-table-inline-form admin-password-inline-form" data-reset-admin-password-form>
+          <form class="admin-table-inline-form admin-password-inline-form" data-reset-admin-password-form data-admin-scope="${escapeHtml(scopeValue)}">
             <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
             <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="${escapeHtml(isCurrentUser ? "Use settings for your password" : "New Temporary Password")}"${isCurrentUser ? " disabled" : ""}>
             <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>${icon("lock")} Reset</button>
@@ -2938,19 +3217,19 @@ function renderAdminDirectoryRow(adminUser) {
       <td>
         <div class="admin-table-actions">
           ${!adminUser.credentialsConfigured ? `
-          <form data-resend-admin-invite-form>
+          <form data-resend-admin-invite-form data-admin-scope="${escapeHtml(scopeValue)}">
             <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
             <button class="ghost-button" type="submit">${icon("send")} ${escapeHtml(adminUser.inviteState === "pending" ? "Resend Invite" : "Send Invite")}</button>
           </form>
           ` : ""}
-          <form data-admin-access-form>
+          <form data-admin-access-form data-admin-scope="${escapeHtml(scopeValue)}">
             <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
             <input type="hidden" name="active" value="${adminUser.active ? "false" : "true"}">
             <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>
               ${adminUser.active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}
             </button>
           </form>
-          <form data-revoke-admin-sessions-form>
+          <form data-revoke-admin-sessions-form data-admin-scope="${escapeHtml(scopeValue)}">
             <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
             <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>${icon("refresh")} Sign Out Sessions</button>
           </form>
@@ -2960,9 +3239,14 @@ function renderAdminDirectoryRow(adminUser) {
   `;
 }
 
-function renderAdminDirectoryTable(adminUsers) {
+function renderAdminDirectoryTable(adminUsers, scope = "hr") {
   if (!adminUsers.length) {
-    return '<div class="empty-state">No HR Admin Accounts Yet.</div>';
+    const emptyText = normalizeAdminScope(scope) === "owner"
+      ? "No Admin Accounts Yet."
+      : normalizeAdminScope(scope) === "webmaster"
+        ? "No System Ops Admin Accounts Yet."
+        : "No HR Admin Accounts Yet.";
+    return `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
   }
 
   return `
@@ -2979,27 +3263,81 @@ function renderAdminDirectoryTable(adminUsers) {
           </tr>
         </thead>
         <tbody>
-          ${adminUsers.map((adminUser) => renderAdminDirectoryRow(adminUser)).join("")}
+          ${adminUsers.map((adminUser) => renderAdminDirectoryRow(adminUser, scope)).join("")}
         </tbody>
       </table>
     </div>
   `;
 }
 
-function renderAdminAccountsPanel() {
-  const adminUsers = Array.isArray(state.adminDirectory.adminUsers) ? state.adminDirectory.adminUsers : [];
+function renderAdminAccountsPanel(scope = "hr") {
+  const normalizedScope = normalizeAdminScope(scope);
+  const adminUsers = Array.isArray(readAdminDirectory(normalizedScope).adminUsers) ? readAdminDirectory(normalizedScope).adminUsers : [];
+  const title = normalizedScope === "owner" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
+  const countLabel = normalizedScope === "owner" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
+  const summaryText = normalizedScope === "owner"
+    ? "Manage all named Owner, HR, and System Ops admin accounts from this governance surface."
+    : normalizedScope === "webmaster"
+      ? "Manage system ops-role accounts here. Removing System Ops access returns the identity to HR ownership."
+      : "System Ops accounts are intentionally hidden from the HR console.";
+  const createNote = normalizedScope === "owner"
+    ? "Create a backup Owner account first, then keep day-to-day HR and System Ops access scoped to the right teams."
+    : normalizedScope === "webmaster"
+      ? "This surface creates System Ops admin accounts. Add HR only when the account should hold both roles."
+      : "This surface creates HR admin accounts. System Ops accounts stay outside the HR console.";
+  const roleControl = normalizedScope === "owner"
+    ? `
+        <div class="field">
+          <span>Roles</span>
+          <div class="admin-role-chip-row">
+            <label class="admin-role-checkbox">
+              <input name="roles" type="checkbox" value="owner">
+              Owner
+            </label>
+            <label class="admin-role-checkbox">
+              <input name="roles" type="checkbox" value="hr" checked>
+              HR
+            </label>
+            <label class="admin-role-checkbox">
+              <input name="roles" type="checkbox" value="webmaster">
+              System Ops
+            </label>
+          </div>
+        </div>
+      `
+    : normalizedScope === "webmaster"
+    ? `
+        <div class="field">
+          <span>Roles</span>
+          <div class="admin-role-chip-row">
+            <span class="admin-table-chip is-info">System Ops</span>
+            <label class="admin-role-checkbox">
+              <input name="roles" type="checkbox" value="hr">
+              HR
+            </label>
+          </div>
+          <input name="roles" type="hidden" value="webmaster">
+        </div>
+      `
+    : `
+        <input name="roles" type="hidden" value="hr">
+        <div class="field">
+          <span>Role</span>
+          <div class="admin-role-chip-row">${renderAdminRoleChips(["hr"])}</div>
+        </div>
+      `;
 
   return `
     <section class="panel-card employee-access-card">
       <div class="employee-access-head">
         <div>
-          <h3>HR Admin Accounts</h3>
-          <p>Webmaster-role accounts are intentionally hidden from the HR console.</p>
+          <h3>${escapeHtml(title)}</h3>
+          <p>${escapeHtml(summaryText)}</p>
         </div>
-        <span class="sync-pill">${escapeHtml(`${adminUsers.length} HR Admin${adminUsers.length === 1 ? "" : "s"}`)}</span>
+        <span class="sync-pill">${escapeHtml(`${adminUsers.length} ${countLabel}${adminUsers.length === 1 ? "" : "s"}`)}</span>
       </div>
 
-      <form class="employee-create-form admin-create-grid" data-create-admin-form>
+      <form class="employee-create-form admin-create-grid" data-create-admin-form data-admin-scope="${escapeHtml(normalizedScope)}">
         <label class="field">
           <span>Display name</span>
           <input name="displayName" maxlength="120" required placeholder="Alex Morgan">
@@ -3016,19 +3354,15 @@ function renderAdminAccountsPanel() {
           <span>Temporary password</span>
           <input name="password" type="password" minlength="10" autocomplete="new-password" placeholder="Only needed for manual setup">
         </label>
-        <input name="roles" type="hidden" value="hr">
-        <div class="field">
-          <span>Role</span>
-          <div class="admin-role-chip-row">${renderAdminRoleChips(["hr"])}</div>
-        </div>
+        ${roleControl}
         <div class="admin-create-actions">
           <button class="button employee-create-submit" type="submit" data-admin-create-action="invite">${icon("send")} Send Invite</button>
           <button class="ghost-button" type="submit" data-admin-create-action="password">${icon("lock")} Create With Password</button>
         </div>
       </form>
-      <p class="form-note admin-create-note">This surface creates HR-only admin accounts. Webmaster-role accounts stay outside the HR console.</p>
+      <p class="form-note admin-create-note">${escapeHtml(createNote)}</p>
 
-      ${renderAdminDirectoryTable(adminUsers)}
+      ${renderAdminDirectoryTable(adminUsers, normalizedScope)}
     </section>
   `;
 }
@@ -3101,12 +3435,9 @@ function renderEmployee() {
     <main class="page-shell employee-shell">
         <section class="employee-brand-banner" aria-label="Palziv brand banner">
           <div class="employee-brand-banner-head">
+            <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
             <div class="employee-brand-banner-copy">
-              <div class="employee-brand-banner-disc">
-                <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
-              </div>
-              <p class="employee-brand-banner-kicker">Employee updates</p>
-              <p class="employee-brand-banner-tagline">Official notices, urgent alerts, and company signal in one stream.</p>
+              <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
             </div>
           </div>
         </section>
@@ -3114,6 +3445,7 @@ function renderEmployee() {
         ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
       ${renderEmployeeSubscriptionBanner(setup)}
+      ${renderEmployeeStatusStrip(notices, setup)}
 
       <section class="feed-shell feed-shell-quiet feed-shell-bare" aria-label="Latest updates feed">
         <div class="feed-list feed-list-quiet">
@@ -3154,8 +3486,9 @@ function renderLauncher() {
         <div class="launcher-panel">
           <div class="launcher-grid">
             ${renderLauncherCard("employee", "Employee login")}
+            ${renderLauncherCard("owner", "Owner login")}
             ${renderLauncherCard("hr", "HR login")}
-            ${renderLauncherCard("webmaster", "IT login")}
+            ${renderLauncherCard("webmaster", "Systems login")}
           </div>
         </div>
       </section>
@@ -3191,7 +3524,7 @@ function renderAdminPublishPanel() {
                 <option>Weather</option>
                 <option>Shift</option>
                 <option>Safety</option>
-                <option>HR</option>
+                <option value="HR">HR</option>
               </select>
             </label>
             <label class="field">
@@ -3210,7 +3543,7 @@ function renderAdminPublishPanel() {
                 <option>Office Staff</option>
                 <option>Warehouse</option>
                 <option>Leadership</option>
-                <option>HR</option>
+                <option value="HR">HR</option>
               </select>
             </label>
             <label class="field">
@@ -3298,7 +3631,7 @@ function renderAdminAlertsPanel() {
         <div>
           <p class="eyebrow">${icon("bell")} Alert delivery</p>
           <h2>Delivery status</h2>
-          <p>HR monitors delivery here. Employees enroll from the employee portal, and Webmaster runs direct push diagnostics.</p>
+          <p>HR monitors delivery here. Employees enroll from the employee portal, and Systems runs direct push diagnostics.</p>
         </div>
       </div>
       ${renderAdminPushPanel()}
@@ -3355,15 +3688,24 @@ function renderHistoryTable(posts) {
           </tr>
         </thead>
         <tbody>
-          ${posts.map((post) => renderHistoryTableRow(post)).join("")}
+          ${posts.map((post) => renderHistoryTableRows(post)).join("")}
         </tbody>
       </table>
     </div>
   `;
 }
 
+function renderHistoryTableRows(post) {
+  const details = expandedAcknowledgementPostId === post.id
+    ? renderAcknowledgementDetailRow(post)
+    : "";
+  return `${renderHistoryTableRow(post)}${details}`;
+}
+
 function renderHistoryTableRow(post) {
   const safePriority = priorityClass(post.priority);
+  const summary = post.acknowledgementSummary || { acknowledged: 0, totalEmployees: 0, pending: 0 };
+  const canReviewAcknowledgements = Boolean(post.requiresAcknowledgement);
 
   return `
     <tr>
@@ -3389,15 +3731,114 @@ function renderHistoryTableRow(post) {
         <div class="admin-table-primary">${escapeHtml(formatAlertRetentionLabel(post.alertRetention))}</div>
       </td>
       <td>
-        <form class="admin-table-actions" data-delete-post-form>
-          <input type="hidden" name="id" value="${escapeHtml(post.id)}">
-          <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Delete Post">
-            ${icon("delete")} Delete
-          </button>
-        </form>
+        <div class="admin-table-actions">
+          ${canReviewAcknowledgements ? `
+            <button class="ghost-button" type="button" data-acknowledgement-detail="${escapeHtml(post.id)}" title="View acknowledgement detail">
+              ${icon("users")} ${expandedAcknowledgementPostId === post.id ? "Hide" : "Review"}
+            </button>
+            <button class="ghost-button" type="button" data-export-acknowledgements="${escapeHtml(post.id)}" title="Export acknowledgements CSV">
+              ${icon("clipboard")} Export
+            </button>
+            <div class="admin-table-secondary">${escapeHtml(summary.acknowledged)} read / ${escapeHtml(summary.pending)} pending</div>
+          ` : ""}
+          <form data-delete-post-form>
+            <input type="hidden" name="id" value="${escapeHtml(post.id)}">
+            <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Delete Post">
+              ${icon("delete")} Delete
+            </button>
+          </form>
+        </div>
       </td>
     </tr>
   `;
+}
+
+function renderAcknowledgementDetailRow(post) {
+  const acknowledgements = Array.isArray(post.acknowledgements) ? post.acknowledgements : [];
+  const pending = Array.isArray(post.pendingAcknowledgements) ? post.pendingAcknowledgements : [];
+
+  return `
+    <tr class="acknowledgement-detail-row">
+      <td colspan="8">
+        <div class="acknowledgement-detail-panel">
+          <div class="acknowledgement-detail-heading">
+            <div>
+              <div class="admin-table-primary">${escapeHtml(post.title)}</div>
+              <div class="admin-table-secondary">Acknowledgement detail</div>
+            </div>
+            <button class="ghost-button" type="button" data-export-acknowledgements="${escapeHtml(post.id)}">
+              ${icon("clipboard")} Export CSV
+            </button>
+          </div>
+          <div class="acknowledgement-detail-grid">
+            ${renderAcknowledgementList("Read", acknowledgements, true)}
+            ${renderAcknowledgementList("Pending", pending, false)}
+          </div>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderAcknowledgementList(label, employees, includeDate) {
+  const rows = employees.length
+    ? employees.map((employee) => `
+        <li class="acknowledgement-detail-item">
+          <span>
+            <strong>${escapeHtml(employee.employeeName || employee.name || "Employee")}</strong>
+            <small>${escapeHtml(employee.username || "")}</small>
+          </span>
+          ${includeDate ? `<time>${escapeHtml(formatDate(employee.acknowledgedAt))}</time>` : '<em>Not read</em>'}
+        </li>
+      `).join("")
+    : '<li class="acknowledgement-detail-empty">None</li>';
+
+  return `
+    <section class="acknowledgement-detail-list">
+      <h4>${escapeHtml(label)}</h4>
+      <ul>${rows}</ul>
+    </section>
+  `;
+}
+
+function acknowledgementCsv(post) {
+  const acknowledgements = Array.isArray(post.acknowledgements) ? post.acknowledgements : [];
+  const pending = Array.isArray(post.pendingAcknowledgements) ? post.pendingAcknowledgements : [];
+  const rows = [
+    ["Post title", "Category", "Priority", "Employee name", "Username", "Status", "Acknowledged at"],
+    ...acknowledgements.map((employee) => [
+      post.title,
+      post.type,
+      post.priority,
+      employee.employeeName || employee.name || "",
+      employee.username || "",
+      "Read",
+      employee.acknowledgedAt || ""
+    ]),
+    ...pending.map((employee) => [
+      post.title,
+      post.type,
+      post.priority,
+      employee.employeeName || employee.name || "",
+      employee.username || "",
+      "Pending",
+      ""
+    ])
+  ];
+
+  return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function downloadAcknowledgementCsv(post) {
+  const blob = new Blob([acknowledgementCsv(post)], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = `${safeFilename(post.title)}-acknowledgements.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function renderSecurityEventCard(event) {
@@ -3438,7 +3879,7 @@ function renderAdminSecurityPanel() {
         <div>
           <p class="eyebrow">${icon("alert")} Security visibility</p>
           <h2>Recent auth events</h2>
-          <p>Review the latest failed logins, throttles, and lockouts across HR, Webmaster, and employee sign-in.</p>
+          <p>Review the latest failed logins, throttles, and lockouts across HR, Systems, and employee sign-in.</p>
         </div>
         <span class="sync-pill">Persisted</span>
       </div>
@@ -3467,7 +3908,7 @@ function renderAdminSecurityPanel() {
 }
 
 function renderRoleSettingsHero(route) {
-  const role = route === "webmaster" ? "Webmaster" : "HR";
+  const role = route === "webmaster" ? "Systems" : "HR";
   const passwordStatus = state.passwordChangeStatus?.[route] || null;
 
   return `
@@ -3505,7 +3946,7 @@ function renderRoleSettingsHero(route) {
 }
 
 function renderPrivilegedPasswordPanel(route) {
-  const role = route === "webmaster" ? "Webmaster" : "HR";
+  const role = route === "webmaster" ? "Systems" : "HR";
 
   return `
     <section class="panel-card settings-credential-card" data-privileged-password-panel>
@@ -3546,7 +3987,7 @@ function renderWebmasterHrResetPanel() {
         <div>
           <p class="eyebrow">${icon("users")} HR recovery</p>
           <h3>Reset the HR password</h3>
-          <p>Use Webmaster authority to rotate the HR password and immediately sign out existing HR sessions.</p>
+          <p>Use Systems authority to rotate the HR password and immediately sign out existing HR sessions.</p>
         </div>
       </div>
       <form class="auth-form" data-webmaster-reset-hr-password-form>
@@ -3586,25 +4027,26 @@ function renderWebmasterSettingsPanel() {
           <div>
             <p class="eyebrow">${icon("monitor")} Control boundary</p>
             <h3>Keep diagnostics separate from credentials</h3>
-            <p>The webmaster console should feel analytical and calm. Credential changes belong in a separate settings surface so operators do not treat security actions like routine navigation.</p>
+            <p>The systems console should feel analytical and calm. Credential changes belong in a separate settings surface so operators do not treat security actions like routine navigation.</p>
           </div>
         </div>
 
         <div class="settings-context-grid">
           <div class="settings-context-item">
             <span>Operational tabs</span>
-            <strong>Overview, traffic, system, content</strong>
+            <strong>Overview, traffic, system, content, Codex</strong>
             <small>System review remains uncluttered and fast to scan.</small>
           </div>
           <div class="settings-context-item">
             <span>Credential action</span>
             <strong>Isolated under settings</strong>
-            <small>Changing the webmaster password signs out other active sessions for that account immediately.</small>
+            <small>Changing the systems password signs out other active sessions for that account immediately.</small>
           </div>
         </div>
       </section>
 
       ${renderPrivilegedPasswordPanel("webmaster")}
+      ${renderAdminAccountsPanel("webmaster")}
       ${renderWebmasterHrResetPanel()}
     </section>
   `;
@@ -3632,7 +4074,7 @@ function renderWebmasterOverviewPanel() {
       <div class="panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("chart")} Power Center</p>
-          <h2>Webmaster overview</h2>
+          <h2>Systems overview</h2>
           <p>Quick status for the site, the host, and the copy-ready brief.</p>
         </div>
         <span class="sync-pill">${icon("check")} Live snapshot</span>
@@ -3653,11 +4095,11 @@ function renderWebmasterOverviewPanel() {
         body: renderKeyValueGrid([
           ["Generated", formatDate(snapshot.generatedAt), "Snapshot time"],
           ["Launcher URL", urls.base || `${window.location.origin}${appPath()}`, "Canonical entry point"],
-          ["HR route", urls.hr || `${window.location.origin}${routePath("hr")}`, "Publish console"],
-          ["Employee route", urls.employee || `${window.location.origin}${routePath("employee")}`, "Read-only feed"],
+          ["HR route", urls.hr || `${window.location.origin}${routePath("hr")}`, "HR console"],
+          ["Employee route", urls.employee || `${window.location.origin}${routePath("employee")}`, "Signed-in feed and device enrollment"],
           ["Latest Update", board.latestPost ? board.latestPost.title : "None", board.latestPost ? formatDate(board.latestPost.createdAt) : "No Posts Yet"],
           ["Push subs", String(notifications.pushSubscriptions || 0), "Web push enrollments"],
-          ["Admin access", "Separated roles", "Distinct HR and Webmaster sessions"],
+          ["Admin access", "Separated roles", "Distinct HR and Systems sessions"],
           ["Enrollment", "Employee-authenticated", "Employees must sign in before subscribing"],
           ["Health ping", formatDurationMs(probes.health || 0), "API round-trip"]
         ])
@@ -3667,7 +4109,7 @@ function renderWebmasterOverviewPanel() {
         id: "overview-host-snapshot",
         eyebrow: "Host snapshot",
         title: "Runtime and probe timings",
-        description: "Check the active Node runtime, item counts, and how long each Webmaster probe took.",
+        description: "Check the active Node runtime, item counts, and how long each Systems probe took.",
         badge: "Tracked",
         iconName: "monitor",
         summaryMetrics: [
@@ -3678,7 +4120,7 @@ function renderWebmasterOverviewPanel() {
         body: renderKeyValueGrid([
           ["Node", server.nodeVersion || "Unknown", `Uptime ${server.uptimeSeconds || 0}s`],
           ["Board items", String(board.totalPosts || 0), "Updates tracked"],
-          ["Summary fetch", formatDurationMs(probes.summary || 0), "Webmaster endpoint"],
+          ["Summary fetch", formatDurationMs(probes.summary || 0), "Systems endpoint"],
           ["Posts fetch", formatDurationMs(probes.posts || 0), "Feed data"],
           ["Weather fetch", formatDurationMs(probes.weather || 0), "Weather payload"],
           ["Push status", formatDurationMs(probes.pushStatus || 0), "Notification status"]
@@ -3739,7 +4181,7 @@ function renderWebmasterTrafficPanel() {
         body: `
           ${renderKeyValueGrid([
             ["Requests", String(traffic.totals?.requests || 0), "All tracked requests"],
-            ["Page views", String(traffic.totals?.pageViews || 0), "Employee, HR, and webmaster views"],
+            ["Page views", String(traffic.totals?.pageViews || 0), "Employee, HR, and Systems views"],
             ["API calls", String(traffic.totals?.apiRequests || 0), "Backend requests"],
             ["Success rate", successRate, "2xx and 3xx responses"],
             ["Server errors", String(traffic.totals?.serverErrors || 0), "5xx responses"],
@@ -4028,11 +4470,11 @@ function renderWebmaster() {
   return `
     <main class="page-shell webmaster-shell">
       <header class="page-head">
-        ${brandBlock("Webmaster Command Center")}
+        ${brandBlock("Systems Command Center")}
         <div class="page-actions">
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
-          <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR console</button>
+          <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
           <button class="ghost-button" type="button" data-copy-webmaster-brief>${icon("clipboard")} Copy brief</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
           <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
@@ -4040,7 +4482,7 @@ function renderWebmaster() {
       </header>
 
       ${renderAppUpdateBanner()}
-      <section class="hero-strip hero-strip-webmaster" aria-label="Webmaster summary">
+      <section class="hero-strip hero-strip-webmaster" aria-label="Systems summary">
         ${renderWebmasterDrilldownStatCard({
           value: String(traffic.totals?.requests || 0),
           label: "Requests",
@@ -4087,7 +4529,7 @@ function renderWebmaster() {
 
       ${state.message ? `<div class="webmaster-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
 
-      ${renderTabBar(webmasterTabs, activeWebmasterTab, "webmaster", "Webmaster sections")}
+      ${renderTabBar(webmasterTabs, activeWebmasterTab, "webmaster", "Systems sections")}
 
       <section class="panel-surface">
         ${
@@ -4102,6 +4544,100 @@ function renderWebmaster() {
                   : activeWebmasterTab === "codex"
                     ? renderWebmasterCodexPanel()
                     : renderWebmasterSettingsPanel()
+        }
+      </section>
+    </main>
+  `;
+}
+
+function renderOwnerCompanySettingsPanel() {
+  return `
+    <section class="panel-stack">
+      <section class="panel-card">
+        <div class="panel-title panel-title-wide">
+          <div>
+            <p class="eyebrow">${icon("board")} Company Settings</p>
+            <h3>Business Control</h3>
+            <p>Use this area for company profile, billing owner, data-retention, and compliance defaults once those services are connected.</p>
+          </div>
+          <span class="sync-pill">Planned</span>
+        </div>
+        <div class="hero-strip hero-strip-hr" aria-label="Company settings readiness">
+          ${renderStatCard("Ready", "Role Model", "Owner is active server-side")}
+          ${renderStatCard("Next", "Billing", "Connect payment settings")}
+          ${renderStatCard("Next", "Retention", "Set audit and post retention")}
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderOwnerEmergencyPanel() {
+  const owners = (state.ownerAdminDirectory.adminUsers || []).filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("owner"));
+  const activeOwners = owners.filter((adminUser) => adminUser.active !== false);
+
+  return `
+    <section class="panel-stack">
+      <section class="panel-card">
+        <div class="panel-title panel-title-wide">
+          <div>
+            <p class="eyebrow">${icon("alert")} Emergency Access</p>
+            <h3>Recovery Readiness</h3>
+            <p>Keep at least two active named Owner accounts. Do not use shared master credentials for emergency access.</p>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${activeOwners.length} Active Owner${activeOwners.length === 1 ? "" : "s"}`)}</span>
+        </div>
+        <div class="hero-strip hero-strip-hr" aria-label="Emergency access summary">
+          ${renderStatCard(String(activeOwners.length), "Active Owners", "Named business-owner access")}
+          ${renderStatCard(activeOwners.length >= 2 ? "Healthy" : "Needs Backup", "Backup Owner", "Create one backup Owner account")}
+          ${renderStatCard("Future", "MFA", "Require stronger owner authentication")}
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderOwner() {
+  const adminUsers = Array.isArray(state.ownerAdminDirectory.adminUsers) ? state.ownerAdminDirectory.adminUsers : [];
+  const activeAdmins = adminUsers.filter((adminUser) => adminUser.active !== false);
+  const ownerCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("owner")).length;
+  const hrCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("hr")).length;
+  const webmasterCount = activeAdmins.filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("webmaster")).length;
+
+  return `
+    <main class="page-shell owner-shell">
+      <header class="page-head">
+        ${brandBlock("Owner Control Center")}
+        <div class="page-actions">
+          <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
+          <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
+          <button class="ghost-button" type="button" data-route="webmaster">${icon("monitor")} Systems Console</button>
+          <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
+          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
+        </div>
+      </header>
+
+      ${renderAppUpdateBanner()}
+      <section class="hero-strip hero-strip-webmaster" aria-label="Owner summary">
+        ${renderStatCard(String(adminUsers.length), "Admin Accounts", "All named admin identities")}
+        ${renderStatCard(String(ownerCount), "Owners", "Business-control accounts")}
+        ${renderStatCard(String(hrCount), "HR Admins", "HR and communication access")}
+        ${renderStatCard(String(webmasterCount), "System Ops Admins", "System operations access")}
+      </section>
+
+      ${state.message ? `<div class="webmaster-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
+
+      ${renderTabBar(ownerTabs, activeOwnerTab, "owner", "Owner sections")}
+
+      <section class="panel-surface">
+        ${
+          activeOwnerTab === "company"
+            ? renderOwnerCompanySettingsPanel()
+            : activeOwnerTab === "audit"
+              ? renderAdminSecurityPanel()
+              : activeOwnerTab === "emergency"
+                ? renderOwnerEmergencyPanel()
+                : renderAdminAccountsPanel("owner")
         }
       </section>
     </main>
@@ -4176,6 +4712,7 @@ function clearMessageSoon() {
 async function routeTo(route) {
   const nextPath = routePath(route);
   state.authRecovery.hr = false;
+  state.authRecovery.owner = false;
   state.authRecovery.webmaster = false;
   resetAdminInviteState();
 
@@ -4183,11 +4720,14 @@ async function routeTo(route) {
     activeAdminTab = "publish";
     activeHistoryFilter = "All";
     activeWebmasterTab = "overview";
+    activeOwnerTab = "accounts";
   }
 
   if (route === "hr") {
     activeAdminTab = "publish";
     activeHistoryFilter = "All";
+  } else if (route === "owner") {
+    activeOwnerTab = "accounts";
   } else if (route === "webmaster") {
     activeWebmasterTab = "overview";
   }
@@ -4217,6 +4757,12 @@ async function hydrateRoute() {
     } else {
       resetAdminInviteState();
     }
+    return;
+  }
+
+  if (route === "owner") {
+    await refreshOwnerData();
+    resetAdminInviteState();
     return;
   }
 
@@ -4262,17 +4808,21 @@ function render() {
     ? '<main class="auth-shell"><section class="empty-state">Loading portal...</section></main>'
     : route === "launcher"
       ? renderLauncher()
-      : route === "hr"
+    : route === "hr"
         ? (state.access.hr.authorized ? renderAdmin() : renderAdminAuthGate("hr"))
+      : route === "owner"
+        ? (state.access.owner.authorized ? renderOwner() : renderAdminAuthGate("owner"))
       : route === "webmaster"
           ? (state.access.webmaster.authorized ? renderWebmaster() : renderAdminAuthGate("webmaster"))
           : (state.access.employee.authorized ? renderEmployee() : renderEmployeeAuthGate());
   document.title = route === "launcher"
     ? APP_DISPLAY_TITLE
+    : route === "owner"
+    ? `${APP_DISPLAY_TITLE} Owner`
     : route === "hr"
-    ? `${APP_DISPLAY_TITLE} HR`
+      ? `${APP_DISPLAY_TITLE} HR`
     : route === "webmaster"
-      ? `${APP_DISPLAY_TITLE} Webmaster`
+      ? `${APP_DISPLAY_TITLE} Systems`
       : APP_DISPLAY_TITLE;
     const focusSnapshot = captureFocusSnapshot();
     app.innerHTML = pageMarkup;
@@ -4336,6 +4886,15 @@ async function deletePost(id) {
   state.posts = state.posts.filter((post) => post.id !== id);
 }
 
+async function acknowledgePost(id) {
+  const result = await requestJson(`/api/posts/${encodeURIComponent(id)}/acknowledgements`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+  await loadBoard();
+  return result;
+}
+
 async function updateWeather(payload) {
   const result = await requestJson("/api/weather", {
     method: "PUT",
@@ -4350,6 +4909,18 @@ async function handleDeleteAction(id) {
     setMessage("Deleted.", "success");
   } catch (error) {
     setMessage(error.message || "Could not delete post.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleAcknowledgeAction(id) {
+  try {
+    await acknowledgePost(id);
+    setMessage("Marked read.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not mark this update as read.");
   }
 
   render();
@@ -4484,9 +5055,11 @@ async function handleAdminAuthSubmit(event) {
   const form = event.target;
   const data = Object.fromEntries(new FormData(form));
   const mode = form.dataset.adminAuthMode === "setup" ? "setup" : "login";
-  const route = form.dataset.adminRoute === "webmaster" ? "webmaster" : "hr";
-  const targetAccess = route === "webmaster" ? "webmaster" : "hr";
-  const endpoint = route === "webmaster"
+  const route = normalizeAdminScope(form.dataset.adminRoute);
+  const targetAccess = route;
+  const endpoint = route === "owner"
+    ? (mode === "setup" ? "/api/owner/setup" : "/api/owner/login")
+    : route === "webmaster"
     ? (mode === "setup" ? "/api/webmaster/setup" : "/api/webmaster/login")
     : (mode === "setup" ? "/api/hr/setup" : "/api/hr/login");
 
@@ -4505,7 +5078,7 @@ async function handleAdminAuthSubmit(event) {
     await hydrateRoute();
     if (mode === "setup") {
       setMessage(
-        route === "webmaster" ? "Webmaster credentials configured." : "HR credentials configured.",
+        route === "owner" ? "Owner credentials configured." : route === "webmaster" ? "Systems credentials configured." : "HR credentials configured.",
         "success"
       );
     } else {
@@ -4604,6 +5177,9 @@ async function handleCreateAdminSubmit(event) {
   const formData = new FormData(form);
   const submitter = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
   const action = submitter?.dataset.adminCreateAction === "password" ? "password" : "invite";
+  const scope = normalizeAdminScope(form.dataset.adminScope);
+  const adminApi = adminApiBase(scope);
+  const defaultHrCheckbox = form.querySelector('input[name="roles"][value="hr"]');
   const payload = {
     displayName: formData.get("displayName"),
     email: formData.get("email"),
@@ -4619,7 +5195,7 @@ async function handleCreateAdminSubmit(event) {
         throw new Error("Temporary password must be at least 10 characters.");
       }
 
-      const result = await requestJson("/api/admin-users", {
+      const result = await requestJson(adminApi, {
         method: "POST",
         body: JSON.stringify({
           ...payload,
@@ -4627,31 +5203,44 @@ async function handleCreateAdminSubmit(event) {
         })
       });
       form.reset();
-      const defaultHrCheckbox = form.querySelector('input[name="roles"][value="hr"]');
       if (defaultHrCheckbox) {
         defaultHrCheckbox.checked = true;
       }
-      await refreshAdminData();
-      setMessage("Admin account created with a temporary password.", "success");
+      await refreshAdminManagementScope(scope);
+      setMessage(
+        scope === "owner"
+          ? "Admin account created with a temporary password."
+          : scope === "webmaster"
+          ? "System Ops admin account created with a temporary password."
+          : "Admin account created with a temporary password.",
+        "success"
+      );
       render();
       clearMessageSoon();
       return result;
     }
 
-    const result = await requestJson("/api/admin-users/invite", {
+    const result = await requestJson(`${adminApi}/invite`, {
       method: "POST",
       body: JSON.stringify(payload)
     });
     form.reset();
-    const defaultHrCheckbox = form.querySelector('input[name="roles"][value="hr"]');
     if (defaultHrCheckbox) {
       defaultHrCheckbox.checked = true;
     }
-    await refreshAdminData();
+    await refreshAdminManagementScope(scope);
     setMessage(
       result.emailDelivered === false
-        ? "Admin account created, but the invitation email could not be sent."
-        : "Admin invitation sent.",
+        ? scope === "owner"
+          ? "Admin account created, but the invitation email could not be sent."
+          : scope === "webmaster"
+          ? "System Ops admin account created, but the invitation email could not be sent."
+          : "Admin account created, but the invitation email could not be sent."
+        : scope === "owner"
+          ? "Admin invitation sent."
+        : scope === "webmaster"
+          ? "System Ops admin invitation sent."
+          : "Admin invitation sent.",
       result.emailDelivered === false ? "warning" : "success"
     );
   } catch (error) {
@@ -4664,19 +5253,21 @@ async function handleCreateAdminSubmit(event) {
 
 async function handleUpdateAdminProfileSubmit(event) {
   event.preventDefault();
-  const formData = new FormData(event.target);
+  const form = event.target;
+  const formData = new FormData(form);
   const adminUserId = String(formData.get("adminUserId") || "");
+  const scope = normalizeAdminScope(form.dataset.adminScope);
 
   try {
-    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/profile`, {
+    await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/profile`, {
       method: "POST",
       body: JSON.stringify({
         displayName: formData.get("displayName"),
         email: formData.get("email")
       })
     });
-    await refreshAdminData();
-    setMessage("Admin identity updated.", "success");
+    await refreshAdminManagementScope(scope);
+    setMessage(scope === "webmaster" ? "System Ops admin identity updated." : "Admin identity updated.", "success");
   } catch (error) {
     setMessage(error.message || "Could not update the admin identity.");
   }
@@ -4687,18 +5278,28 @@ async function handleUpdateAdminProfileSubmit(event) {
 
 async function handleResendAdminInviteSubmit(event) {
   event.preventDefault();
-  const formData = new FormData(event.target);
+  const form = event.target;
+  const formData = new FormData(form);
   const adminUserId = String(formData.get("adminUserId") || "");
+  const scope = normalizeAdminScope(form.dataset.adminScope);
 
   try {
-    const result = await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/invite`, {
+    const result = await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/invite`, {
       method: "POST"
     });
-    await refreshAdminData();
+    await refreshAdminManagementScope(scope);
     setMessage(
       result.emailDelivered === false
-        ? "Invitation refreshed, but the email could not be sent."
-        : "Invitation sent.",
+        ? scope === "owner"
+          ? "Invitation refreshed, but the email could not be sent."
+          : scope === "webmaster"
+          ? "System Ops invitation refreshed, but the email could not be sent."
+          : "Invitation refreshed, but the email could not be sent."
+        : scope === "owner"
+          ? "Invitation sent."
+        : scope === "webmaster"
+          ? "System Ops invitation sent."
+          : "Invitation sent.",
       result.emailDelivered === false ? "warning" : "success"
     );
   } catch (error) {
@@ -4711,21 +5312,56 @@ async function handleResendAdminInviteSubmit(event) {
 
 async function handleAdminAccessSubmit(event) {
   event.preventDefault();
-  const formData = new FormData(event.target);
+  const form = event.target;
+  const formData = new FormData(form);
   const adminUserId = String(formData.get("adminUserId") || "");
   const active = String(formData.get("active") || "") === "true";
+  const scope = normalizeAdminScope(form.dataset.adminScope);
 
   try {
-    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/status`, {
+    await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/status`, {
       method: "POST",
       body: JSON.stringify({
         active
       })
     });
-    await refreshAdminData();
-    setMessage(active ? "Admin access restored." : "Admin access disabled.", "success");
+    await refreshAdminManagementScope(scope);
+    setMessage(
+      active
+        ? scope === "webmaster"
+          ? "System Ops admin access restored."
+          : "Admin access restored."
+        : scope === "webmaster"
+          ? "System Ops admin access disabled."
+          : "Admin access disabled.",
+      "success"
+    );
   } catch (error) {
     setMessage(error.message || "Could not update admin access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleUpdateAdminRolesSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const adminUserId = String(formData.get("adminUserId") || "");
+  const scope = normalizeAdminScope(form.dataset.adminScope);
+
+  try {
+    await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/roles`, {
+      method: "POST",
+      body: JSON.stringify({
+        roles: formData.getAll("roles")
+      })
+    });
+    await refreshAdminManagementScope(scope);
+    setMessage(scope === "webmaster" ? "System Ops admin roles updated." : "Admin roles updated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update admin roles.");
   }
 
   render();
@@ -4737,17 +5373,23 @@ async function handleResetAdminPasswordSubmit(event) {
   const form = event.target;
   const formData = new FormData(form);
   const adminUserId = String(formData.get("adminUserId") || "");
+  const scope = normalizeAdminScope(form.dataset.adminScope);
 
   try {
-    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/password`, {
+    await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/password`, {
       method: "POST",
       body: JSON.stringify({
         password: formData.get("password")
       })
     });
     form.reset();
-    await refreshAdminData();
-    setMessage("Admin password reset. Existing sessions were signed out.", "success");
+    await refreshAdminManagementScope(scope);
+    setMessage(
+      scope === "webmaster"
+        ? "System Ops admin password reset. Existing sessions were signed out."
+        : "Admin password reset. Existing sessions were signed out.",
+      "success"
+    );
   } catch (error) {
     setMessage(error.message || "Could not reset the admin password.");
   }
@@ -4804,7 +5446,7 @@ async function handlePrivilegedPasswordChangeSubmit(event) {
   event.preventDefault();
   const form = event.target;
   const route = form.dataset.roleRoute === "webmaster" ? "webmaster" : "hr";
-  const role = route === "webmaster" ? "Webmaster" : "HR";
+  const role = route === "webmaster" ? "Systems" : "HR";
   const data = Object.fromEntries(new FormData(form));
 
   if (String(data.password || "") !== String(data.confirmPassword || "")) {
@@ -4944,16 +5586,18 @@ async function handleRevokeEmployeeSessionsSubmit(event) {
 
 async function handleRevokeAdminSessionsSubmit(event) {
   event.preventDefault();
-  const formData = new FormData(event.target);
+  const form = event.target;
+  const formData = new FormData(form);
   const adminUserId = String(formData.get("adminUserId") || "");
+  const scope = normalizeAdminScope(form.dataset.adminScope);
 
   try {
-    await requestJson(`/api/admin-users/${encodeURIComponent(adminUserId)}/sessions/revoke`, {
+    await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/sessions/revoke`, {
       method: "POST",
       body: JSON.stringify({})
     });
-    await refreshAdminData();
-    setMessage("Admin sessions revoked.", "success");
+    await refreshAdminManagementScope(scope);
+    setMessage(scope === "webmaster" ? "System Ops admin sessions revoked." : "Admin sessions revoked.", "success");
   } catch (error) {
     setMessage(error.message || "Could not revoke admin sessions.");
   }
@@ -4979,6 +5623,9 @@ document.addEventListener("click", async (event) => {
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
   const deleteButton = target.closest("[data-delete-post]");
+  const acknowledgementDetailButton = target.closest("[data-acknowledgement-detail]");
+  const acknowledgementExportButton = target.closest("[data-export-acknowledgements]");
+  const acknowledgeButton = target.closest("[data-acknowledge-post]");
   const enableAlertsButton = target.closest("[data-enable-alerts]");
   const disableAlertsButton = target.closest("[data-disable-alerts]");
   const sendTestPushButton = target.closest("[data-send-test-push]");
@@ -5022,10 +5669,37 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     if (tabButton.dataset.tabGroup === "hr") {
       activeAdminTab = tabButton.dataset.tab || "publish";
+    } else if (tabButton.dataset.tabGroup === "owner") {
+      activeOwnerTab = tabButton.dataset.tab || "accounts";
     } else if (tabButton.dataset.tabGroup === "webmaster") {
       activeWebmasterTab = tabButton.dataset.tab || "overview";
     }
     render();
+    return;
+  }
+
+  if (acknowledgementDetailButton) {
+    event.preventDefault();
+    const postId = acknowledgementDetailButton.dataset.acknowledgementDetail || "";
+    expandedAcknowledgementPostId = expandedAcknowledgementPostId === postId ? "" : postId;
+    render();
+    return;
+  }
+
+  if (acknowledgementExportButton) {
+    event.preventDefault();
+    const postId = acknowledgementExportButton.dataset.exportAcknowledgements || "";
+    const post = state.posts.find((entry) => entry.id === postId);
+    if (!post) {
+      setMessage("That update is no longer available.", "error");
+      render();
+      clearMessageSoon();
+      return;
+    }
+    downloadAcknowledgementCsv(post);
+    setMessage("Acknowledgement CSV exported.", "success");
+    render();
+    clearMessageSoon();
     return;
   }
 
@@ -5073,12 +5747,20 @@ document.addEventListener("click", async (event) => {
 
   if (adminLogoutButton) {
     event.preventDefault();
-    const route = currentRoute() === "webmaster" ? "webmaster" : "hr";
-    await requestJson(route === "webmaster" ? "/api/webmaster/logout" : "/api/hr/logout", {
+    const route = currentRoute() === "owner" ? "owner" : currentRoute() === "webmaster" ? "webmaster" : "hr";
+    await requestJson(route === "owner" ? "/api/owner/logout" : route === "webmaster" ? "/api/webmaster/logout" : "/api/hr/logout", {
       method: "POST",
       body: JSON.stringify({})
     });
-    if (route === "webmaster") {
+    if (route === "owner") {
+      state.access.owner = {
+        ...state.access.owner,
+        authorized: false,
+        sessionExpiresAt: "",
+        csrfToken: "",
+        error: ""
+      };
+    } else if (route === "webmaster") {
       state.access.webmaster = {
         ...state.access.webmaster,
         authorized: false,
@@ -5102,7 +5784,9 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.closest("[data-refresh]")) {
-    if (currentRoute() === "webmaster") {
+    if (currentRoute() === "owner") {
+      await refreshOwnerData();
+    } else if (currentRoute() === "webmaster") {
       await refreshWebmasterData();
     } else if (currentRoute() === "hr") {
       await refreshAdminData();
@@ -5139,6 +5823,12 @@ document.addEventListener("click", async (event) => {
   if (deleteButton) {
     event.preventDefault();
     await handleDeleteAction(deleteButton.dataset.deletePost);
+    return;
+  }
+
+  if (acknowledgeButton) {
+    event.preventDefault();
+    await handleAcknowledgeAction(acknowledgeButton.dataset.acknowledgePost);
     return;
   }
 
@@ -5224,6 +5914,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-update-admin-profile-form]")) {
     await handleUpdateAdminProfileSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-update-admin-roles-form]")) {
+    await handleUpdateAdminRolesSubmit(event);
     return;
   }
 

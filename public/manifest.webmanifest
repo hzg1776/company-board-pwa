@@ -2,7 +2,7 @@
   "name": "Palziv",
   "short_name": "Palziv",
   "description": "Updates and alerts portal for Palziv with HR-managed company news, weather, and push notifications.",
-  "start_url": "/palzivalerts",
+  "start_url": "/palzivalerts/",
   "scope": "/palzivalerts/",
   "display": "standalone",
   "background_color": "#f4f8fb",
@@ -38,9 +38,9 @@
       ]
     },
     {
-      "name": "HR Console",
-      "short_name": "HR",
-      "description": "Open the HR publishing console",
+        "name": "HR Console",
+        "short_name": "HR",
+        "description": "Open the HR publishing console",
       "url": "/palzivalerts/hr",
       "icons": [
         {
@@ -52,9 +52,9 @@
       ]
     },
     {
-      "name": "Webmaster",
-      "short_name": "Web",
-      "description": "Open analytics and site diagnostics",
+        "name": "Systems",
+        "short_name": "Web",
+        "description": "Open systems analytics and diagnostics",
       "url": "/palzivalerts/webmaster",
       "icons": [
         {

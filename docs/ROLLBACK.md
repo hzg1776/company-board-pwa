@@ -20,11 +20,11 @@ Use the last known good release plus the latest safe data backup.
 
 1. announce a maintenance window
 2. capture current logs
-3. take a fresh backup with [backup-data.ps1](C:/Users/admin/Documents/Codex/Project-A/scripts/backup-data.ps1)
+3. take a fresh runtime backup with [backup-data.ps1](C:/Users/admin/Documents/Codex/Project-A/scripts/backup-data.ps1) against `C:\ProgramData\Palziv\runtime`
 4. redeploy the last known good code
 5. restore data only if the release corrupted data or schema expectations
 6. restart the app
-7. run [health-check.ps1](C:/Users/admin/Documents/Codex/Project-A/scripts/health-check.ps1)
+7. run [health-check.ps1](C:/Users/admin/Documents/Codex/Project-A/scripts/health-check.ps1) against the public hostname
 8. confirm public URL behavior
 
 ## Decision Rule

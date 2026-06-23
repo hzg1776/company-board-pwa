@@ -7,7 +7,7 @@ Get one pilot customer live with minimal operator error and a repeatable handoff
 ## Ideal Pilot Customer
 
 - one location or one team
-- low internal IT friction
+- low internal Systems friction
 - clear need for employee notices or status updates
 - one accountable admin contact
 
@@ -16,7 +16,7 @@ Get one pilot customer live with minimal operator error and a repeatable handoff
 Included:
 
 - HR admin setup
-- webmaster setup
+- Systems setup
 - employee login setup
 - employee feed
 - weather updates
@@ -36,13 +36,13 @@ Not included:
 2. confirm reverse proxy routing
 3. confirm backup script works
 4. confirm health checks pass
-5. confirm HR and Webmaster credentials are set
+5. confirm HR and Systems credentials are set
 6. confirm one named customer admin
 
 ## Customer Setup Checklist
 
 1. create HR admin access
-2. provision Webmaster separately
+2. provision Systems separately
 3. create initial employee accounts
 4. publish first notice
 5. verify employee view

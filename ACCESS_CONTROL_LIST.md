@@ -12,9 +12,9 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 - Can call health and access-check endpoints
 - Cannot create content
 - Cannot manage employees
-- Cannot view protected HR or Webmaster data
+- Cannot view protected HR or Systems data
 - Cannot complete first-run admin setup without the deployment setup secret
-- Cannot provision webmaster access
+- Cannot provision Systems access
 
 ### Bootstrap operator
 
@@ -28,7 +28,7 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 - Can authenticate with username and password
 - Can access employee board content after login
 - Can enroll for employee-scoped notifications where the server authorizes that flow
-- Cannot access HR or Webmaster functions
+- Cannot access HR or Systems functions
 
 ### HR admin
 
@@ -37,15 +37,15 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 - Can create employees, reset employee passwords, disable employees, and revoke employee sessions
 - Can access HR-only protected APIs
 - Can review the security events screen and recent authentication events
-- Can provision the initial webmaster password through the protected HR flow
-- Cannot use webmaster-only routes unless separately signed in as webmaster
+- Can provision the initial Systems password through the protected HR flow
+- Cannot use Systems-only routes unless separately signed in as Systems
 
-### Webmaster
+### Systems
 
-- Authenticates with a separate webmaster password
+- Authenticates with a separate Systems password
 - Uses a separate session and cookie boundary from HR
-- Can access protected webmaster summaries and operational views
-- Can use webmaster-scoped mutation endpoints that require the webmaster CSRF token
+- Can access protected Systems summaries and operational views
+- Can use Systems-scoped mutation endpoints that require the Systems CSRF token
 - Cannot use HR-only employee-management or publishing routes unless separately signed in as HR
 
 ## Authentication Controls
@@ -57,13 +57,13 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
   - valid `ADMIN_SETUP_TOKEN`
   - HR admin not already configured
 
-### Webmaster provisioning
+### Systems provisioning
 
 - `POST /api/webmaster/setup` requires:
   - same-origin request
   - valid HR session
   - valid HR CSRF token
-  - webmaster access not already configured
+  - Systems access not already configured
 
 ### HR login
 
@@ -73,11 +73,11 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
   - IP-based and account-based rate limiting
   - temporary backoff and lockout on repeated failures
 
-### Webmaster login
+### Systems login
 
 - `POST /api/webmaster/login` requires:
   - same-origin request
-  - valid webmaster password
+  - valid Systems password
   - IP-based and account-based rate limiting
   - temporary backoff and lockout on repeated failures
 
@@ -107,6 +107,7 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 
 ## Current Risk Notes
 
-- HR and Webmaster are now separated in sessions, but privilege boundaries still depend on password-only auth
+- HR and Systems are now separated in sessions, but privilege boundaries still depend on password-only auth
 - Least privilege is improved, but future work should add stronger auth for privileged roles if the app becomes customer-facing
 - Proxy trust still requires correct deployment configuration to be safe
+

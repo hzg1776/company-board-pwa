@@ -3,8 +3,10 @@
 ## Secrets In Scope
 
 - `ADMIN_SETUP_TOKEN`
+- `ADMIN_RECOVERY_TOKEN`
+- `ADMIN_DAILY_RECOVERY_SEED`
 - HR password
-- Webmaster password
+- Systems password
 - employee credentials if compromise is suspected
 - any deployment-specific API keys or push credentials managed outside the app
 
@@ -12,15 +14,15 @@
 
 1. stabilize access to the server
 2. back up current data
-3. rotate deployment secret
+3. rotate deployment bootstrap and recovery secrets
 4. rotate HR credentials
-5. rotate Webmaster credentials
+5. rotate Systems credentials
 6. rotate employee credentials only if incident scope requires it
 7. restart and validate public health
 
 ## Deployment Secret Rotation
 
-1. generate a new random token
+1. generate new random values for any in-use bootstrap or recovery secret
 2. update the production startup configuration
 3. restart the app
 4. confirm existing app behavior is normal
@@ -28,9 +30,10 @@
 Note:
 
 - the setup token is mainly for protected bootstrap and emergency reprovisioning controls
+- the recovery token or daily recovery seed controls operator-driven HR recovery
 - after stable production bootstrap, keep it secret and out of source control
 
-## HR And Webmaster Password Rotation
+## HR And Systems Password Rotation
 
 Use a controlled operator workflow:
 

@@ -277,6 +277,19 @@ function Get-TrustedCloudflaredProcess {
     Select-Object -First 1
 }
 
+function Stop-TrustedCloudflaredProcess {
+  param([string]$ConfigPath)
+
+  $trustedProcess = Get-TrustedCloudflaredProcess -ConfigPath $ConfigPath
+  if (-not $trustedProcess) {
+    return $false
+  }
+
+  Stop-Process -Id $trustedProcess.ProcessId -Force -ErrorAction Stop
+  Write-Host "Stopped direct cloudflared process $($trustedProcess.ProcessId) before starting the service."
+  return $true
+}
+
 function Wait-ForServiceRunning {
   param(
     [string]$ServiceName,
@@ -554,6 +567,12 @@ function Ensure-CloudflaredService {
     return
   }
 
+  try {
+    $null = Stop-TrustedCloudflaredProcess -ConfigPath $ConfigPath
+  } catch {
+    Write-Warning "Could not stop the existing direct cloudflared process. $($_.Exception.Message)"
+  }
+
   if ($service.Status -ne "Running") {
     try {
       Start-Service -Name $ServiceName
@@ -616,6 +635,6 @@ Write-Step "Recovery summary"
 Write-Host "Launcher: http://localhost:$Port/palzivalerts"
 Write-Host "Employee feed: http://localhost:$Port/palzivalerts/employee"
 Write-Host "HR board: http://localhost:$Port/palzivalerts/hr"
-Write-Host "Webmaster board: http://localhost:$Port/palzivalerts/webmaster"
+Write-Host "Systems board: http://localhost:$Port/palzivalerts/webmaster"
 Write-Host "Public origin: $resolvedPublicBaseUrl"
 Write-Host "If the tunnel service is installed and running, it will bridge the same local port to your public hostname."

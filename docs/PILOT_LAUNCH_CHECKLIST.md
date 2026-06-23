@@ -19,30 +19,31 @@ Do not onboard a pilot customer unless every `Launch Day` item below is complete
    - `http://127.0.0.1:3116/api/health` returns `200`
 3. Confirm the live app is listening on port `3116`.
 4. Confirm the public hostname resolves to the working Cloudflare tunnel path.
-5. Confirm the tunnel watchdog task exists:
+5. Confirm the `Cloudflared` Windows service exists and is running.
+6. Confirm the tunnel watchdog task exists:
    - `CompanyBoardPWA Startup Tunnel Watchdog`
-6. Confirm the recurring recovery task exists:
+7. Confirm the recurring recovery task exists:
    - `CompanyBoardPWA Startup Recovery`
-7. Confirm a fresh backup exists from today.
-8. Confirm `HR` login works.
-9. Confirm `Webmaster` login works.
-10. Confirm `HR` password change works.
-11. Confirm `Webmaster` password change works.
-12. Confirm the admin UI shows:
+8. Confirm a fresh runtime backup exists from today under `C:\ProgramData\Palziv\runtime\backups`.
+9. Confirm `HR` login works.
+10. Confirm `Systems` login works.
+11. Confirm `HR` password change works.
+12. Confirm `Systems` password change works.
+13. Confirm the admin UI shows:
    - last password changed
    - other active sessions signed out
-13. Confirm employee feed loads.
-14. Confirm weather panel loads.
-15. Confirm notice publishing works.
-16. Confirm push config loads.
-17. Confirm at least one test push can be sent if a pilot device is enrolled.
+14. Confirm employee feed loads.
+15. Confirm weather panel loads.
+16. Confirm notice publishing works.
+17. Confirm push config loads.
+18. Confirm at least one test push can be sent if a pilot device is enrolled.
 
 ## Operator Credentials
 
 Before onboarding:
 
 1. Set a known `HR` password.
-2. Set a known `Webmaster` password.
+2. Set a known `Systems` password.
 3. Store both in your secure operator vault, not in chat or source control.
 4. Confirm the current operator can sign in with both roles.
 
@@ -51,21 +52,21 @@ Before onboarding:
 Before any onboarding session:
 
 1. Run a fresh backup.
-2. Verify the newest backup zip exists.
-3. Verify the newest backup manifest exists.
+2. Verify the newest runtime backup zip exists under `C:\ProgramData\Palziv\runtime\backups`.
+3. Verify the newest runtime backup manifest exists under `C:\ProgramData\Palziv\runtime\backups`.
 4. Confirm you know the rollback owner.
 
 Commands:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot C:\ProgramData\Palziv\runtime
 powershell -ExecutionPolicy Bypass -File .\scripts\health-check.ps1 -BaseUrl https://itotexpress.com
 ```
 
 ## Customer Onboarding Flow
 
 1. Sign in as `HR`.
-2. Sign in as `Webmaster`.
+2. Sign in as `Systems`.
 3. Create the first employee account.
 4. Publish the first notice.
 5. Verify the notice appears on the employee feed.
@@ -76,12 +77,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\health-check.ps1 -BaseUrl htt
    - how to publish a notice
    - how to disable an employee
    - how to reset an employee password
-   - how to change `HR` and `Webmaster` passwords
+   - how to change `HR` and `Systems` passwords
 
 ## Daily Pilot Ops
 
 1. Run the public health check.
-2. Review `logs\tunnel-watchdog.log`.
+2. Review `C:\ProgramData\Palziv\runtime\logs\tunnel-watchdog.log`.
 3. Check whether any auth failures or throttles look suspicious.
 4. Confirm yesterday's backup exists.
 5. Confirm no unexpected service or tunnel outage occurred.
