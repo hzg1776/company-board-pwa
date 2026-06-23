@@ -44,13 +44,43 @@ function Write-WatchdogLog {
     Write-Host $line
 }
 
+function New-WatchdogState {
+    return @{
+        lastAlertAt = $null
+        lastAlertKey = $null
+        lastRecoveryAt = $null
+    }
+}
+
+function Read-WatchdogStateValue {
+    param(
+        [object]$State,
+        [string]$PropertyName
+    )
+
+    if ($null -eq $State) {
+        return $null
+    }
+
+    if ($State -is [System.Collections.IDictionary]) {
+        if ($State.Contains($PropertyName)) {
+            return $State[$PropertyName]
+        }
+
+        return $null
+    }
+
+    $property = $State.PSObject.Properties[$PropertyName]
+    if ($null -ne $property) {
+        return $property.Value
+    }
+
+    return $null
+}
+
 function Get-WatchdogState {
     if (-not (Test-Path -LiteralPath $stateFile)) {
-        return @{
-            lastAlertAt = $null
-            lastAlertKey = $null
-            lastRecoveryAt = $null
-        }
+        return New-WatchdogState
     }
 
     try {
@@ -59,19 +89,15 @@ function Get-WatchdogState {
             throw "State file is empty."
         }
 
-        $state = $raw | ConvertFrom-Json -AsHashtable
+        $state = $raw | ConvertFrom-Json
         return @{
-            lastAlertAt = $state.lastAlertAt
-            lastAlertKey = $state.lastAlertKey
-            lastRecoveryAt = $state.lastRecoveryAt
+            lastAlertAt = Read-WatchdogStateValue -State $state -PropertyName "lastAlertAt"
+            lastAlertKey = Read-WatchdogStateValue -State $state -PropertyName "lastAlertKey"
+            lastRecoveryAt = Read-WatchdogStateValue -State $state -PropertyName "lastRecoveryAt"
         }
     } catch {
         Write-WatchdogLog -Level "warn" -Message "Could not read watchdog state; resetting state. $($_.Exception.Message)"
-        return @{
-            lastAlertAt = $null
-            lastAlertKey = $null
-            lastRecoveryAt = $null
-        }
+        return New-WatchdogState
     }
 }
 
@@ -215,6 +241,19 @@ function Get-TrustedCloudflaredProcesses {
     )
 }
 
+function Stop-TrustedCloudflaredProcesses {
+    param([string]$ConfigPath)
+
+    foreach ($process in (Get-TrustedCloudflaredProcesses -ConfigPath $ConfigPath)) {
+        try {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+            Write-WatchdogLog -Level "warn" -Message "Stopped direct cloudflared process $($process.ProcessId) before promoting the service."
+        } catch {
+            Write-WatchdogLog -Level "warn" -Message "Could not stop direct cloudflared process $($process.ProcessId). $($_.Exception.Message)"
+        }
+    }
+}
+
 function Start-CloudflaredTunnelProcess {
     param(
         [string]$Root,
@@ -330,6 +369,8 @@ function Recover-CloudflaredTunnel {
     $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($service) {
         try {
+            Stop-TrustedCloudflaredProcesses -ConfigPath $ConfigPath
+
             if ($service.Status -eq "Running") {
                 Restart-Service -Name $ServiceName -Force -ErrorAction Stop
                 $action = "restart service"

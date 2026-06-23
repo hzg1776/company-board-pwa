@@ -128,13 +128,12 @@ The installer now does four things:
 - Registers the app startup task so the portal comes back after boot.
 - Registers a recurring recovery task that reruns the same startup script every 5 minutes so the host self-heals after a crash or service drop.
 - Repairs or installs the `cloudflared` Windows service, enables failure recovery, and points it at `localhost:3116`.
-
-It also registers a tunnel watchdog:
+- Registers a tunnel watchdog task that checks public vs local health every minute.
 
 - runs every 1 minute
 - compares public `/api/health` to local `http://127.0.0.1:3116/api/health`
 - restarts `cloudflared` when the origin is healthy but the tunnel path is failing
-- writes to `logs\tunnel-watchdog.log`
+- writes to `C:\ProgramData\Palziv\runtime\logs\tunnel-watchdog.log` on the elevated production path
 - writes Windows Application Event Log entries under source `CompanyBoardPWA`
 - can send a webhook alert when you pass `-AlertWebhookUrl`
 
@@ -144,7 +143,7 @@ Example:
 powershell -ExecutionPolicy Bypass -File "C:\Users\admin\Documents\Codex\Project-A\scripts\install-startup-task.ps1" -AlertWebhookUrl "https://your-alert-endpoint.example/webhook"
 ```
 
-If elevation is available, the startup and recovery tasks run as `SYSTEM`. Otherwise, the installer cannot complete the self-healing registration from this session.
+With elevation, the startup, recovery, and watchdog tasks run as `SYSTEM` and the `cloudflared` service is configured. Without elevation, only the user-scoped startup task path is available and the recurring self-heal tasks are skipped.
 
 ## 9. Update Workflow
 

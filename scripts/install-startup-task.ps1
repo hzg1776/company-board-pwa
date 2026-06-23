@@ -140,6 +140,71 @@ function Configure-CloudflaredServiceRecovery {
   }
 }
 
+function Get-CloudflaredTunnelId {
+  param([string]$ConfigPath)
+
+  if (-not (Test-Path $ConfigPath)) {
+    return $null
+  }
+
+  $configText = Get-Content -LiteralPath $ConfigPath -Raw
+  $match = [regex]::Match($configText, '(?m)^\s*tunnel:\s*(.+)$')
+
+  if (-not $match.Success) {
+    return $null
+  }
+
+  return $match.Groups[1].Value.Trim()
+}
+
+function Get-TrustedCloudflaredProcesses {
+  param([string]$ConfigPath)
+
+  $tunnelId = Get-CloudflaredTunnelId -ConfigPath $ConfigPath
+  if (-not $tunnelId) {
+    return @()
+  }
+
+  return @(
+    Get-CimInstance Win32_Process -Filter "Name = 'cloudflared.exe'" -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.CommandLine -and
+        $_.CommandLine -match 'tunnel\s+run' -and
+        $_.CommandLine -match [regex]::Escape($tunnelId)
+      }
+  )
+}
+
+function Stop-TrustedCloudflaredProcesses {
+  param([string]$ConfigPath)
+
+  foreach ($process in (Get-TrustedCloudflaredProcesses -ConfigPath $ConfigPath)) {
+    try {
+      Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+      Write-Host "Stopped direct cloudflared process $($process.ProcessId) before promoting the service."
+    } catch {
+      Write-Warning "Could not stop direct cloudflared process $($process.ProcessId). $($_.Exception.Message)"
+    }
+  }
+}
+
+function Set-CloudflaredServiceImagePath {
+  param(
+    [string]$ServiceName,
+    [string]$ExecutablePath,
+    [string]$ConfigPath
+  )
+
+  $serviceRegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+  if (-not (Test-Path $serviceRegistryPath)) {
+    throw "Cloudflared service registry path was not found: $serviceRegistryPath"
+  }
+
+  $imagePath = "`"$ExecutablePath`" --config=$ConfigPath tunnel run"
+  Set-ItemProperty -Path $serviceRegistryPath -Name ImagePath -Value $imagePath
+  Write-Host "Updated Cloudflared service ImagePath to use $ConfigPath"
+}
+
 $startupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $publicBaseUrl = Get-CloudflaredPublicBaseUrl -ConfigPath $CloudflaredConfigPath
 $runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
@@ -275,6 +340,7 @@ function Sync-CloudflaredServiceConfig {
 
   Write-Host "Synced Cloudflared config to $targetConfigPath"
   Write-Host "Cloudflared origin now targets localhost:$TargetPort"
+  return $targetConfigPath
 }
 
 function Ensure-CloudflaredService {
@@ -286,7 +352,8 @@ function Ensure-CloudflaredService {
 
   $cloudflaredExe = Resolve-CloudflaredExecutable
   $systemProfileConfig = Join-Path $env:WINDIR "System32\config\systemprofile\.cloudflared"
-  Sync-CloudflaredServiceConfig -SourcePath $ConfigPath -TargetDirectory $systemProfileConfig -TargetPort $TargetPort
+  $serviceConfigPath = Sync-CloudflaredServiceConfig -SourcePath $ConfigPath -TargetDirectory $systemProfileConfig -TargetPort $TargetPort
+  Stop-TrustedCloudflaredProcesses -ConfigPath $serviceConfigPath
 
   $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
@@ -297,6 +364,7 @@ function Ensure-CloudflaredService {
     $service = Get-Service -Name $ServiceName -ErrorAction Stop
   }
 
+  Set-CloudflaredServiceImagePath -ServiceName $ServiceName -ExecutablePath $cloudflaredExe -ConfigPath $serviceConfigPath
   Set-Service -Name $ServiceName -StartupType Automatic
   Configure-CloudflaredServiceRecovery -ServiceName $ServiceName
 
@@ -309,6 +377,10 @@ function Ensure-CloudflaredService {
   Start-Sleep -Seconds 2
   $service = Get-Service -Name $ServiceName
 
+  if ($service.Status -ne "Running") {
+    throw "cloudflared service did not remain running."
+  }
+
   Write-Host "cloudflared service status: $($service.Status)"
 }
 
@@ -317,11 +389,6 @@ Write-Host "==> Start cloudflared tunnel" -ForegroundColor Cyan
 try {
   Ensure-CloudflaredService -ServiceName $CloudflaredServiceName -ConfigPath $CloudflaredConfigPath -TargetPort $Port
 } catch {
-  try {
-    & (Resolve-CloudflaredExecutable) service uninstall | Out-Null
-  } catch {
-    Write-Warning "Could not uninstall the broken cloudflared service automatically. $($_.Exception.Message)"
-  }
-  Write-Warning "cloudflared service start failed during install. Falling back to the startup task, which can launch a direct tunnel process. $($_.Exception.Message)"
+  Write-Warning "cloudflared service start failed during install. The service remains installed for inspection. Falling back to the startup task, which can launch a direct tunnel process. $($_.Exception.Message)"
   Start-ScheduledTask -TaskName $TaskName
 }

@@ -7,8 +7,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "runtime-state.ps1")
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot) -and $env:ProgramData) {
+    $defaultRuntimeRoot = Get-DefaultBoardRuntimeRoot
+    $defaultDataDirectory = Join-Path $defaultRuntimeRoot "data"
+
+    if ((Test-IsAdministrator) -and (Test-Path -LiteralPath $defaultDataDirectory)) {
+        $RuntimeRoot = $defaultRuntimeRoot
+    }
+}
 
 $runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
 
