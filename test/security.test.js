@@ -1,10 +1,50 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createSecurityStore } from "../security.js";
+
+function decodeBase32(secret) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const normalized = String(secret || "").toUpperCase().replace(/=+$/g, "");
+  let bits = "";
+
+  for (const character of normalized) {
+    const index = alphabet.indexOf(character);
+    if (index < 0) {
+      throw new Error(`Invalid base32 character: ${character}`);
+    }
+
+    bits += index.toString(2).padStart(5, "0");
+  }
+
+  const bytes = [];
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) {
+    bytes.push(Number.parseInt(bits.slice(offset, offset + 8), 2));
+  }
+
+  return Buffer.from(bytes);
+}
+
+function generateTotp(secret, timeMs = Date.now(), periodSeconds = 30, digits = 6) {
+  const counter = Math.floor(timeMs / 1000 / periodSeconds);
+  const counterBuffer = Buffer.alloc(8);
+  counterBuffer.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  counterBuffer.writeUInt32BE(counter >>> 0, 4);
+  const hmac = crypto.createHmac("sha1", decodeBase32(secret)).update(counterBuffer).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binary = (
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff)
+  );
+  const code = binary % (10 ** digits);
+  return String(code).padStart(digits, "0");
+}
 
 test("createSecurityStore provisions admin and revokes disabled employee access", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-managed-"));
@@ -156,8 +196,110 @@ test("legacy webmaster records normalize to the default webmaster username", asy
   }
 });
 
-test("shared admin user table can hold both HR and webmaster roles for one named account", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-shared-admin-"));
+test("admin role assignments reject composite privileged accounts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-single-role-admin-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const itSetup = await store.setupItAccess({
+      username: "it.primary",
+      password: "OwnerSecret1!",
+      userAgent: "test"
+    });
+    const itReq = {
+      headers: {
+        cookie: `palziv_it_auth=${itSetup.sessionId}`
+      }
+    };
+
+    await assert.rejects(
+      store.createItAdminUser({
+        displayName: "Composite Ops",
+        email: "composite.ops@example.com",
+        username: "composite.ops",
+        password: "CompositeSecret1!",
+        roles: ["hr", "webmaster"]
+      }),
+      /single privileged role/i
+    );
+
+    await assert.rejects(
+      store.inviteItAdminUser({
+        displayName: "Composite Invite",
+        email: "composite.invite@example.com",
+        username: "composite.invite",
+        roles: ["it", "hr"],
+        userAgent: "test",
+        clientIp: "198.51.100.12"
+      }),
+      /single privileged role/i
+    );
+
+    const created = await store.createItAdminUser({
+      displayName: "HR Lead",
+      email: "hr.lead@example.com",
+      username: "hr.lead",
+      password: "HrLeadSecret1!",
+      roles: ["hr"]
+    });
+    assert.deepEqual(created.adminUser.roles, ["hr"]);
+
+    await assert.rejects(
+      store.updateItAdminUserRoles(itReq, created.adminUser.id, ["hr", "webmaster"]),
+      /single privileged role/i
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("security store exposes canonical IT-only access cookie names and APIs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-it-migration-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    assert.equal(typeof store.setupItAccess, "function");
+    assert.equal(typeof store.authenticateIt, "function");
+    assert.equal(typeof store.logoutIt, "function");
+    assert.equal(typeof store.checkItAccess, "function");
+    assert.equal(typeof store.listItAdminUsers, "function");
+    assert.equal(typeof store.createItAdminUser, "function");
+    assert.equal(typeof store.inviteItAdminUser, "function");
+    assert.equal(typeof store.updateItAdminUserProfile, "function");
+    assert.equal(typeof store.updateItAdminUserRoles, "function");
+    assert.equal(typeof store.setItAdminUserActive, "function");
+    assert.equal(typeof store.resendItAdminInvite, "function");
+    assert.equal(typeof store.resetItAdminUserPassword, "function");
+    assert.equal(typeof store.revokeItAdminUserSessions, "function");
+    assert.equal(store.setupOwnerAccess, undefined);
+    assert.equal(store.authenticateOwner, undefined);
+    assert.equal(store.logoutOwner, undefined);
+    assert.equal(store.checkOwnerAccess, undefined);
+    assert.equal(store.listOwnerAdminUsers, undefined);
+    assert.equal(store.createOwnerAdminUser, undefined);
+    assert.equal(store.inviteOwnerAdminUser, undefined);
+    assert.equal(store.updateOwnerAdminUserProfile, undefined);
+    assert.equal(store.updateOwnerAdminUserRoles, undefined);
+    assert.equal(store.setOwnerAdminUserActive, undefined);
+    assert.equal(store.resendOwnerAdminInvite, undefined);
+    assert.equal(store.resetOwnerAdminUserPassword, undefined);
+    assert.equal(store.revokeOwnerAdminUserSessions, undefined);
+
+    const cookieNames = store.getAccessCookieNames();
+    assert.equal(cookieNames.it, "palziv_it_auth");
+    assert.equal(cookieNames.legacyIt, undefined);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("webmaster admin management stays scoped to webmaster-role admin accounts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-webmaster-admins-"));
   const dataFile = path.join(tempDir, "security.json");
 
   try {
@@ -165,37 +307,102 @@ test("shared admin user table can hold both HR and webmaster roles for one named
     await store.init();
 
     const hrSetup = await store.setupAdminAccess({
-      username: "alex.admin",
+      username: "hr.owner",
       password: "ManagerSecret1!",
       userAgent: "test"
     });
     const webmasterSetup = await store.setupWebmasterAccess({
-      username: "alex.admin",
-      password: "ManagerSecret1!",
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!",
       userAgent: "test"
     });
+    const webmasterReq = {
+      headers: {
+        cookie: `palziv_webmaster_auth=${webmasterSetup.sessionId}`
+      }
+    };
 
-    const securityState = await store.readSecurityState();
-    assert.equal(securityState.adminUsers.length, 1);
-    assert.deepEqual(securityState.adminUsers[0].roles, ["hr", "webmaster"]);
-    assert.equal(securityState.adminSessions.filter((session) => session.role === "hr").length, 1);
-    assert.equal(securityState.adminSessions.filter((session) => session.role === "webmaster").length, 1);
-
-    const hrLogin = await store.authenticateAdmin({
-      username: "alex.admin",
-      password: "ManagerSecret1!",
-      userAgent: "test"
+    const scopedList = await store.listWebmasterAdminUsers({
+      currentUserId: webmasterSetup.user.id
     });
-    const webmasterLogin = await store.authenticateWebmaster({
-      username: "alex.admin",
-      password: "ManagerSecret1!",
-      userAgent: "test"
+    assert.equal(scopedList.length, 1);
+    assert.equal(scopedList[0].username, "webmaster.owner");
+    assert.equal(scopedList[0].currentUser, true);
+    assert.equal(scopedList.some((adminUser) => adminUser.username === "hr.owner"), false);
+
+    await assert.rejects(
+      store.inviteWebmasterAdminUser({
+        displayName: "Only HR",
+        email: "only.hr@example.com",
+        username: "only.hr",
+        roles: ["hr"],
+        userAgent: "test",
+        clientIp: "198.51.100.60"
+      }),
+      /Webmaster admin accounts must include the webmaster role/i
+    );
+
+    const invited = await store.inviteWebmasterAdminUser({
+      displayName: "Avery Webmaster",
+      email: "avery.webmaster@example.com",
+      username: "avery.webmaster",
+      roles: ["webmaster"],
+      userAgent: "test",
+      clientIp: "198.51.100.61"
+    });
+    assert.equal(invited.adminUser.credentialsConfigured, false);
+    assert.equal(invited.adminUser.invitePending, true);
+    assert.equal(invited.preferredRoute, "webmaster");
+
+    const preview = await store.previewAdminInvite({
+      token: invited.inviteToken
+    });
+    assert.equal(preview.adminUser.username, "avery.webmaster");
+    assert.equal(preview.preferredRoute, "webmaster");
+
+    const accepted = await store.acceptAdminInvite({
+      token: invited.inviteToken,
+      password: "WebmasterSecret2!",
+      userAgent: "test",
+      clientIp: "198.51.100.62"
+    });
+    assert.deepEqual(accepted.roles, ["webmaster"]);
+    assert.ok(accepted.sessions.webmaster?.id);
+
+    await assert.rejects(
+      store.updateWebmasterAdminUserRoles(webmasterReq, invited.adminUser.id, ["hr", "webmaster"]),
+      /single privileged role/i
+    );
+
+    await assert.rejects(
+      store.updateWebmasterAdminUserRoles(webmasterReq, invited.adminUser.id, ["hr"]),
+      /must include the webmaster role/i
+    );
+
+    await store.updateWebmasterAdminUserProfile(webmasterReq, invited.adminUser.id, {
+      displayName: "Avery Operations",
+      email: "avery.operations@example.com"
     });
 
-    assert.equal(Boolean(hrLogin.authorized), true);
-    assert.equal(Boolean(webmasterLogin.authorized), true);
-    assert.equal(hrSetup.user?.username, "alex.admin");
-    assert.equal(webmasterSetup.user?.username, "alex.admin");
+    await store.resetWebmasterAdminUserPassword(webmasterReq, invited.adminUser.id, {
+      password: "WebmasterSecret3!",
+      userAgent: "test",
+      clientIp: "198.51.100.63"
+    });
+
+    await assert.rejects(
+      store.updateWebmasterAdminUserRoles(webmasterReq, hrSetup.user.id, ["webmaster"]),
+      /Webmaster can only manage webmaster accounts/i
+    );
+
+    const listAgain = await store.listWebmasterAdminUsers({
+      currentUserId: webmasterSetup.user.id
+    });
+    const invitedAdmin = listAgain.find((adminUser) => adminUser.username === "avery.webmaster");
+    assert.deepEqual(invitedAdmin?.roles, ["webmaster"]);
+    assert.equal(invitedAdmin?.displayName, "Avery Operations");
+    assert.equal(invitedAdmin?.email, "avery.operations@example.com");
+    assert.equal(Boolean(invitedAdmin?.credentialsConfigured), true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -641,6 +848,202 @@ test("admin invitations support identity edits, resend, and invite acceptance", 
     assert.equal(acceptedAdmin?.email, "avery.operations@example.com");
     assert.equal(Boolean(acceptedAdmin?.credentialsConfigured), true);
     assert.equal(acceptedAdmin?.inviteState, "accepted");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("admin MFA supports Google Authenticator enrollment and step-up verification after grace expiry", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-admin-mfa-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile, adminMfaEnabled: true });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    assert.equal(hrSetup.user?.mfa?.status, "grace");
+
+    const hrReq = {
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    };
+
+    const enrollment = await store.beginAdminMfaEnrollment(hrReq, {
+      role: "hr"
+    });
+    assert.match(String(enrollment.otpauthUrl || ""), /^otpauth:\/\/totp\//);
+    assert.match(String(enrollment.otpauthUrl || ""), /issuer=/i);
+    assert.ok(enrollment.manualEntryKey);
+
+    const enableResult = await store.verifyAdminMfaEnrollment(hrReq, {
+      role: "hr",
+      code: generateTotp(enrollment.manualEntryKey),
+      userAgent: "test",
+      clientIp: "198.51.100.70"
+    });
+    assert.equal(Boolean(enableResult.user?.mfa?.enabled), true);
+
+    const challengedLogin = await store.authenticateAdmin({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(challengedLogin.authorized), false);
+    assert.equal(Boolean(challengedLogin.mfaRequired), true);
+    assert.ok(challengedLogin.sessionId);
+
+    const verifiedLogin = await store.verifyAdminMfaChallenge({
+      headers: {
+        cookie: `palziv_hr_auth=${challengedLogin.sessionId}`
+      }
+    }, {
+      role: "hr",
+      code: generateTotp(enrollment.manualEntryKey),
+      userAgent: "test",
+      clientIp: "198.51.100.70"
+    });
+    assert.equal(Boolean(verifiedLogin.authorized), true);
+
+    const securityState = await store.readSecurityState();
+    const hrUser = securityState.adminUsers.find((adminUser) => adminUser.username === "hr.owner");
+    hrUser.mfaGraceUntil = "2000-01-01T00:00:00.000Z";
+    await store.writeData(securityState);
+
+    const expiredGraceLogin = await store.authenticateAdmin({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(expiredGraceLogin.mfaRequired), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("admin MFA can be disabled globally without blocking existing admin logins", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-admin-mfa-disabled-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile, adminMfaEnabled: false });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const securityState = await store.readSecurityState();
+    const hrUser = securityState.adminUsers.find((adminUser) => adminUser.username === "hr.owner");
+    hrUser.mfaSecret = "JBSWY3DPEHPK3PXP";
+    hrUser.mfaEnabledAt = "2026-06-22T12:00:00.000Z";
+    hrUser.mfaGraceUntil = "";
+    await store.writeData(securityState);
+
+    const login = await store.authenticateAdmin({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(login.authorized), true);
+    assert.equal(Boolean(login.mfaRequired), false);
+    assert.equal(Boolean(login.user?.mfa?.available), false);
+
+    await assert.rejects(
+      store.beginAdminMfaEnrollment({
+        headers: {
+          cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+        }
+      }, {
+        role: "hr"
+      }),
+      /disabled/i
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("HR recovery provisions a separate emergency HR account instead of replacing the live HR admin", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-emergency-hr-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    await store.setupAdminAccess({
+      username: "hr.primary",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+
+    const recovered = await store.recoverAdminAccess({
+      password: "EmergencySecret1!",
+      userAgent: "test",
+      clientIp: "198.51.100.81"
+    });
+    assert.equal(recovered.user?.username, "emergency.hr.recovery");
+    assert.equal(Boolean(recovered.user?.recoveryOnly), true);
+
+    const originalLogin = await store.authenticateAdmin({
+      username: "hr.primary",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(originalLogin.authorized), true);
+
+    await assert.rejects(
+      store.authenticateAdmin({
+        username: "hr.primary",
+        password: "EmergencySecret1!",
+        userAgent: "test"
+      }),
+      /Invalid username or password\./
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee accounts retain extended identity and lifecycle metadata", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-metadata-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const created = await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      externalEmployeeId: "EMP-1001",
+      email: "maria.lopez@example.com",
+      recoveryEmail: "maria.personal@example.com",
+      department: "Operations",
+      location: "Dallas",
+      identityProvider: "local",
+      inviteSentAt: "2026-06-22T10:00:00.000Z",
+      passwordResetRequired: true
+    });
+
+    assert.equal(created.employee.externalEmployeeId, "EMP-1001");
+    assert.equal(created.employee.email, "maria.lopez@example.com");
+    assert.equal(created.employee.recoveryEmail, "maria.personal@example.com");
+    assert.equal(created.employee.department, "Operations");
+    assert.equal(created.employee.location, "Dallas");
+    assert.equal(created.employee.identityProvider, "local");
+    assert.equal(Boolean(created.employee.passwordResetRequired), true);
+
+    const employees = await store.listEmployees();
+    assert.equal(employees[0]?.externalEmployeeId, "EMP-1001");
+    assert.equal(employees[0]?.department, "Operations");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

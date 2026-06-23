@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -491,6 +491,124 @@ test("server protects board reads and revokes disabled employees", async (t) => 
   assert.equal(removedPushRoute.status, 404);
 });
 
+test("employees can acknowledge important posts and HR sees acknowledgement totals", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-ack-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  await provisionStore.createEmployeeAccount({
+    name: "Alex Smith",
+    username: "alex.smith",
+    password: "EmployeePass1!"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const adminLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(adminLogin.status, 200);
+  const adminBody = await adminLogin.json();
+  const adminCookie = readSetCookie(adminLogin);
+
+  const createdPostResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
+    },
+    body: JSON.stringify({
+      type: "Safety",
+      priority: "Important",
+      title: "PPE reminder",
+      body: "Safety glasses are required on the floor.",
+      audience: "All employees"
+    })
+  });
+  assert.equal(createdPostResponse.status, 201);
+  const createdPostBody = await createdPostResponse.json();
+
+  const employeeLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(employeeLogin.status, 200);
+  const employeeCookie = readSetCookie(employeeLogin);
+
+  const acknowledgementResponse = await fetch(`${server.baseUrl}/api/posts/${encodeURIComponent(createdPostBody.post.id)}/acknowledgements`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: employeeCookie
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(acknowledgementResponse.status, 201);
+  const acknowledgementBody = await acknowledgementResponse.json();
+  assert.equal(acknowledgementBody.acknowledgement.employeeName, "Maria Lopez");
+
+  const duplicateResponse = await fetch(`${server.baseUrl}/api/posts/${encodeURIComponent(createdPostBody.post.id)}/acknowledgements`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: employeeCookie
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(duplicateResponse.status, 200);
+
+  const hrPostsResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    headers: {
+      Cookie: adminCookie
+    }
+  });
+  assert.equal(hrPostsResponse.status, 200);
+  const hrPostsBody = await hrPostsResponse.json();
+  const post = hrPostsBody.posts.find((entry) => entry.id === createdPostBody.post.id);
+  assert.equal(post.acknowledgementSummary.acknowledged, 1);
+  assert.equal(post.acknowledgementSummary.totalEmployees, 2);
+  assert.equal(post.acknowledgementSummary.pending, 1);
+  assert.equal(post.acknowledgements[0].employeeName, "Maria Lopez");
+  assert.equal(post.pendingAcknowledgements.length, 1);
+  assert.equal(post.pendingAcknowledgements[0].employeeName, "Alex Smith");
+  assert.equal(post.pendingAcknowledgements[0].username, "alex.smith");
+});
+
 test("trusted proxy loopback honors forwarded client IPs for login throttling", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-proxy-"));
   const securityFile = path.join(tempDir, "security.json");
@@ -858,6 +976,552 @@ test("server lets Webmaster reset the HR password and removes the old HR-to-Webm
   assert.equal(oldResetPath.status, 404);
 });
 
+test("server scopes the webmaster admin API to webmaster-role admin accounts", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-webmaster-admin-users-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const hrSetup = await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const webmasterSetup = await provisionStore.setupWebmasterAccess({
+    username: "webmaster.owner",
+    password: "WebmasterSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const webmasterLogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!"
+    })
+  });
+  assert.equal(webmasterLogin.status, 200);
+  const webmasterBody = await webmasterLogin.json();
+  const webmasterCookie = readSetCookie(webmasterLogin);
+
+  const listAdmins = await fetch(`${server.baseUrl}/api/webmaster/admin-users`, {
+    headers: {
+      Cookie: webmasterCookie
+    }
+  });
+  assert.equal(listAdmins.status, 200);
+  const listAdminsBody = await listAdmins.json();
+  assert.equal(Array.isArray(listAdminsBody.adminUsers), true);
+  assert.equal(listAdminsBody.adminUsers.length, 1);
+  assert.equal(listAdminsBody.adminUsers[0].username, "webmaster.owner");
+  assert.equal(listAdminsBody.adminUsers[0].currentUser, true);
+  assert.equal(listAdminsBody.adminUsers.some((adminUser) => adminUser.username === "hr.owner"), false);
+
+  const deniedCreate = await fetch(`${server.baseUrl}/api/webmaster/admin-users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Only HR",
+      email: "only.hr@example.com",
+      username: "only.hr",
+      password: "OnlyHrSecret1!",
+      roles: ["hr"]
+    })
+  });
+  assert.equal(deniedCreate.status, 400);
+  const deniedCreateBody = await deniedCreate.json();
+  assert.match(String(deniedCreateBody.error || ""), /Webmaster admin accounts must include the webmaster role/i);
+
+  const createAdmin = await fetch(`${server.baseUrl}/api/webmaster/admin-users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Ops Webmaster",
+      email: "ops.webmaster@example.com",
+      username: "ops.webmaster",
+      password: "OpsWebmaster1!",
+      roles: ["webmaster"]
+    })
+  });
+  assert.equal(createAdmin.status, 201);
+  const createAdminBody = await createAdmin.json();
+  assert.deepEqual(createAdminBody.adminUser.roles, ["webmaster"]);
+
+  const invitedAdmin = await fetch(`${server.baseUrl}/api/webmaster/admin-users/invite`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Jamie Webmaster",
+      email: "jamie.webmaster@example.com",
+      username: "jamie.webmaster",
+      roles: ["webmaster"]
+    })
+  });
+  assert.equal(invitedAdmin.status, 201);
+  const invitedAdminBody = await invitedAdmin.json();
+  assert.equal(Boolean(invitedAdminBody.adminUser.invitePending), true);
+
+  const managedLogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "ops.webmaster",
+      password: "OpsWebmaster1!"
+    })
+  });
+  assert.equal(managedLogin.status, 200);
+  const managedCookie = readSetCookie(managedLogin);
+
+  const resetPassword = await fetch(`${server.baseUrl}/api/webmaster/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      password: "OpsWebmaster2!"
+    })
+  });
+  assert.equal(resetPassword.status, 200);
+
+  const revokedCheck = await fetch(`${server.baseUrl}/api/webmaster/check`, {
+    headers: {
+      Cookie: managedCookie
+    }
+  });
+  assert.equal(revokedCheck.status, 200);
+  const revokedCheckBody = await revokedCheck.json();
+  assert.equal(Boolean(revokedCheckBody.authorized), false);
+
+  const relogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "ops.webmaster",
+      password: "OpsWebmaster2!"
+    })
+  });
+  assert.equal(relogin.status, 200);
+
+  const deniedHrMutation = await fetch(`${server.baseUrl}/api/webmaster/admin-users/${encodeURIComponent(hrSetup.user.id)}/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      active: false
+    })
+  });
+  assert.equal(deniedHrMutation.status, 400);
+  const deniedHrMutationBody = await deniedHrMutation.json();
+  assert.match(String(deniedHrMutationBody.error || ""), /Webmaster can only manage webmaster accounts/i);
+
+  const scopedListAgain = await fetch(`${server.baseUrl}/api/webmaster/admin-users`, {
+    headers: {
+      Cookie: webmasterCookie
+    }
+  });
+  assert.equal(scopedListAgain.status, 200);
+  const scopedListAgainBody = await scopedListAgain.json();
+  assert.equal(scopedListAgainBody.adminUsers.some((adminUser) => adminUser.id === hrSetup.user.id), false);
+  assert.equal(scopedListAgainBody.adminUsers.some((adminUser) => adminUser.id === webmasterSetup.user.id), true);
+  assert.equal(scopedListAgainBody.adminUsers.some((adminUser) => adminUser.id === createAdminBody.adminUser.id), true);
+});
+
+test("server supports IT admin governance and protects IT role boundaries", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-it-admin-users-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const itSetup = await provisionStore.setupItAccess({
+    username: "it",
+    password: "OwnerSecret1!",
+    userAgent: "test"
+  });
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  await provisionStore.setupWebmasterAccess({
+    username: "webmaster.owner",
+    password: "WebmasterSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const itLogin = await fetch(`${server.baseUrl}/api/it/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "it",
+      password: "OwnerSecret1!"
+    })
+  });
+  assert.equal(itLogin.status, 200);
+  const itBody = await itLogin.json();
+  const itCookie = readSetCookie(itLogin);
+  assert.equal(itBody.user.username, "it");
+  assert.deepEqual(itBody.user.roles, ["it"]);
+  assert.match(itCookie, /palziv_it_auth=/);
+
+  const itCheck = await fetch(`${server.baseUrl}/api/it/check`, {
+    headers: {
+      Cookie: itCookie
+    }
+  });
+  assert.equal(itCheck.status, 200);
+  const itCheckBody = await itCheck.json();
+  assert.equal(Boolean(itCheckBody.authorized), true);
+
+  const listAdmins = await fetch(`${server.baseUrl}/api/it/admin-users`, {
+    headers: {
+      Cookie: itCookie
+    }
+  });
+  assert.equal(listAdmins.status, 200);
+  const listAdminsBody = await listAdmins.json();
+  assert.equal(Array.isArray(listAdminsBody.adminUsers), true);
+  assert.equal(listAdminsBody.adminUsers.length, 3);
+  assert.equal(listAdminsBody.adminUsers.some((adminUser) => adminUser.username === "it"), true);
+  assert.equal(listAdminsBody.adminUsers.some((adminUser) => adminUser.username === "hr.owner"), true);
+  assert.equal(listAdminsBody.adminUsers.some((adminUser) => adminUser.username === "webmaster.owner"), true);
+
+  const createAdmin = await fetch(`${server.baseUrl}/api/it/admin-users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Operations Lead",
+      email: "ops.lead@example.com",
+      username: "ops.lead",
+      password: "OpsLeadSecret1!",
+      roles: ["webmaster"]
+    })
+  });
+  assert.equal(createAdmin.status, 201);
+  const createAdminBody = await createAdmin.json();
+  assert.deepEqual(createAdminBody.adminUser.roles, ["webmaster"]);
+
+  const securityEvents = await fetch(`${server.baseUrl}/api/security/events`, {
+    headers: {
+      Cookie: itCookie
+    }
+  });
+  assert.equal(securityEvents.status, 200);
+  const securityEventsBody = await securityEvents.json();
+  const createEvent = Array.isArray(securityEventsBody.events)
+    ? securityEventsBody.events.find((event) => String(event.accountKey || "") === "ops.lead")
+    : null;
+  assert.equal(createEvent?.type, "it_admin_created");
+  assert.equal(createEvent?.actor, "it");
+
+  const updateProfile = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/profile`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Operations Director",
+      email: "ops.director@example.com"
+    })
+  });
+  assert.equal(updateProfile.status, 200);
+  const updateProfileBody = await updateProfile.json();
+  assert.equal(updateProfileBody.adminUser.displayName, "Operations Director");
+
+  const managedLogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "ops.lead",
+      password: "OpsLeadSecret1!"
+    })
+  });
+  assert.equal(managedLogin.status, 200);
+  const managedCookie = readSetCookie(managedLogin);
+
+  const resetPassword = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      password: "OpsLeadSecret2!"
+    })
+  });
+  assert.equal(resetPassword.status, 200);
+
+  const revokedCheck = await fetch(`${server.baseUrl}/api/webmaster/check`, {
+    headers: {
+      Cookie: managedCookie
+    }
+  });
+  assert.equal(revokedCheck.status, 200);
+  const revokedCheckBody = await revokedCheck.json();
+  assert.equal(Boolean(revokedCheckBody.authorized), false);
+
+  const createInvitedAdmin = await fetch(`${server.baseUrl}/api/it/admin-users/invite`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Invited IT",
+      email: "invited.owner@example.com",
+      username: "invited.owner",
+      roles: ["it"]
+    })
+  });
+  assert.equal(createInvitedAdmin.status, 201);
+  const createInvitedAdminBody = await createInvitedAdmin.json();
+  assert.equal(Boolean(createInvitedAdminBody.adminUser.invitePending), true);
+
+  const resendInvite = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(createInvitedAdminBody.adminUser.id)}/invite`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    }
+  });
+  assert.equal(resendInvite.status, 200);
+
+  const reloginManaged = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "ops.lead",
+      password: "OpsLeadSecret2!"
+    })
+  });
+  assert.equal(reloginManaged.status, 200);
+  const reloginManagedCookie = readSetCookie(reloginManaged);
+
+  const revokeSessions = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(createAdminBody.adminUser.id)}/sessions/revoke`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    }
+  });
+  assert.equal(revokeSessions.status, 200);
+
+  const revokedAgainCheck = await fetch(`${server.baseUrl}/api/webmaster/check`, {
+    headers: {
+      Cookie: reloginManagedCookie
+    }
+  });
+  assert.equal(revokedAgainCheck.status, 200);
+  const revokedAgainCheckBody = await revokedAgainCheck.json();
+  assert.equal(Boolean(revokedAgainCheckBody.authorized), false);
+
+  const createItAdmin = await fetch(`${server.baseUrl}/api/it/admin-users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Backup IT",
+      email: "backup.owner@example.com",
+      username: "backup.owner",
+      password: "BackupOwner1!",
+      roles: ["it"]
+    })
+  });
+  assert.equal(createItAdmin.status, 201);
+  const createItAdminBody = await createItAdmin.json();
+  assert.deepEqual(createItAdminBody.adminUser.roles, ["it"]);
+
+  const hrLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(hrLogin.status, 200);
+  const hrBody = await hrLogin.json();
+  const hrCookie = readSetCookie(hrLogin);
+
+  const deniedHrOwnerCreate = await fetch(`${server.baseUrl}/api/admin-users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "HR IT Attempt",
+      email: "hr.owner.attempt@example.com",
+      username: "hr.owner.attempt",
+      password: "OwnerAttempt1!",
+      roles: ["it"]
+    })
+  });
+  assert.equal(deniedHrOwnerCreate.status, 400);
+  const deniedHrOwnerCreateBody = await deniedHrOwnerCreate.json();
+  assert.match(String(deniedHrOwnerCreateBody.error || ""), /HR cannot assign IT roles/i);
+
+  const webmasterLogin = await fetch(`${server.baseUrl}/api/webmaster/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!"
+    })
+  });
+  assert.equal(webmasterLogin.status, 200);
+  const webmasterBody = await webmasterLogin.json();
+  const webmasterCookie = readSetCookie(webmasterLogin);
+
+  const deniedWebmasterOwnerCreate = await fetch(`${server.baseUrl}/api/webmaster/admin-users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: webmasterCookie,
+      "X-CSRF-Token": webmasterBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Systems IT Attempt",
+      email: "it.owner.attempt@example.com",
+      username: "it.owner.attempt",
+      password: "OwnerAttempt1!",
+      roles: ["it"]
+    })
+  });
+  assert.equal(deniedWebmasterOwnerCreate.status, 400);
+  const deniedWebmasterOwnerCreateBody = await deniedWebmasterOwnerCreate.json();
+  assert.match(String(deniedWebmasterOwnerCreateBody.error || ""), /Webmaster cannot assign IT roles/i);
+
+  const demoteSelf = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(itSetup.user.id)}/roles`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      roles: ["hr"]
+    })
+  });
+  assert.equal(demoteSelf.status, 400);
+  const demoteSelfBody = await demoteSelf.json();
+  assert.match(String(demoteSelfBody.error || ""), /You cannot remove your own IT role while signed in/i);
+
+  const disableBackupIt = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(createItAdminBody.adminUser.id)}/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      active: false
+    })
+  });
+  assert.equal(disableBackupIt.status, 200);
+
+  const disableLastIt = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(itSetup.user.id)}/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      active: false
+    })
+  });
+  assert.equal(disableLastIt.status, 400);
+  const disableLastItBody = await disableLastIt.json();
+  assert.match(String(disableLastItBody.error || ""), /You cannot disable your own IT account while signed in/i);
+});
+
 test("server supports invite-by-email admin onboarding", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-invites-"));
   const securityFile = path.join(tempDir, "security.json");
@@ -973,6 +1637,165 @@ test("server supports invite-by-email admin onboarding", async (t) => {
   assert.equal(invitedAdmin?.inviteState, "accepted");
 });
 
+test("IT invitation emails point invitees to the IT route", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-it-invites-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupItAccess({
+    username: "it",
+    password: "OwnerSecret1!",
+    userAgent: "test"
+  });
+  const emailSink = await startEmailSink();
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    RESEND_API_KEY: "test-key",
+    ADMIN_INVITE_EMAIL_FROM: "invites@example.com",
+    RESEND_API_BASE_URL: emailSink.baseUrl
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await emailSink.close();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const itLogin = await fetch(`${server.baseUrl}/api/it/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "it",
+      password: "OwnerSecret1!"
+    })
+  });
+  assert.equal(itLogin.status, 200);
+  const itBody = await itLogin.json();
+  const itCookie = readSetCookie(itLogin);
+
+  const inviteItAdmin = await fetch(`${server.baseUrl}/api/it/admin-users/invite`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      displayName: "Backup IT",
+      email: "backup.owner@example.com",
+      username: "backup.owner",
+      roles: ["it"]
+    })
+  });
+  assert.equal(inviteItAdmin.status, 201);
+  assert.equal(emailSink.requests.length, 1);
+
+  const emailRequest = emailSink.requests[0];
+  const inviteUrlMatch = String(emailRequest.body.text || "").match(/Accept invite: (.+)/);
+  assert.ok(inviteUrlMatch);
+  const inviteUrl = new URL(inviteUrlMatch[1].trim());
+  assert.equal(inviteUrl.pathname, "/palzivalerts/it");
+});
+
+test("legacy owner URL aliases are no longer served", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-legacy-owner-route-alias-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const legacyOwnerRootAlias = await fetch(`${server.baseUrl}/owner`, {
+    redirect: "manual"
+  });
+  assert.equal(legacyOwnerRootAlias.status, 404);
+
+  const legacyOwnerBrandedAlias = await fetch(`${server.baseUrl}/palzivalerts/owner`, {
+    redirect: "manual"
+  });
+  assert.equal(legacyOwnerBrandedAlias.status, 404);
+});
+
+test("legacy owner cookie alias no longer authorizes IT access", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-legacy-owner-cookie-alias-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const itSetup = await provisionStore.setupItAccess({
+    username: "it",
+    password: "OwnerSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const legacyOwnerCookieCheck = await fetch(`${server.baseUrl}/api/it/check`, {
+    headers: {
+      Cookie: `palziv_owner_auth=${itSetup.sessionId}`
+    }
+  });
+  assert.equal(legacyOwnerCookieCheck.status, 200);
+  const legacyOwnerCookieCheckBody = await legacyOwnerCookieCheck.json();
+  assert.equal(Boolean(legacyOwnerCookieCheckBody.authorized), false);
+  const legacyOwnerCookieRolloverHeader = legacyOwnerCookieCheck.headers.get("set-cookie") || "";
+  assert.equal(legacyOwnerCookieRolloverHeader, "");
+});
+
+test("server leaves admin MFA off by default even when accounts have stored MFA secrets", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-mfa-disabled-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const seededState = await provisionStore.readSecurityState();
+  const hrUser = seededState.adminUsers.find((adminUser) => adminUser.username === "hr.owner");
+  hrUser.mfaSecret = "JBSWY3DPEHPK3PXP";
+  hrUser.mfaEnabledAt = "2026-06-22T12:00:00.000Z";
+  hrUser.mfaGraceUntil = "";
+  await provisionStore.writeData(seededState);
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const login = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(login.status, 200);
+  const loginBody = await login.json();
+  assert.equal(Boolean(loginBody.authorized), true);
+  assert.equal(Boolean(loginBody.mfaRequired), false);
+  assert.equal(Boolean(loginBody.user?.mfa?.available), false);
+});
+
 test("server rejects runtime data files outside the managed runtime directory", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-runtime-paths-"));
   const runtimeDataDir = path.join(tempDir, "runtime-data");
@@ -994,4 +1817,48 @@ test("server rejects runtime data files outside the managed runtime directory", 
 
   assert.notEqual(failed.exitCode, 0);
   assert.match(failed.stderr, /SECURITY_DATA_FILE must stay within RUNTIME_DATA_DIR/);
+});
+
+test("server reloads index and service worker templates without a process restart", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-shell-reload-"));
+  const publicDir = path.join(tempDir, "public");
+  await mkdir(publicDir, { recursive: true });
+  await writeFile(path.join(publicDir, "index.html"), "<!doctype html><html><body>alpha-shell __ASSET_VERSION__</body></html>\n", "utf8");
+  await writeFile(path.join(publicDir, "sw.js"), "self.__shellVersion = 'alpha-sw-__ASSET_VERSION__';\n", "utf8");
+  await writeFile(path.join(publicDir, "app.js"), "console.log('alpha-app');\n", "utf8");
+  await writeFile(path.join(publicDir, "styles.css"), "body { color: black; }\n", "utf8");
+  await writeFile(path.join(publicDir, "sw-routing.js"), "export {};\n", "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    PUBLIC_DIR: publicDir
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const firstIndex = await fetch(`${server.baseUrl}/palzivalerts/`);
+  assert.equal(firstIndex.status, 200);
+  const firstIndexHtml = await firstIndex.text();
+  assert.match(firstIndexHtml, /alpha-shell/i);
+
+  const firstSw = await fetch(`${server.baseUrl}/sw.js`);
+  assert.equal(firstSw.status, 200);
+  const firstSwText = await firstSw.text();
+  assert.match(firstSwText, /alpha-sw/i);
+
+  await writeFile(path.join(publicDir, "index.html"), "<!doctype html><html><body>beta-shell __ASSET_VERSION__</body></html>\n", "utf8");
+  await writeFile(path.join(publicDir, "sw.js"), "self.__shellVersion = 'beta-sw-__ASSET_VERSION__';\n", "utf8");
+
+  const secondIndex = await fetch(`${server.baseUrl}/palzivalerts/`);
+  assert.equal(secondIndex.status, 200);
+  const secondIndexHtml = await secondIndex.text();
+  assert.match(secondIndexHtml, /beta-shell/i);
+
+  const secondSw = await fetch(`${server.baseUrl}/sw.js`);
+  assert.equal(secondSw.status, 200);
+  const secondSwText = await secondSw.text();
+  assert.match(secondSwText, /beta-sw/i);
 });

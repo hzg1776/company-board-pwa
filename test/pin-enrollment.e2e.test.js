@@ -439,6 +439,14 @@ async function provisionManagedAccess(tempDir, options = {}) {
   });
   await store.init();
 
+  if (options.itPassword) {
+    await store.setupItAccess({
+      username: options.itUsername || "it",
+      password: options.itPassword,
+      userAgent: "e2e"
+    });
+  }
+
   if (options.adminPassword) {
     await store.setupAdminAccess({
       username: options.adminUsername || "hr",
@@ -646,7 +654,7 @@ test(
         };
       })()
     `);
-    await waitForCondition(session, "document.body.innerText.includes('Webmaster overview')");
+    await waitForCondition(session, "document.body.innerText.includes('Systems Overview')");
 
     const webmasterScreen = await evaluateExpression(session, `
       ({
@@ -656,7 +664,7 @@ test(
     `);
 
     assert.equal(webmasterScreen.hasAuthForm, false);
-    assert.ok(String(webmasterScreen.text).includes("Webmaster overview"));
+    assert.ok(String(webmasterScreen.text).includes("Systems Overview"));
 
     const webmasterStatus = await evaluateExpression(session, `
       (async () => {
@@ -667,5 +675,188 @@ test(
 
     assert.equal(Boolean(webmasterStatus.authorized), true);
     assert.equal(Boolean(webmasterStatus.hrAuthorized), true);
+  }
+);
+
+test(
+  "webmaster settings expose the webmaster admin accounts panel",
+  {
+    skip: chromePath ? false : "Chrome executable not found.",
+    timeout: 120_000
+  },
+  async (t) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-webmaster-settings-e2e-"));
+    await provisionManagedAccess(tempDir, {
+      adminUsername: "hr",
+      adminPassword: "ManagerSecret1!"
+    });
+    const serverPort = await findFreePort();
+    const server = await startBoardServer({
+      port: serverPort,
+      tempDir
+    });
+    const { chrome, connection } = await startChromeSession(chromePath);
+
+    t.after(async () => {
+      await connection.close();
+      await cleanupProcess(chrome.child);
+      await cleanupProcess(server.child);
+      await removeDirectoryWithRetries(tempDir);
+      await removeDirectoryWithRetries(chrome.userDataDir);
+    });
+
+    await connection.ready;
+    const session = await createPageSession(connection);
+    const appOrigin = `http://127.0.0.1:${serverPort}`;
+
+    await navigate(session, `${appOrigin}/palzivalerts/hr`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const form = document.querySelector('[data-admin-auth-form]');
+        const username = form?.querySelector('input[name="username"]');
+        const password = form?.querySelector('input[name="password"]');
+
+        if (!form || !username || !password) {
+          throw new Error('HR login form is missing required fields.');
+        }
+
+        username.value = 'hr';
+        password.value = 'ManagerSecret1!';
+        form.requestSubmit();
+        return true;
+      })()
+    `);
+    await waitForCondition(session, "document.body.innerText.includes('HR Control Center')");
+
+    await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const form = document.querySelector('[data-admin-auth-form]');
+        const username = form?.querySelector('input[name="username"]');
+        const password = form?.querySelector('input[name="password"]');
+
+        if (!form || !username || !password) {
+          throw new Error('Webmaster setup form is missing required fields.');
+        }
+
+        username.value = 'webmaster';
+        password.value = 'WebmasterSecret1!';
+        form.requestSubmit();
+        return true;
+      })()
+    `);
+    await waitForCondition(session, "document.body.innerText.includes('Systems Overview')");
+    await evaluateExpression(session, `
+      (() => {
+        const settingsButton = Array.from(document.querySelectorAll('[data-tab]'))
+          .find((button) => button.textContent.includes('Settings'));
+
+        if (!settingsButton) {
+          throw new Error('Settings tab button was not found.');
+        }
+
+        settingsButton.click();
+        return true;
+      })()
+    `);
+    await waitForCondition(session, "document.body.innerText.includes('System Ops Admin Accounts')");
+
+    const settingsText = await evaluateExpression(session, "document.body.innerText");
+    assert.ok(String(settingsText).includes("System Ops Admin Accounts"));
+  }
+);
+
+test(
+  "IT route exposes governance dashboard sections with consistent IT wording after login",
+  {
+    skip: chromePath ? false : "Chrome executable not found.",
+    timeout: 120_000
+  },
+  async (t) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-it-e2e-"));
+    await provisionManagedAccess(tempDir, {
+      itUsername: "it",
+      itPassword: "OwnerSecret1!",
+      adminUsername: "hr",
+      adminPassword: "ManagerSecret1!"
+    });
+    const serverPort = await findFreePort();
+    const server = await startBoardServer({
+      port: serverPort,
+      tempDir
+    });
+    const { chrome, connection } = await startChromeSession(chromePath);
+
+    t.after(async () => {
+      await connection.close();
+      await cleanupProcess(chrome.child);
+      await cleanupProcess(server.child);
+      await removeDirectoryWithRetries(tempDir);
+      await removeDirectoryWithRetries(chrome.userDataDir);
+    });
+
+    await connection.ready;
+    const session = await createPageSession(connection);
+    const appOrigin = `http://127.0.0.1:${serverPort}`;
+
+    await navigate(session, `${appOrigin}/palzivalerts/it`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const form = document.querySelector('[data-admin-auth-form]');
+        const username = form?.querySelector('input[name="username"]');
+        const password = form?.querySelector('input[name="password"]');
+
+        if (!form || !username || !password) {
+          throw new Error('IT login form is missing required fields.');
+        }
+
+        username.value = 'it';
+        password.value = 'OwnerSecret1!';
+        form.requestSubmit();
+        return true;
+      })()
+    `);
+    await waitForCondition(session, "document.body.innerText.includes('IT Control Center')");
+
+    const itScreen = await evaluateExpression(session, `
+      (async () => {
+        const response = await fetch('/api/it/check');
+        const status = await response.json();
+        return {
+          authorized: Boolean(status.authorized),
+          hasAuthForm: Boolean(document.querySelector('[data-admin-auth-form]')),
+          text: document.body.innerText,
+          path: window.location.pathname,
+          hasLegacyOwnerScope: Boolean(document.querySelector('[data-admin-scope="owner"]')),
+          hasLegacyOwnerTabGroup: Boolean(document.querySelector('[data-tab-group="owner"]')),
+          hasLegacyOwnerShell: Boolean(document.querySelector('.owner-shell')),
+          hasItScope: Boolean(document.querySelector('[data-admin-scope="it"]')),
+          hasItTabGroup: Boolean(document.querySelector('[data-tab-group="it"]')),
+          hasItShell: Boolean(document.querySelector('.it-shell'))
+        };
+      })()
+    `);
+
+    assert.equal(itScreen.authorized, true);
+    assert.equal(itScreen.hasAuthForm, false);
+    assert.equal(itScreen.path, "/palzivalerts/it");
+    assert.ok(String(itScreen.text).includes("IT Control Center"));
+    assert.ok(String(itScreen.text).includes("Admin Accounts"));
+    assert.ok(String(itScreen.text).includes("Company Settings"));
+    assert.ok(String(itScreen.text).includes("Audit Log"));
+    assert.ok(String(itScreen.text).includes("Emergency Access"));
+    assert.ok(!String(itScreen.text).includes("Owner Control Center"));
+    assert.ok(!String(itScreen.text).includes("Active Owners"));
+    assert.ok(!String(itScreen.text).includes("Backup Owner"));
+    assert.ok(!String(itScreen.text).includes("Owner authenticator"));
+    assert.equal(itScreen.hasLegacyOwnerScope, false);
+    assert.equal(itScreen.hasLegacyOwnerTabGroup, false);
+    assert.equal(itScreen.hasLegacyOwnerShell, false);
+    assert.equal(itScreen.hasItScope, true);
+    assert.equal(itScreen.hasItTabGroup, true);
+    assert.equal(itScreen.hasItShell, true);
   }
 );
