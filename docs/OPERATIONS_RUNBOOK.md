@@ -14,6 +14,15 @@ This runbook is the day-to-day operating guide for the live pilot deployment of 
 - Runtime root: `C:\ProgramData\Palziv\runtime`
 - Data storage: local JSON files in `C:\ProgramData\Palziv\runtime\data`
 
+## Current Pilot Baseline
+
+- Release tag: `pilot-baseline-2026-06-24`
+- Release commit: `356ec57`
+- Fresh runtime backup zip: `C:\ProgramData\Palziv\runtime\backups\company-board-backup-20260624-133026.zip`
+- Fresh runtime backup manifest: `C:\ProgramData\Palziv\runtime\backups\company-board-backup-20260624-133026.manifest.json`
+
+Use this exact tag and backup set for the current pilot rollback point unless a newer documented baseline replaces it.
+
 ## Required Configuration
 
 Set and maintain these core values for every production restart:

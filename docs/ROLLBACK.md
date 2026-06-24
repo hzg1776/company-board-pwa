@@ -16,6 +16,13 @@ Examples:
 
 Use the last known good release plus the latest safe data backup.
 
+## Current Pilot Rollback Point
+
+- Release tag: `pilot-baseline-2026-06-24`
+- Release commit: `356ec57`
+- Safe runtime backup zip: `C:\ProgramData\Palziv\runtime\backups\company-board-backup-20260624-133026.zip`
+- Safe runtime backup manifest: `C:\ProgramData\Palziv\runtime\backups\company-board-backup-20260624-133026.manifest.json`
+
 ## Rollback Steps
 
 1. announce a maintenance window
