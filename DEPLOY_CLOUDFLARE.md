@@ -80,8 +80,8 @@ Set these environment variables on the Windows host if you want the displayed pr
 Example in PowerShell:
 
 ```powershell
-$env:SITE_NAME = "Palziv"
-$env:SITE_SHORT_NAME = "Palziv"
+$env:SITE_NAME = "Communications And Alert Center"
+$env:SITE_SHORT_NAME = "Alert Center"
 $env:SITE_SUBTITLE = "Updates & Alerts Portal"
 ```
 

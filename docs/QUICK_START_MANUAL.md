@@ -1,4 +1,4 @@
-# Quick Start: Using the Palziv User Manual
+# Quick Start: Using the Communications and Alert Center User Manual
 
 ## 1) Generate the PDF (5 minutes)
 
@@ -16,8 +16,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-user-manual-pdf.ps1
 
 The output will be in:
 
-- [docs/manual-artifacts/Palziv_User_Manual.pdf](/C:/Users/admin/Documents/Codex/Project-A/docs/manual-artifacts/Palziv_User_Manual.pdf)
-- [docs/manual-artifacts/Palziv_User_Manual.html](/C:/Users/admin/Documents/Codex/Project-A/docs/manual-artifacts/Palziv_User_Manual.html)
+- [docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf](/C:/Users/admin/Documents/Codex/Project-A/docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf)
+- [docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.html](/C:/Users/admin/Documents/Codex/Project-A/docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.html)
 - [docs/manual-artifacts/screenshots/](/C:/Users/admin/Documents/Codex/Project-A/docs/manual-artifacts/screenshots/)
 
 ## 2) Update the content first
@@ -50,4 +50,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-user-manual-pdf.ps1
 
 ## 5) One-line distribution text (copy/paste)
 
-“Your new Palziv user manual is ready. Open the PDF, and use the screenshot pages to train new staff quickly. If you need updates, edit `docs/USER_MANUAL.md` and rerun the PDF build script.”
+"Your new Communications and Alert Center user manual is ready. Open the PDF, and use the screenshot pages to train new staff quickly. If you need updates, edit `docs/USER_MANUAL.md` and rerun the PDF build script."

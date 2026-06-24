@@ -6,8 +6,8 @@ $ErrorActionPreference = 'Stop'
 $root = 'C:\Users\admin\Documents\Codex\Project-A'
 $outDir = Join-Path $root 'docs\manual-artifacts'
 $shotDir = Join-Path $outDir 'screenshots'
-$pdfPath = Join-Path $outDir 'Palziv_User_Manual.pdf'
-$htmlPath = Join-Path $outDir 'Palziv_User_Manual.html'
+$pdfPath = Join-Path $outDir 'Communications_And_Alert_Center_User_Manual.pdf'
+$htmlPath = Join-Path $outDir 'Communications_And_Alert_Center_User_Manual.html'
 $mdPath = Join-Path $root 'docs\USER_MANUAL.md'
 $resolvedBaseUrl = if ($BaseUrl) { $BaseUrl } elseif ($env:PUBLIC_BASE_URL) { $env:PUBLIC_BASE_URL } else { 'http://localhost:3000' }
 $resolvedBaseUrl = $resolvedBaseUrl.TrimEnd('/')
@@ -17,9 +17,7 @@ New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
 $routes = @(
     @{ name = '01-launcher';     url = "$resolvedBaseUrl/palzivalerts";            label = 'Launcher page (/palzivalerts)' },
     @{ name = '02-employee';     url = "$resolvedBaseUrl/palzivalerts/employee";   label = 'Employee login and feed view (/palzivalerts/employee)' },
-    @{ name = '03-hr';           url = "$resolvedBaseUrl/palzivalerts/hr";         label = 'HR console login and publishing screen (/palzivalerts/hr)' },
-    @{ name = '04-webmaster';    url = "$resolvedBaseUrl/palzivalerts/webmaster";  label = 'Systems console login and diagnostics (/palzivalerts/webmaster)' },
-    @{ name = '05-it';           url = "$resolvedBaseUrl/palzivalerts/it";         label = 'IT control center and governance screen (/palzivalerts/it)' }
+    @{ name = '03-admin';        url = "$resolvedBaseUrl/palzivalerts/admin";      label = 'Admin gateway for HR, Systems, and IT access (/palzivalerts/admin)' }
 )
 
 foreach ($r in $routes) {
@@ -34,7 +32,7 @@ $header = @"
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Palziv Portal User Manual</title>
+<title>Communications and Alert Center User Manual</title>
 <style>
   @page { size: A4; margin: 18mm; }
   body { font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.45; }
@@ -59,10 +57,10 @@ $header = @"
 </head>
 <body>
 <div class="cover">
-  <div class="kicker">Palziv Portal</div>
+  <div class="kicker">Communications and Alert Center</div>
   <h1>Professional User Manual</h1>
   <div class="meta">Generated: @@@DATE@@</div>
-  <p>This manual explains core workflows for Employees, HR admins, Systems operators, and IT governance admins.</p>
+  <p>This manual explains core workflows for employees, HR admins, Systems operators, and IT governance admins.</p>
 </div>
 <div class="toc">
   <strong>Quick navigation</strong>
