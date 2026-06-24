@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -1720,6 +1720,23 @@ test("legacy owner URL aliases are no longer served", async (t) => {
     redirect: "manual"
   });
   assert.equal(legacyOwnerBrandedAlias.status, 404);
+});
+
+test("client app hides admin logins from the launcher and exposes a dedicated admin gateway", async () => {
+  const appSource = await readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const launcherStart = appSource.indexOf("function renderLauncher()");
+  const launcherEnd = appSource.indexOf("function renderAdminGatewayCard(");
+  const launcherSource = launcherStart >= 0 && launcherEnd > launcherStart
+    ? appSource.slice(launcherStart, launcherEnd)
+    : "";
+
+  assert.match(appSource, /function renderAdminGateway\(\)/);
+  assert.match(appSource, /if \(route === "admin"\) return appPath\("admin"\);/);
+  assert.match(appSource, /route === "admin"/);
+  assert.match(launcherSource, /Employee Login/);
+  assert.doesNotMatch(launcherSource, /HR Login/);
+  assert.doesNotMatch(launcherSource, /Systems Login/);
+  assert.doesNotMatch(launcherSource, /IT Login/);
 });
 
 test("legacy owner cookie alias no longer authorizes IT access", async (t) => {

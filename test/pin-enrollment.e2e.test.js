@@ -594,7 +594,20 @@ test(
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
 
-    await navigate(session, `${appOrigin}/palzivalerts/hr`);
+    await navigate(session, `${appOrigin}/palzivalerts/admin`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-entry-route=\"hr\"]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const button = document.querySelector('[data-admin-entry-route="hr"]');
+
+        if (!button) {
+          throw new Error('HR admin gateway button was not found.');
+        }
+
+        button.click();
+        return true;
+      })()
+    `);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
     await evaluateExpression(session, `
       (() => {
@@ -633,7 +646,20 @@ test(
 
     assert.equal(Boolean(hrStatus.authorized), true);
 
-    await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
+    await navigate(session, `${appOrigin}/palzivalerts/admin`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-entry-route=\"webmaster\"]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const button = document.querySelector('[data-admin-entry-route="webmaster"]');
+
+        if (!button) {
+          throw new Error('Systems admin gateway button was not found.');
+        }
+
+        button.click();
+        return true;
+      })()
+    `);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
     await evaluateExpression(session, `
       (() => {
@@ -709,7 +735,20 @@ test(
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
 
-    await navigate(session, `${appOrigin}/palzivalerts/hr`);
+    await navigate(session, `${appOrigin}/palzivalerts/admin`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-entry-route=\"hr\"]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const button = document.querySelector('[data-admin-entry-route="hr"]');
+
+        if (!button) {
+          throw new Error('HR admin gateway button was not found.');
+        }
+
+        button.click();
+        return true;
+      })()
+    `);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
     await evaluateExpression(session, `
       (() => {
@@ -729,7 +768,20 @@ test(
     `);
     await waitForCondition(session, "document.body.innerText.includes('HR Control Center')");
 
-    await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
+    await navigate(session, `${appOrigin}/palzivalerts/admin`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-entry-route=\"webmaster\"]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const button = document.querySelector('[data-admin-entry-route="webmaster"]');
+
+        if (!button) {
+          throw new Error('Systems admin gateway button was not found.');
+        }
+
+        button.click();
+        return true;
+      })()
+    `);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
     await evaluateExpression(session, `
       (() => {
@@ -801,7 +853,20 @@ test(
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
 
-    await navigate(session, `${appOrigin}/palzivalerts/it`);
+    await navigate(session, `${appOrigin}/palzivalerts/admin`);
+    await waitForCondition(session, "Boolean(document.querySelector('[data-admin-entry-route=\"it\"]'))");
+    await evaluateExpression(session, `
+      (() => {
+        const button = document.querySelector('[data-admin-entry-route="it"]');
+
+        if (!button) {
+          throw new Error('IT admin gateway button was not found.');
+        }
+
+        button.click();
+        return true;
+      })()
+    `);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
     await evaluateExpression(session, `
       (() => {

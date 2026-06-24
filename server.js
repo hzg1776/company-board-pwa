@@ -2855,8 +2855,8 @@ const server = http.createServer(async (req, res) => {
       ["/hr", appPath("hr")],
       ["/webmaster", appPath("webmaster")],
       ["/it", appPath("it")],
-      ["/admin", appPath("hr")],
-      ["/palzivalerts/admin", appPath("hr")]
+      ["/admin", appPath("admin")],
+      ["/palzivalerts/admin", appPath("admin")]
     ]);
     const nextLocation = redirects.get(url.pathname);
 
@@ -2868,7 +2868,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it"))) {
+  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it") || url.pathname === appPath("admin"))) {
     await sendIndexHtml(res);
     return;
   }

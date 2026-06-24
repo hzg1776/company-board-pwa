@@ -21,6 +21,9 @@ const APP_SUBTITLE = String(SITE_CONFIG.subtitle || DEFAULT_SITE_CONFIG.subtitle
 const APP_BASE_PATH = "/palzivalerts";
 const app = document.querySelector("#app");
 const DEVICE_PROFILE_STORAGE_KEY = "palziv-employee-device-profile-v3";
+const ADMIN_GATEWAY_STORAGE_KEY = "palziv-admin-gateway-v1";
+const ADMIN_GATEWAY_TTL_MS = 5 * 60_000;
+const HIDDEN_ADMIN_ROUTES = new Set(["hr", "webmaster", "it"]);
 
 function safeStorageGet(key) {
   try {
@@ -33,6 +36,30 @@ function safeStorageGet(key) {
 function safeStorageSet(key, value) {
   try {
     window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures on restricted browsers.
+  }
+}
+
+function safeSessionStorageGet(key) {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSessionStorageSet(key, value) {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures on restricted browsers.
+  }
+}
+
+function safeSessionStorageRemove(key) {
+  try {
+    window.sessionStorage.removeItem(key);
   } catch {
     // Ignore storage failures on restricted browsers.
   }
@@ -422,8 +449,12 @@ function currentRoute() {
     return "it";
   }
 
-  if (pathname === `${APP_BASE_PATH}/hr` || pathname === `${APP_BASE_PATH}/admin` || pathname === "/hr" || pathname === "/admin" || hash === "#hr" || hash === "#admin") {
+  if (pathname === `${APP_BASE_PATH}/hr` || pathname === "/hr" || hash === "#hr") {
     return "hr";
+  }
+
+  if (pathname === `${APP_BASE_PATH}/admin` || pathname === "/admin" || hash === "#admin") {
+    return "admin";
   }
 
   if (pathname === `${APP_BASE_PATH}/employee` || pathname === "/employee") {
@@ -452,7 +483,7 @@ function routePath(route) {
   if (route === "it") return appPath("it");
   if (route === "webmaster") return appPath("webmaster");
   if (route === "hr") return appPath("hr");
-  if (route === "admin") return appPath("hr");
+  if (route === "admin") return appPath("admin");
   if (route === "employee") return appPath("employee");
   return appPath();
 }
@@ -462,8 +493,58 @@ function routeTitle(route) {
   if (route === "it") return "IT";
   if (route === "webmaster") return "Systems";
   if (route === "hr") return "HR";
-  if (route === "admin") return "HR";
+  if (route === "admin") return "Admin";
   return "Employee";
+}
+
+function readAdminGatewayPass() {
+  const raw = safeSessionStorageGet(ADMIN_GATEWAY_STORAGE_KEY);
+
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    const expiresAt = Number(parsed.expiresAt || 0);
+
+    if (!expiresAt || expiresAt <= Date.now()) {
+      safeSessionStorageRemove(ADMIN_GATEWAY_STORAGE_KEY);
+      return null;
+    }
+
+    return {
+      expiresAt,
+      route: typeof parsed.route === "string" ? parsed.route : ""
+    };
+  } catch {
+    safeSessionStorageRemove(ADMIN_GATEWAY_STORAGE_KEY);
+    return null;
+  }
+}
+
+function grantAdminGatewayPass(route = "") {
+  safeSessionStorageSet(ADMIN_GATEWAY_STORAGE_KEY, JSON.stringify({
+    route: HIDDEN_ADMIN_ROUTES.has(route) ? route : "",
+    expiresAt: Date.now() + ADMIN_GATEWAY_TTL_MS
+  }));
+}
+
+function clearAdminGatewayPass() {
+  safeSessionStorageRemove(ADMIN_GATEWAY_STORAGE_KEY);
+}
+
+function hasAdminGatewayPass(route = "") {
+  const pass = readAdminGatewayPass();
+
+  if (!pass) return false;
+  if (!route || !HIDDEN_ADMIN_ROUTES.has(route)) return true;
+  return !pass.route || pass.route === route;
+}
+
+function shouldAllowSignedOutAdminRoute(route, access) {
+  if (!HIDDEN_ADMIN_ROUTES.has(route)) return true;
+  if (access?.authorized) return true;
+  if (currentInviteToken()) return true;
+  return hasAdminGatewayPass(route);
 }
 
 function formatDurationMs(value) {
@@ -3665,11 +3746,48 @@ function renderLauncher() {
         <div class="launcher-panel">
           <div class="launcher-grid">
             ${renderLauncherCard("employee", "Employee Login")}
-            ${renderLauncherCard("hr", "HR Login")}
-            ${renderLauncherModule("Systems / IT", [
-              { route: "webmaster", title: "Systems Login" },
-              { route: "it", title: "IT Login" }
-            ])}
+          </div>
+        </div>
+      </section>
+    </main>
+  `;
+}
+
+function renderAdminGatewayCard(route, title, description) {
+  return `
+    <button class="launch-card launch-card-module-link" type="button" data-admin-entry-route="${escapeHtml(route)}">
+      <strong class="launch-card-label">${escapeHtml(title)}</strong>
+      <span class="launch-card-description">${escapeHtml(description)}</span>
+    </button>
+  `;
+}
+
+function renderAdminGateway() {
+  return `
+    <main class="page-shell launcher-shell">
+      ${renderAppUpdateBanner()}
+      <section class="launcher-stage">
+        <div class="launcher-brand" aria-label="Palziv">
+          <div class="launcher-brand-disc">
+            <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
+          </div>
+        </div>
+
+        <div class="launcher-panel">
+          <div class="panel-title panel-title-wide">
+            <div>
+              <p class="eyebrow">${icon("lock")} Admin Gateway</p>
+              <h2>Privileged access</h2>
+              <p>Choose the admin console you need. Direct admin URLs stay hidden from the public launcher.</p>
+            </div>
+          </div>
+          <div class="launcher-grid">
+            ${renderAdminGatewayCard("hr", "HR Login", "People operations and employee communications")}
+            ${renderAdminGatewayCard("webmaster", "Systems Login", "Operational monitoring and system controls")}
+            ${renderAdminGatewayCard("it", "IT Login", "Governance, audit, and emergency access")}
+          </div>
+          <div class="admin-auth-footer-actions">
+            <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
           </div>
         </div>
       </section>
@@ -4918,6 +5036,7 @@ async function routeTo(route) {
   resetAdminInviteState();
 
   if (route === "launcher") {
+    clearAdminGatewayPass();
     activeAdminTab = "publish";
     activeHistoryFilter = "All";
     activeWebmasterTab = "overview";
@@ -4951,8 +5070,17 @@ async function hydrateRoute() {
     return;
   }
 
+  if (route === "admin") {
+    return;
+  }
+
   if (route === "hr") {
     await refreshAdminData();
+    if (!shouldAllowSignedOutAdminRoute("hr", state.access.hr)) {
+      window.history.replaceState({}, "", routePath("launcher"));
+      resetAdminInviteState();
+      return;
+    }
     if (!state.access.hr.authorized && currentInviteToken()) {
       await loadAdminInvitePreview("hr");
     } else {
@@ -4963,12 +5091,22 @@ async function hydrateRoute() {
 
   if (route === "it") {
     await refreshItData();
+    if (!shouldAllowSignedOutAdminRoute("it", state.access.it)) {
+      window.history.replaceState({}, "", routePath("launcher"));
+      resetAdminInviteState();
+      return;
+    }
     resetAdminInviteState();
     return;
   }
 
   if (route === "webmaster") {
     await refreshWebmasterData();
+    if (!shouldAllowSignedOutAdminRoute("webmaster", state.access.webmaster)) {
+      window.history.replaceState({}, "", routePath("launcher"));
+      resetAdminInviteState();
+      return;
+    }
     if (!state.access.webmaster.authorized && currentInviteToken()) {
       await loadAdminInvitePreview("webmaster");
     } else {
@@ -5009,6 +5147,8 @@ function render() {
     ? '<main class="auth-shell"><section class="empty-state">Loading portal...</section></main>'
     : route === "launcher"
       ? renderLauncher()
+    : route === "admin"
+      ? renderAdminGateway()
     : route === "hr"
         ? (state.access.hr.authorized ? renderAdmin() : renderAdminAuthGate("hr"))
       : route === "it"
@@ -5018,6 +5158,8 @@ function render() {
           : (state.access.employee.authorized ? renderEmployee() : renderEmployeeAuthGate());
   document.title = route === "launcher"
     ? APP_DISPLAY_TITLE
+    : route === "admin"
+    ? `${APP_DISPLAY_TITLE} Admin`
     : route === "it"
     ? `${APP_DISPLAY_TITLE} IT`
     : route === "hr"
@@ -5920,6 +6062,7 @@ document.addEventListener("click", async (event) => {
   if (target.closest("input, select, textarea, label")) return;
 
   const routeButton = target.closest("button[data-route], a[data-route], [role='button'][data-route]");
+  const adminEntryButton = target.closest("[data-admin-entry-route]");
   const openAuthRecoveryButton = target.closest("[data-open-auth-recovery]");
   const closeAuthRecoveryButton = target.closest("[data-close-auth-recovery]");
   const tabButton = target.closest("[data-tab]");
@@ -5947,6 +6090,17 @@ document.addEventListener("click", async (event) => {
   if (routeButton) {
     event.preventDefault();
     await routeTo(routeButton.dataset.route);
+    return;
+  }
+
+  if (adminEntryButton) {
+    event.preventDefault();
+    const route = String(adminEntryButton.dataset.adminEntryRoute || "");
+
+    if (HIDDEN_ADMIN_ROUTES.has(route)) {
+      grantAdminGatewayPass(route);
+      await routeTo(route);
+    }
     return;
   }
 
@@ -6055,6 +6209,7 @@ document.addEventListener("click", async (event) => {
       method: "POST",
       body: JSON.stringify({})
     });
+    clearAdminGatewayPass();
     clearAdminMfaState(route);
     if (route === "it") {
       state.access.it = {
