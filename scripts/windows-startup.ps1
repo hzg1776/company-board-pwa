@@ -615,7 +615,7 @@ Write-Host "Project root: $ProjectRoot"
 Set-Location $ProjectRoot
 $runtimeLayout = Initialize-BoardRuntimeLayout -ProjectRoot $ProjectRoot -RuntimeRoot $RuntimeRoot
 if ($runtimeLayout.IsExternal) {
-  Sync-BoardRuntimeData -SourceDirectory (Join-Path $ProjectRoot "data") -TargetDirectory $runtimeLayout.DataDirectory
+  Sync-BoardProjectRuntimeData -ProjectRoot $ProjectRoot -TargetDirectory $runtimeLayout.DataDirectory
 }
 
 $logDirectory = $runtimeLayout.LogDirectory

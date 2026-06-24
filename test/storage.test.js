@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createBoardStore, createSeedData, normalizeDataShape } from "../storage.js";
 
-test("createSeedData returns a full board snapshot", () => {
+test("createSeedData returns a normalized board snapshot", () => {
   const seed = createSeedData();
 
-  assert.equal(seed.posts.length, 3);
-  assert.equal(seed.weather.condition, "Weather not configured");
-  assert.equal(seed.weather.level, "Clear");
-  assert.equal(seed.posts[0].notifyEmployees, true);
+  assert.equal(Array.isArray(seed.posts), true);
+  assert.equal(seed.posts.length > 0, true);
+  assert.equal(Array.isArray(seed.acknowledgements), true);
+  assert.equal(typeof seed.weather.condition, "string");
+  assert.equal(typeof seed.weather.level, "string");
+  assert.equal(typeof seed.posts[0].notifyEmployees, "boolean");
 });
 
 test("createBoardStore defaults to local file storage", async () => {
@@ -97,7 +99,7 @@ test("file-backed store persists updates between reads", async () => {
     await store.init();
 
     const firstRead = await store.readData();
-    assert.equal(firstRead.posts.length, 3);
+    assert.equal(firstRead.posts.length, createSeedData().posts.length);
 
     await store.updateData((data) => {
       data.posts.unshift({
@@ -119,6 +121,68 @@ test("file-backed store persists updates between reads", async () => {
     assert.equal(secondRead.posts[0].title, "Database-backed board");
     assert.equal(secondRead.posts[0].body, "This post should persist across reads.");
     assert.equal(secondRead.posts[0].notifyEmployees, true);
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("file-backed store seeds runtime data from a separate tracked seed file", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-seed-"));
+  const seedFile = path.join(tempDir, "board.seed.json");
+  const dataFile = path.join(tempDir, "runtime", "data", "board.json");
+  const trackedSeed = normalizeDataShape({
+    posts: [
+      {
+        id: "seed-post-1",
+        type: "News",
+        priority: "Important",
+        notifyEmployees: true,
+        title: "Tracked seed message",
+        body: "This content should initialize the runtime store.",
+        audience: "All employees",
+        author: "IT",
+        createdAt: "2026-06-24T12:00:00.000Z",
+        expiresAt: ""
+      }
+    ],
+    weather: {
+      condition: "Seeded weather",
+      level: "Watch",
+      temperature: "80°F"
+    },
+    acknowledgements: []
+  });
+  const store = createBoardStore({ dataFile, seedFile });
+
+  try {
+    await writeFile(seedFile, `${JSON.stringify(trackedSeed, null, 2)}\n`, "utf8");
+
+    const firstRead = await store.readData();
+    assert.deepEqual(firstRead, trackedSeed);
+
+    await store.updateData((data) => {
+      data.posts.unshift({
+        id: "runtime-post-1",
+        type: "HR",
+        priority: "Normal",
+        notifyEmployees: false,
+        title: "Runtime-only update",
+        body: "This should not modify the tracked seed file.",
+        audience: "All employees",
+        author: "HR",
+        createdAt: "2026-06-24T13:00:00.000Z",
+        expiresAt: ""
+      });
+      return data.posts[0];
+    });
+
+    const seedAfter = JSON.parse(await readFile(seedFile, "utf8"));
+    const runtimeAfter = JSON.parse(await readFile(dataFile, "utf8"));
+
+    assert.deepEqual(seedAfter, trackedSeed);
+    assert.equal(runtimeAfter.posts[0].title, "Runtime-only update");
+    assert.equal(runtimeAfter.posts[1].title, "Tracked seed message");
   } finally {
     await store.close();
     await rm(tempDir, { recursive: true, force: true });

@@ -14,6 +14,7 @@ An installable employee portal with a shared internal launcher at `/palzivalerts
 - HR can enter a location to pull live weather from Open-Meteo and save the result to the portal.
 - Important and urgent updates can be broadcast as push notifications to every employee device that opts in.
 - Local hardware storage is the only storage path.
+- Local mutable runtime files now live under `runtime/data`, separate from the tracked board seed.
 
 ## Rename The App
 
@@ -79,7 +80,8 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 - `server.js`: Node server and API layer.
 - `security.js`: named admin, employee auth, invite, recovery, and audit logic.
 - `storage.js`: file-backed persistence.
-- `data/board.json`: local seed and dev storage.
+- `data/board.seed.json`: tracked starter board content for first-run and reset flows.
+- `runtime/data/board.json`: repo-local mutable board state for local development.
 - `scripts/runtime-state.ps1`: shared runtime root, migration, and ACL helper for Windows deployment scripts.
 - `public/index.html`: PWA entry point.
 - `public/app.js`: launcher, admin gateway, employee portal, HR console, Systems console, and IT console logic.
@@ -88,11 +90,13 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 - `public/assets/logo.svg`: SVG wrapper around the brand icon.
 - `public/assets/palziv-logo.png`: brand icon source.
 - `public/assets/palziv-wordmark.png`: brand wordmark source.
-- `data/push.json`: local dev push key and subscription store. Production runtime state should live under `C:\ProgramData\Palziv\runtime\data`.
+- `runtime/data/push.json`: repo-local mutable push key and subscription store for local development. Production runtime state should live under `C:\ProgramData\Palziv\runtime\data`.
 - `DEPLOY_CLOUDFLARE.md`: local hardware + Cloudflare Tunnel runbook.
 - `scripts/windows-phase1-cleanup.ps1`: safe Windows cleanup and reinstall helper.
 - `scripts/windows-startup.ps1`: boot and recovery script for the app and cloudflared service.
 - `scripts/install-startup-task.ps1`: registers the startup, recovery, and tunnel watchdog tasks and configures the `cloudflared` Windows service.
+
+If you already have old local runtime files under `data/`, the app and startup scripts migrate them into `runtime/data` automatically the first time you run this version.
 
 ## Production Upgrade Checklist
 

@@ -218,7 +218,7 @@ if ((-not $isAdmin) -and $runtimeLayout.IsExternal -and $env:ProgramData -and (T
   throw "External runtime roots under ProgramData require Administrator privileges. Re-run this installer elevated or use a user-scoped runtime root."
 }
 
-Sync-BoardRuntimeData -SourceDirectory (Join-Path $ProjectRoot "data") -TargetDirectory $runtimeLayout.DataDirectory
+Sync-BoardProjectRuntimeData -ProjectRoot $ProjectRoot -TargetDirectory $runtimeLayout.DataDirectory
 
 if ($isAdmin) {
   $startupTrigger = New-ScheduledTaskTrigger -AtStartup

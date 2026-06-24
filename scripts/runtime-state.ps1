@@ -34,19 +34,20 @@ function Get-BoardRuntimeLayout {
   )
 
   $resolvedProjectRoot = Resolve-BoardPath -PathValue $ProjectRoot
+  $localRuntimeRoot = Join-Path $resolvedProjectRoot "runtime"
   $resolvedRuntimeRoot = if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
     ""
   } else {
     Resolve-BoardPath -PathValue $RuntimeRoot
   }
 
-  if (-not $resolvedRuntimeRoot) {
+  if ((-not $resolvedRuntimeRoot) -or ($resolvedRuntimeRoot -eq $localRuntimeRoot)) {
     return [pscustomobject]@{
       ProjectRoot     = $resolvedProjectRoot
-      RuntimeRoot     = ""
-      DataDirectory   = Join-Path $resolvedProjectRoot "data"
-      LogDirectory    = Join-Path $resolvedProjectRoot "logs"
-      BackupDirectory = Join-Path $resolvedProjectRoot "backups"
+      RuntimeRoot     = $localRuntimeRoot
+      DataDirectory   = Join-Path $localRuntimeRoot "data"
+      LogDirectory    = Join-Path $localRuntimeRoot "logs"
+      BackupDirectory = Join-Path $localRuntimeRoot "backups"
       IsExternal      = $false
     }
   }
@@ -108,6 +109,31 @@ function Sync-BoardRuntimeData {
     }
 
     Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
+  }
+}
+
+function Sync-BoardProjectRuntimeData {
+  param(
+    [Parameter(Mandatory = $true)][string]$ProjectRoot,
+    [Parameter(Mandatory = $true)][string]$TargetDirectory,
+    [switch]$OverwriteExisting
+  )
+
+  $resolvedProjectRoot = Resolve-BoardPath -PathValue $ProjectRoot
+  $resolvedTargetDirectory = Resolve-BoardPath -PathValue $TargetDirectory
+  $candidateSources = @(
+    (Join-Path $resolvedProjectRoot "runtime\\data"),
+    (Join-Path $resolvedProjectRoot "data")
+  ) | Select-Object -Unique
+
+  foreach ($sourceDirectory in $candidateSources) {
+    $resolvedSourceDirectory = Resolve-BoardPath -PathValue $sourceDirectory
+
+    if ($resolvedSourceDirectory -eq $resolvedTargetDirectory) {
+      continue
+    }
+
+    Sync-BoardRuntimeData -SourceDirectory $resolvedSourceDirectory -TargetDirectory $resolvedTargetDirectory -OverwriteExisting:$OverwriteExisting
   }
 }
 

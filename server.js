@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -20,6 +20,9 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = process.env.PUBLIC_DIR ? path.resolve(process.env.PUBLIC_DIR) : path.join(__dirname, "public");
 const LOCAL_SECRETS_DIR = path.join(__dirname, "local-secrets");
 const LOCAL_BOOTSTRAP_TOKEN_FILE = path.join(LOCAL_SECRETS_DIR, "bootstrap-token.txt");
+const LOCAL_RUNTIME_ROOT = path.join(__dirname, "runtime");
+const LOCAL_RUNTIME_DATA_DIR = path.join(LOCAL_RUNTIME_ROOT, "data");
+const BOARD_SEED_FILE = path.join(__dirname, "data", "board.seed.json");
 const INDEX_HTML_TEMPLATE_PATH = path.join(PUBLIC_DIR, "index.html");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
 const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
@@ -102,8 +105,11 @@ const mimeTypes = new Map([
   [".webmanifest", "application/manifest+json; charset=utf-8"]
 ]);
 
+migrateLegacyLocalRuntimeData();
+
 const boardStore = createBoardStore({
-  dataFile: DATA_FILE
+  dataFile: DATA_FILE,
+  seedFile: BOARD_SEED_FILE
 });
 const notificationHub = createNotificationHub({
   dataFile: PUSH_DATA_FILE
@@ -764,7 +770,7 @@ function pathContains(parentPath, childPath) {
 }
 
 function resolveManagedDataFile(envName, fileName) {
-  const defaultDirectory = RUNTIME_DATA_DIR || path.join(__dirname, "data");
+  const defaultDirectory = RUNTIME_DATA_DIR || LOCAL_RUNTIME_DATA_DIR;
   const configuredPath = process.env[envName]
     ? path.resolve(process.env[envName])
     : path.join(defaultDirectory, fileName);
@@ -778,6 +784,36 @@ function resolveManagedDataFile(envName, fileName) {
   }
 
   return configuredPath;
+}
+
+function migrateLegacyLocalRuntimeData() {
+  if (RUNTIME_DATA_DIR) {
+    return;
+  }
+
+  migrateLegacyLocalRuntimeFile("DATA_FILE", "board.json", DATA_FILE);
+  migrateLegacyLocalRuntimeFile("PUSH_DATA_FILE", "push.json", PUSH_DATA_FILE);
+  migrateLegacyLocalRuntimeFile("ANALYTICS_DATA_FILE", "analytics.json", ANALYTICS_DATA_FILE);
+  migrateLegacyLocalRuntimeFile("SECURITY_DATA_FILE", "security.json", SECURITY_DATA_FILE);
+}
+
+function migrateLegacyLocalRuntimeFile(envName, fileName, targetPath) {
+  if (process.env[envName]) {
+    return;
+  }
+
+  const legacyPath = path.join(__dirname, "data", fileName);
+
+  if (pathContains(path.dirname(targetPath), legacyPath) && path.basename(targetPath) === fileName) {
+    return;
+  }
+
+  if (!existsSync(legacyPath) || existsSync(targetPath)) {
+    return;
+  }
+
+  mkdirSync(path.dirname(targetPath), { recursive: true });
+  copyFileSync(legacyPath, targetPath);
 }
 
 function parseConfiguredPublicBaseUrl(value) {

@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot 
 Default behavior:
 
 - when run elevated on the Windows host, targets `C:\ProgramData\Palziv\runtime` automatically if that runtime exists
-- otherwise reads data from the repo-local runtime data directory
+- otherwise reads data from the repo-local runtime data directory at `runtime\data`
 - writes timestamped zip archives into the selected runtime backup directory
 - writes a manifest JSON next to the zip
 

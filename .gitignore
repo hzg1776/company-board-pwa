@@ -3,9 +3,11 @@ node_modules/
 *.log
 backups/
 logs/
+runtime/
 artifacts/
 /.codex/
 security-scans/
+data/board.json
 data/push.json
 data/security.json
 data/analytics.json

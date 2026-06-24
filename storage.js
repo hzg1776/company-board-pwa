@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createDefaultWeather, normalizeStoredWeather } from "./weather.js";
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
+const DEFAULT_BOARD_SEED_FILE = fileURLToPath(new URL("./data/board.seed.json", import.meta.url));
 
 function nowIso() {
   return new Date().toISOString();
@@ -41,7 +44,7 @@ function isValidExpiry(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-export function createSeedData() {
+function createDefaultSeedData() {
   const now = nowIso();
 
   return {
@@ -85,8 +88,22 @@ export function createSeedData() {
     ],
     weather: {
       ...createDefaultWeather()
-    }
+    },
+    acknowledgements: []
   };
+}
+
+export function createSeedData({ seedFile = DEFAULT_BOARD_SEED_FILE } = {}) {
+  if (!seedFile) {
+    return createDefaultSeedData();
+  }
+
+  try {
+    const raw = readFileSync(seedFile, "utf8");
+    return normalizeDataShape(JSON.parse(raw));
+  } catch {
+    return createDefaultSeedData();
+  }
 }
 
 function normalizeStoredPost(post = {}) {
@@ -130,7 +147,7 @@ function normalizeAcknowledgement(acknowledgement = {}) {
 }
 
 export function normalizeDataShape(data) {
-  if (!data || typeof data !== "object") return createSeedData();
+  if (!data || typeof data !== "object") return createDefaultSeedData();
 
   const normalized = {
     ...data,
@@ -156,7 +173,7 @@ async function writeFileAtomic(filePath, data) {
   await rename(tempFile, filePath);
 }
 
-async function readFileSnapshot(dataFile) {
+async function readFileSnapshot(dataFile, seedFile) {
   await ensureDirectory(dataFile);
 
   try {
@@ -170,29 +187,20 @@ async function readFileSnapshot(dataFile) {
 
     return data;
   } catch {
-    const seed = createSeedData();
+    const seed = createSeedData({ seedFile });
     await writeFileAtomic(dataFile, seed);
     return seed;
   }
 }
 
-async function readSeedSnapshot(dataFile) {
-  try {
-    const raw = await readFile(dataFile, "utf8");
-    return normalizeDataShape(JSON.parse(raw));
-  } catch {
-    return createSeedData();
-  }
-}
-
-export function createBoardStore({ dataFile } = {}) {
+export function createBoardStore({ dataFile, seedFile } = {}) {
   const backend = "file";
   let initPromise = null;
   let writeQueue = Promise.resolve();
 
   async function init() {
     if (!initPromise) {
-      initPromise = readFileSnapshot(dataFile);
+      initPromise = readFileSnapshot(dataFile, seedFile);
     }
 
     return initPromise;
@@ -200,7 +208,7 @@ export function createBoardStore({ dataFile } = {}) {
 
   async function readData() {
     await init();
-    return readFileSnapshot(dataFile);
+    return readFileSnapshot(dataFile, seedFile);
   }
 
   async function writeData(data) {
@@ -220,7 +228,7 @@ export function createBoardStore({ dataFile } = {}) {
     await init();
 
     const next = writeQueue.then(async () => {
-      const data = await readFileSnapshot(dataFile);
+      const data = await readFileSnapshot(dataFile, seedFile);
       const result = await mutator(data);
       await writeFileAtomic(dataFile, data);
       return result;
