@@ -51,11 +51,11 @@ const ALERT_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.AL
 const MAX_BODY_BYTES = 1_000_000;
 const EMPLOYEE_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const DEFAULT_SITE_CONFIG = Object.freeze({
-  name: "Palziv",
+  name: "Communications and Alert Center",
   nameSuffix: "",
-  shortName: "Palziv",
+  shortName: "Alert Center",
   subtitle: "Updates & Alerts Portal",
-  description: "Updates and alerts portal for Palziv with HR-managed company news, weather, and push notifications.",
+  description: "Updates and alerts portal for Communications and Alert Center with HR-managed company news, weather, and push notifications.",
   themeColor: "#1b2329",
   backgroundColor: "#f4f8fb"
 });
@@ -380,17 +380,6 @@ function serializeCookie(name, value, options = {}) {
   }
 
   return attributes.join("; ");
-}
-
-function readCookieValue(cookieHeader = "", name = "") {
-  const target = `${name}=`;
-  for (const part of String(cookieHeader || "").split(";")) {
-    const trimmed = part.trim();
-    if (trimmed.startsWith(target)) {
-      return decodeURIComponent(trimmed.slice(target.length));
-    }
-  }
-  return "";
 }
 
 function redirectTo(res, location) {
@@ -739,7 +728,7 @@ function sendManifest(res) {
     name: displayBrandName(siteConfig),
     short_name: siteConfig.shortName,
     description: siteConfig.description,
-    start_url: `${appPath()}/`,
+    start_url: appPath("employee"),
     scope: `${APP_BASE_PATH}/`,
     display: "standalone",
     background_color: siteConfig.backgroundColor,
@@ -747,31 +736,10 @@ function sendManifest(res) {
     orientation: "portrait-primary",
     shortcuts: [
       {
-        name: "Launcher",
-        short_name: "Home",
-        description: "Open the Palziv Alerts launcher",
-        url: appPath(),
-        icons: [icon]
-      },
-      {
-        name: "Employee Feed",
-        short_name: "Feed",
-        description: "Open the employee feed",
+        name: "Employee Portal",
+        short_name: "Employee",
+        description: "Open the employee login and feed",
         url: appPath("employee"),
-        icons: [icon]
-      },
-      {
-        name: "HR Console",
-        short_name: "HR",
-        description: "Open the HR publishing console",
-        url: appPath("hr"),
-        icons: [icon]
-      },
-      {
-        name: "Systems",
-        short_name: "Web",
-        description: "Open systems analytics and diagnostics",
-        url: appPath("webmaster"),
         icons: [icon]
       }
     ],
@@ -926,25 +894,6 @@ function requestOrigin(req) {
 
 function appBaseUrl(req) {
   return CONFIGURED_PUBLIC_BASE_URL || requestOrigin(req);
-}
-
-async function sendEmployeeQr(req, res) {
-  const employeeUrl = `${appBaseUrl(req)}${appPath("employee")}`;
-  const svg = await QRCode.toString(employeeUrl, {
-    type: "svg",
-    margin: 2,
-    width: 320,
-    color: {
-      dark: "#002855",
-      light: "#ffffff"
-    }
-  });
-
-  res.writeHead(200, {
-    "Content-Type": "image/svg+xml",
-    "Cache-Control": "no-store"
-  });
-  res.end(svg);
 }
 
 async function requireHrAccess(req, res) {
@@ -2599,7 +2548,7 @@ async function handleApi(req, res, url) {
       const testId = `push-test-${Date.now()}`;
       const notification = {
         id: testId,
-        title: cleanText(body.title, 80) || "Palziv test push",
+        title: cleanText(body.title, 80) || `${displayBrandName(siteConfig)} test push`,
         body: cleanText(body.body ?? body.message, 280) || "This is a delivery check for the current device.",
         type: "Test",
         priority: "Normal",
@@ -2841,11 +2790,6 @@ const server = http.createServer(async (req, res) => {
       console.error("Analytics record failed:", error);
     });
   });
-
-  if (req.method === "GET" && url.pathname === "/employee-qr.svg") {
-    await sendEmployeeQr(req, res);
-    return;
-  }
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/palzivalerts/" || url.pathname === "/employee" || url.pathname === "/hr" || url.pathname === "/webmaster" || url.pathname === "/admin" || url.pathname === "/it" || url.pathname === "/palzivalerts/admin")) {
     const redirects = new Map([

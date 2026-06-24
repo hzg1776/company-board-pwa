@@ -16,8 +16,8 @@ const SHELL_ASSETS = [
 
 function defaultNotificationPayload() {
   return {
-    title: "Palziv alert",
-    body: "Open the Palziv portal for details.",
+    title: "Communications and Alert Center",
+    body: "Open the Communications and Alert Center for details.",
     url: "/palzivalerts/employee"
   };
 }

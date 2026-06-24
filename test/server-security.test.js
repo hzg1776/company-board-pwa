@@ -1722,7 +1722,7 @@ test("legacy owner URL aliases are no longer served", async (t) => {
   assert.equal(legacyOwnerBrandedAlias.status, 404);
 });
 
-test("client app hides admin logins from the launcher and exposes a dedicated admin gateway", async () => {
+test("client app exposes launcher logins and retains a dedicated admin gateway", async () => {
   const appSource = await readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
   const launcherStart = appSource.indexOf("function renderLauncher()");
   const launcherEnd = appSource.indexOf("function renderAdminGatewayCard(");
@@ -1734,9 +1734,36 @@ test("client app hides admin logins from the launcher and exposes a dedicated ad
   assert.match(appSource, /if \(route === "admin"\) return appPath\("admin"\);/);
   assert.match(appSource, /route === "admin"/);
   assert.match(launcherSource, /Employee Login/);
-  assert.doesNotMatch(launcherSource, /HR Login/);
-  assert.doesNotMatch(launcherSource, /Systems Login/);
-  assert.doesNotMatch(launcherSource, /IT Login/);
+  assert.match(launcherSource, /HR Login/);
+  assert.match(launcherSource, /Systems and Analytics Login/);
+  assert.match(launcherSource, /IT Login/);
+  assert.match(appSource, /data-admin-entry-route/);
+});
+
+test("manifest shortcuts do not expose privileged routes directly", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-manifest-gateway-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const response = await fetch(`${server.baseUrl}/manifest.webmanifest`);
+  assert.equal(response.status, 200);
+
+  const manifest = await response.json();
+  const shortcutUrls = Array.isArray(manifest.shortcuts)
+    ? manifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
+    : [];
+
+  assert.equal(manifest.start_url, "/palzivalerts/employee");
+  assert.equal(shortcutUrls.includes("/palzivalerts"), false);
+  assert.ok(shortcutUrls.includes("/palzivalerts/employee"));
+  assert.equal(shortcutUrls.includes("/palzivalerts/hr"), false);
+  assert.equal(shortcutUrls.includes("/palzivalerts/webmaster"), false);
+  assert.equal(shortcutUrls.includes("/palzivalerts/it"), false);
 });
 
 test("legacy owner cookie alias no longer authorizes IT access", async (t) => {

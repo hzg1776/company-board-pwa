@@ -8,8 +8,8 @@ const require = createRequire(import.meta.url);
 const webpush = require("web-push");
 
 const DEFAULT_SUBJECT = process.env.PUSH_VAPID_SUBJECT || "mailto:alerts@example.com";
-const DEFAULT_TITLE = "Palziv alert";
-const DEFAULT_BODY = "Open the Palziv portal for details.";
+const DEFAULT_TITLE = "Communications and Alert Center";
+const DEFAULT_BODY = "Open the Communications and Alert Center for details.";
 const DEFAULT_URL = "/palzivalerts/employee";
 const DEFAULT_ICON = "/assets/palziv-logo-transparent.png?v=20260617c";
 const DEFAULT_ALLOWED_PUSH_HOSTS = Object.freeze([

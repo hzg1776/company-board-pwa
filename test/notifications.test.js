@@ -21,12 +21,12 @@ test("buildNotificationPayload prepares a safe notification payload", () => {
 
   const testPayload = buildNotificationPayload({
     id: "push-test",
-    title: "Palziv test push",
+    title: "Alert Center test push",
     body: "This is a delivery check for the current device.",
     type: "Test",
     priority: "Normal",
     url: "/palzivalerts/hr",
-    tag: "palziv-test-push",
+    tag: "alert-center-test-push",
     requireInteraction: true
   });
 
@@ -37,10 +37,10 @@ test("buildNotificationPayload prepares a safe notification payload", () => {
   assert.equal(payload.requireInteraction, true);
   assert.equal(payload.renotify, true);
 
-  assert.equal(testPayload.title, "Palziv test push");
+  assert.equal(testPayload.title, "Alert Center test push");
   assert.equal(testPayload.body, "This is a delivery check for the current device.");
   assert.equal(testPayload.data.url, "/palzivalerts/hr");
-  assert.equal(testPayload.tag, "palziv-test-push");
+  assert.equal(testPayload.tag, "alert-center-test-push");
   assert.equal(testPayload.requireInteraction, true);
 });
 

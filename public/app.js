@@ -1,11 +1,11 @@
 import { resolveDeviceSetupAction } from "./device-setup.js";
 
 const DEFAULT_SITE_CONFIG = {
-  name: "Palziv",
+  name: "Communications and Alert Center",
   nameSuffix: "",
-  shortName: "Palziv",
+  shortName: "Alert Center",
   subtitle: "Updates & Alerts Portal",
-  description: "Updates and alerts portal for Palziv with HR-managed company news, weather, and push notifications."
+  description: "Updates and alerts portal for Communications and Alert Center with HR-managed company news, weather, and push notifications."
 };
 
 const SITE_CONFIG = Object.freeze({
@@ -403,11 +403,6 @@ function safeFilename(value) {
     .slice(0, 72) || "acknowledgements";
 }
 
-function formatWeatherUpdatedAt(value) {
-  if (!value) return "Not yet fetched";
-  return formatDate(value);
-}
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -486,15 +481,6 @@ function routePath(route) {
   if (route === "admin") return appPath("admin");
   if (route === "employee") return appPath("employee");
   return appPath();
-}
-
-function routeTitle(route) {
-  if (route === "launcher") return "Launcher";
-  if (route === "it") return "IT";
-  if (route === "webmaster") return "Systems";
-  if (route === "hr") return "HR";
-  if (route === "admin") return "Admin";
-  return "Employee";
 }
 
 function readAdminGatewayPass() {
@@ -1764,28 +1750,6 @@ function defaultWeather() {
   };
 }
 
-function pushSupportText() {
-  if (!supportsPushNotifications()) {
-    return isIosDevice()
-      ? "On iPhone, install this site to the Home Screen and reopen it as the web app to enable push."
-      : "This browser cannot receive push alerts. Open the portal in a push-capable browser to subscribe this device.";
-  }
-
-  if (!state.push.ready) {
-    return "Checking alert support on this device.";
-  }
-
-  if (state.push.subscribed) {
-    return "This device will receive broadcast updates.";
-  }
-
-  if (state.push.permission === "denied") {
-    return "Notification access is turned off for this site.";
-  }
-
-  return "Subscribe this device to receive urgent updates.";
-}
-
   function formatPushError(error, fallback) {
     const message = String(error?.message || "").trim();
     const lower = message.toLowerCase();
@@ -1942,7 +1906,7 @@ function buildEmployeeSetupState() {
     nextStep = {
       title: "Install this site on your phone",
       detail: isIosDevice()
-        ? "Use Safari Share -> Add to Home Screen, then reopen the installed Palziv app before subscribing."
+        ? `Use Safari Share -> Add to Home Screen, then reopen the installed ${APP_TITLE} app before subscribing.`
         : "Add this site to your Home Screen or install the app from the browser menu, then reopen it to finish setup.",
       action: "profile"
     };
@@ -2015,7 +1979,7 @@ function buildEmployeeSetupState() {
       title: "Install On Phone",
       value: installRequired ? (installed ? "Installed" : "Needed") : "Not needed",
       detail: installRequired
-        ? "Open the installed Palziv app from your Home Screen before you finish alert setup."
+        ? `Open the installed ${APP_TITLE} app from your Home Screen before you finish alert setup.`
         : "Phone installation is only required on mobile devices.",
       complete: installed
     },
@@ -2353,66 +2317,12 @@ async function unsubscribeDevice(endpoint) {
   await loadPushStatus();
 }
 
-function renderAlertControls() {
-  if (state.push.busy) {
-    return `
-      <button class="button" type="button" disabled aria-disabled="true">${icon("refresh")} Updating...</button>
-      <span class="status-chip muted">${icon("refresh")} Working...</span>
-    `;
-  }
-
-  if (state.push.subscribed) {
-    return `
-      <button class="ghost-button" type="button" data-disable-alerts>${icon("bell")} Turn off this device</button>
-      <span class="status-chip success">${icon("check")} Subscribed On This Device</span>
-    `;
-  }
-
-  const supported = supportsPushNotifications();
-  const buttonLabel = "Subscribe This Device";
-  const helperText = !supported
-    ? "Open the portal in a push-capable browser."
-    : state.push.permission === "denied"
-      ? "Notification access is turned off for this site."
-      : "Receive urgent updates on this device.";
-
-  return `
-    <button class="button" type="button" data-enable-alerts>${icon("bell")} ${escapeHtml(buttonLabel)}</button>
-    <span class="status-chip ${supported ? "muted" : "warning"}">${state.push.permission === "denied" ? icon("alert") : icon("lock")} ${escapeHtml(helperText)}</span>
-  `;
-}
-
 function renderTestPushControl() {
   if (state.push.busy) {
     return `<span class="status-chip muted">${icon("refresh")} Sending test...</span>`;
   }
 
   return `<button class="ghost-button" type="button" data-send-test-push>${icon("send")} Send Test Push</button>`;
-}
-
-function renderCurrentPushStatusCard(currentPush) {
-  const badgeClass = currentPush.tone === "success" ? "success" : "warning";
-  const badgeIcon = currentPush.tone === "success" ? icon("check") : icon("alert");
-
-  return `
-    <article class="device-subscription-card ${currentPush.tone}">
-      <div class="device-subscription-head">
-        <div class="device-subscription-copy">
-          <p class="eyebrow">${icon("bell")} This device</p>
-          <h3>${escapeHtml(currentPush.title)}</h3>
-          <p>${escapeHtml(currentPush.detail)}</p>
-        </div>
-        <span class="status-chip ${badgeClass}">${badgeIcon} ${escapeHtml(currentPush.badge)}</span>
-      </div>
-      <div class="device-subscription-facts">
-        <span class="status-chip muted">${icon("lock")} Permission ${escapeHtml(currentPush.permissionLabel)}</span>
-        <span class="status-chip muted">${icon("check")} Server ${escapeHtml(currentPush.serverLabel)}</span>
-        ${currentPush.device?.label ? `<span class="status-chip muted">${icon("users")} ${escapeHtml(currentPush.device.label)}</span>` : ""}
-      </div>
-      <p class="device-subscription-note">${escapeHtml(currentPush.hint)}</p>
-      <small class="device-subscription-meta">${escapeHtml(currentPush.lastUpdatedLabel)}</small>
-    </article>
-  `;
 }
 
 function compactDeviceChecklistTitle(title) {
@@ -2444,7 +2354,7 @@ function installGuideSteps() {
       "Open this page in Safari.",
       "Tap the Share button.",
       "Tap Add to Home Screen.",
-      "Open the Palziv app from your Home Screen.",
+      `Open the ${APP_TITLE} app from your Home Screen.`,
       "Return to Account and finish setup."
     ];
   }
@@ -2454,7 +2364,7 @@ function installGuideSteps() {
       "Open this page in Chrome.",
       "Tap the three dots.",
       "Tap Install app or Add to Home screen.",
-      "Open the Palziv app from your Home Screen.",
+      `Open the ${APP_TITLE} app from your Home Screen.`,
       "Return to Account and finish setup."
     ];
   }
@@ -2463,7 +2373,7 @@ function installGuideSteps() {
     "Open this page on your phone.",
     "Use the browser menu or Share button.",
     "Tap Install app or Add to Home Screen.",
-    "Open the Palziv app from your Home Screen.",
+    `Open the ${APP_TITLE} app from your Home Screen.`,
     "Return to Account and finish setup."
   ];
 }
@@ -2473,7 +2383,7 @@ function renderInstallGuideToggle() {
     <details class="employee-install-guide"${state.employeeInstallGuideOpen ? " open" : ""} data-employee-install-guide>
       <summary class="ghost-button employee-install-guide-toggle">Install On Phone</summary>
       <div class="employee-install-guide-body">
-        <p class="panel-copy">Use the phone that should receive Palziv alerts.</p>
+        <p class="panel-copy">Use the phone that should receive ${escapeHtml(APP_TITLE)} alerts.</p>
         <ol class="employee-install-guide-list">
           ${installGuideSteps().map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
         </ol>
@@ -2577,80 +2487,12 @@ function renderNotificationDeviceRoster(devices = [], emptyLabel = "No devices e
   `;
 }
 
-function renderAdminPushActions() {
-  return `<p class="panel-copy">Employee devices enroll from the employee portal. Use the roster below to monitor which accounts are Active and which still need cleanup.</p>`;
-}
-
 function renderWebmasterPushActions() {
   return `
     <div class="employee-alert-actions admin-alert-actions">
       ${renderTestPushControl()}
     </div>
   `;
-}
-
-function filterPushRosterDevices(filter) {
-  const devices = Array.isArray(state.pushStatus.devices) ? state.pushStatus.devices : [];
-
-  if (filter === "attention") {
-    return devices.filter((device) => !device.authorized);
-  }
-
-  if (filter === "all") {
-    return devices;
-  }
-
-  return devices.filter((device) => device.authorized);
-}
-
-function pushRosterTitle(filter, count) {
-  if (filter === "attention") {
-    return `${count} device${count === 1 ? "" : "s"} needing attention`;
-  }
-
-  if (filter === "all") {
-    return `${count} enrolled device${count === 1 ? "" : "s"}`;
-  }
-
-  return `${count} active device${count === 1 ? "" : "s"}`;
-}
-
-function pushRosterEmptyLabel(filter) {
-  if (filter === "attention") {
-    return "No devices currently need attention.";
-  }
-
-  if (filter === "all") {
-    return "No devices enrolled yet.";
-  }
-
-  return "No devices are Active yet.";
-}
-
-function hasLegacyWeatherSnapshot(weather) {
-  return Boolean(
-    weather &&
-      !weather.location &&
-      !weather.resolvedName &&
-      (weather.condition !== "Weather not configured" ||
-        weather.temperature !== "--" ||
-        weather.impact !== "Enter a location in HR to fetch live weather.")
-  );
-}
-
-function weatherDisplayName(weather) {
-  if (weather.resolvedName || weather.location) {
-    return weather.resolvedName || weather.location;
-  }
-
-  return hasLegacyWeatherSnapshot(weather) ? "Stored weather snapshot" : "Weather not configured";
-}
-
-function weatherHeadline(weather) {
-  const condition = String(weather?.condition || "Weather not configured").trim();
-  const temperature = String(weather?.temperature || "").trim();
-  if (!temperature || temperature === "--") return condition;
-  return `${condition} - ${temperature}`;
 }
 
 function isExpired(post) {
@@ -2804,88 +2646,6 @@ function renderEmployeeStatusStrip(notices, setup) {
   `;
 }
 
-function renderEmployeeSharePanel() {
-  const employeeLink = `${window.location.origin}${routePath("employee")}`;
-
-  return `
-    <section class="tool-panel panel-card access-card">
-      <div class="panel-title">
-        <div>
-          <p class="eyebrow">${icon("users")} Employee access</p>
-          <h2>Scan to open the portal</h2>
-          <p>Employees can scan this code to open the portal on their phone and sign in.</p>
-        </div>
-      </div>
-      <div class="qr-panel compact">
-        <div class="qr-box">
-          <img src="/employee-qr.svg" alt="QR code for employee portal">
-        </div>
-        <a class="employee-link" href="${escapeHtml(routePath("employee"))}">${escapeHtml(employeeLink)}</a>
-      </div>
-    </section>
-  `;
-}
-
-function renderAdminPushPanel() {
-  const subscriptions = Number(state.pushStatus.subscriptions || 0);
-  const activeSubscriptions = Number(state.pushStatus.authorizedSubscriptions ?? subscriptions);
-  const inactiveSubscriptions = Number(state.pushStatus.inactiveSubscriptions ?? Math.max(0, subscriptions - activeSubscriptions));
-  const loaded = Boolean(state.pushStatus.loaded);
-  const rosterFilter = activePushRosterFilter === "attention" || activePushRosterFilter === "all" ? activePushRosterFilter : "active";
-  const rosterDevices = filterPushRosterDevices(rosterFilter);
-  const readyCopy = state.pushStatus.supported
-    ? "Push delivery is ready."
-    : "Push delivery is unavailable on this server.";
-  const followUpCopy = !loaded
-    ? "Checking which devices can receive urgent alerts."
-    : inactiveSubscriptions > 0
-      ? `${inactiveSubscriptions} enrolled device${inactiveSubscriptions === 1 ? "" : "s"} still need refresh before HR tests can reach them.`
-      : activeSubscriptions > 0
-        ? "All enrolled devices are currently Active for HR test alerts."
-        : "No devices are Active yet. Employees still need to finish enrollment on their phone or browser.";
-
-  return `
-    <section class="tool-panel push-panel panel-card">
-      <div class="panel-title">
-        <div>
-          <p class="eyebrow">${icon("bell")} Alert delivery</p>
-          <h2>${escapeHtml(loaded ? `${activeSubscriptions} active device${activeSubscriptions === 1 ? "" : "s"}` : "Loading alert status")}</h2>
-          <p>${escapeHtml(readyCopy)} Test alerts only reach devices marked Active.</p>
-        </div>
-      </div>
-      <div class="push-metrics">
-        <button class="push-metric push-metric-button ${rosterFilter === "active" ? "selected" : ""}" type="button" data-push-roster-filter="active" aria-pressed="${rosterFilter === "active" ? "true" : "false"}">
-          <strong>${escapeHtml(loaded ? String(activeSubscriptions) : "…")}</strong>
-          <span>Active devices</span>
-        </button>
-        <button class="push-metric push-metric-button ${rosterFilter === "attention" ? "selected" : ""}" type="button" data-push-roster-filter="attention" aria-pressed="${rosterFilter === "attention" ? "true" : "false"}">
-          <strong>${escapeHtml(loaded ? String(inactiveSubscriptions) : "…")}</strong>
-          <span>Need attention</span>
-        </button>
-        <button class="push-metric push-metric-button ${rosterFilter === "all" ? "selected" : ""}" type="button" data-push-roster-filter="all" aria-pressed="${rosterFilter === "all" ? "true" : "false"}">
-          <strong>${escapeHtml(loaded ? String(subscriptions) : "…")}</strong>
-          <span>Total devices</span>
-        </button>
-      </div>
-      <p class="push-health-note ${inactiveSubscriptions > 0 ? "warning" : "success"}">${escapeHtml(followUpCopy)}</p>
-      ${renderAdminPushActions()}
-      <section class="push-roster-panel">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("users")} Device roster</p>
-            <h2>${escapeHtml(loaded ? pushRosterTitle(rosterFilter, rosterDevices.length) : "Loading enrolled devices")}</h2>
-            <p>Click the delivery totals above to switch between Active devices, cleanup work, and the full roster.</p>
-          </div>
-          <span class="status-chip muted">${icon("filter")} ${escapeHtml(rosterFilter === "attention" ? "Need attention" : rosterFilter === "all" ? "All devices" : "Active only")}</span>
-        </div>
-        ${loaded
-          ? renderNotificationDeviceRoster(rosterDevices, pushRosterEmptyLabel(rosterFilter))
-          : '<div class="empty-state compact">Loading enrolled devices...</div>'}
-      </section>
-    </section>
-  `;
-}
-
 function renderAccessPinPanel() {
   const snapshot = buildWebmasterSnapshot();
   const notifications = snapshot.notifications || {};
@@ -2945,7 +2705,6 @@ function renderEmployeeAuthGate() {
         </label>
         <div class="auth-form-actions">
           <button class="button" type="submit">Sign In</button>
-          <button class="ghost-button" type="button" data-route="launcher">Launcher</button>
         </div>
       </form>
     `
@@ -3678,9 +3437,9 @@ function renderEmployee() {
 
   return `
     <main class="page-shell employee-shell">
-        <section class="employee-brand-banner" aria-label="Palziv brand banner">
+        <section class="employee-brand-banner" aria-label="${escapeHtml(APP_TITLE)} brand banner">
           <div class="employee-brand-banner-head">
-            <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
+            <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             <div class="employee-brand-banner-copy">
               <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
             </div>
@@ -3717,18 +3476,11 @@ function renderLauncherCard(route, title) {
   `;
 }
 
-function renderLauncherModule(title, actions = []) {
+function renderLauncherAdminCard(route, title) {
   return `
-    <section class="launch-card launch-card-module" data-route="webmaster" aria-label="${escapeHtml(title)}">
+    <button class="launch-card" type="button" data-admin-entry-route="${escapeHtml(route)}">
       <strong class="launch-card-label">${escapeHtml(title)}</strong>
-      <div class="launch-card-module-links">
-        ${actions.map(({ route, title: actionTitle }) => `
-          <a class="launch-card-module-link" href="${escapeHtml(routePath(route))}" data-route="${escapeHtml(route)}">
-            ${escapeHtml(actionTitle)}
-          </a>
-        `).join("")}
-      </div>
-    </section>
+    </button>
   `;
 }
 
@@ -3737,15 +3489,23 @@ function renderLauncher() {
     <main class="page-shell launcher-shell">
       ${renderAppUpdateBanner()}
         <section class="launcher-stage">
-          <div class="launcher-brand" aria-label="Palziv">
+          <div class="launcher-brand" aria-label="${escapeHtml(APP_TITLE)}">
             <div class="launcher-brand-disc">
-              <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
+              <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             </div>
           </div>
 
         <div class="launcher-panel">
-          <div class="launcher-grid">
+          <div class="panel-title panel-title-wide launcher-title-block">
+            <div>
+              <h2>${escapeHtml(APP_DISPLAY_TITLE)}</h2>
+            </div>
+          </div>
+          <div class="launcher-grid launcher-grid-logins">
             ${renderLauncherCard("employee", "Employee Login")}
+            ${renderLauncherAdminCard("hr", "HR Login")}
+            ${renderLauncherAdminCard("webmaster", "Systems and Analytics Login")}
+            ${renderLauncherAdminCard("it", "IT Login")}
           </div>
         </div>
       </section>
@@ -3767,9 +3527,9 @@ function renderAdminGateway() {
     <main class="page-shell launcher-shell">
       ${renderAppUpdateBanner()}
       <section class="launcher-stage">
-        <div class="launcher-brand" aria-label="Palziv">
+        <div class="launcher-brand" aria-label="${escapeHtml(APP_TITLE)}">
           <div class="launcher-brand-disc">
-            <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="Palziv" loading="eager" decoding="async">
+            <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
           </div>
         </div>
 
@@ -3777,17 +3537,17 @@ function renderAdminGateway() {
           <div class="panel-title panel-title-wide">
             <div>
               <p class="eyebrow">${icon("lock")} Admin Gateway</p>
-              <h2>Privileged access</h2>
-              <p>Choose the admin console you need. Direct admin URLs stay hidden from the public launcher.</p>
+              <h2>Privileged Access</h2>
+              <p>Welcome To The Admin Gateway. You Are In The Right Place For HR, Systems, and IT Access.</p>
             </div>
           </div>
           <div class="launcher-grid">
-            ${renderAdminGatewayCard("hr", "HR Login", "People operations and employee communications")}
-            ${renderAdminGatewayCard("webmaster", "Systems Login", "Operational monitoring and system controls")}
-            ${renderAdminGatewayCard("it", "IT Login", "Governance, audit, and emergency access")}
+            ${renderAdminGatewayCard("hr", "HR Login", "People Operations and Employee Communications")}
+            ${renderAdminGatewayCard("webmaster", "Systems and Analytics Login", "Operational Monitoring, Analytics, and System Controls")}
+            ${renderAdminGatewayCard("it", "IT Login", "Governance, Audit, and Emergency Access")}
           </div>
           <div class="admin-auth-footer-actions">
-            <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
+            <button class="auth-inline-action" type="button" data-route="launcher">Back To Launcher</button>
           </div>
         </div>
       </section>
@@ -3865,78 +3625,6 @@ function renderAdminPublishPanel() {
           </div>
         </form>
       </section>
-    </section>
-  `;
-}
-
-function renderAdminWeatherPanel(weather, weatherLocation) {
-  return `
-    <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("cloud")} Weather</p>
-          <h2>Live site weather</h2>
-          <p>Support data stays on its own tab so publishing stays focused.</p>
-        </div>
-      </div>
-      <section class="tool-panel panel-card">
-        <form data-weather-form>
-          <div class="form-grid">
-            <label class="field full">
-              <span>Location</span>
-              <input name="location" maxlength="120" value="${escapeHtml(weather.location || weather.resolvedName || "")}" required placeholder="City, state, ZIP, or address">
-            </label>
-          </div>
-          <div class="form-actions">
-            <button class="button secondary" type="submit">${icon("refresh")} Refresh weather</button>
-          </div>
-        </form>
-        <div class="weather-preview" aria-label="Live weather preview">
-          <div class="weather-preview-head">
-            <div>
-              <p class="eyebrow">${icon("cloud")} Live result</p>
-              <h3>${escapeHtml(weatherLocation)}</h3>
-            </div>
-            <span class="weather-level ${escapeHtml(String(weather.level || "Clear").toLowerCase())}">${escapeHtml(weather.level || "Clear")}</span>
-          </div>
-          <div class="weather-preview-grid">
-            <div class="weather-preview-item">
-              <span>Condition</span>
-              <strong>${escapeHtml(weather.condition)}</strong>
-            </div>
-            <div class="weather-preview-item">
-              <span>Temperature</span>
-              <strong>${escapeHtml(weather.temperature)}</strong>
-            </div>
-            <div class="weather-preview-item full">
-              <span>Impact</span>
-              <strong>${escapeHtml(weather.impact)}</strong>
-            </div>
-            <div class="weather-preview-item">
-              <span>Updated</span>
-              <strong>${escapeHtml(formatWeatherUpdatedAt(weather.updatedAt))}</strong>
-            </div>
-          </div>
-        </div>
-      </section>
-    </section>
-  `;
-}
-
-function renderAdminAlertsPanel() {
-  return `
-    <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("bell")} Alert delivery</p>
-          <h2>Delivery status</h2>
-          <p>HR monitors delivery here. Employees enroll from the employee portal, and Systems runs direct push diagnostics.</p>
-        </div>
-      </div>
-      ${renderAdminPushPanel()}
-      <div class="panel-card">
-        <p class="panel-copy">Important and urgent updates notify employees automatically through web push. Use this roster to see which employee devices are Active and which need cleanup.</p>
-      </div>
     </section>
   `;
 }

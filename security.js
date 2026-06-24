@@ -22,7 +22,10 @@ const ADMIN_MFA_GRACE_MS = Math.max(
     ? Number(process.env.ADMIN_MFA_GRACE_DAYS) * 24 * 60 * 60 * 1000
     : 14 * 24 * 60 * 60 * 1000
 );
-const MFA_ISSUER = cleanText(process.env.SITE_NAME, 80) || "Palziv";
+const MFA_ISSUER =
+  cleanText(process.env.SITE_SHORT_NAME, 80) ||
+  cleanText(process.env.SITE_NAME, 80) ||
+  "Alert Center";
 const TOTP_PERIOD_SECONDS = 30;
 const TOTP_DIGITS = 6;
 const TOTP_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -972,34 +975,6 @@ function findAdminUserOrThrow(users = [], adminUserId = "") {
   return adminUser;
 }
 
-function upsertRoleAdminUser(data, role, username, passwordSalt, passwordHash, changedAt, lastLoginAt = "") {
-  const existingRoleUser = findConfiguredRoleUser(data.adminUsers, role)
-    || data.adminUsers.find((user) => adminUserHasRole(user, role))
-    || null;
-  const sameUsernameUser = findAdminUsersByUsername(data.adminUsers, username)[0] || null;
-  const baseUser = existingRoleUser || sameUsernameUser;
-  const nextUser = normalizeAdminUser(clearAdminInviteMetadata({
-    ...baseUser,
-    username: baseUser?.username || username,
-    passwordSalt,
-    passwordHash,
-    roles: mergeAdminRoles(baseUser?.roles, [role]),
-    active: true,
-    lastLoginAt: lastLoginAt || baseUser?.lastLoginAt || "",
-    createdAt: baseUser?.createdAt || changedAt,
-    updatedAt: changedAt,
-    disabledAt: ""
-  }));
-
-  if (baseUser) {
-    data.adminUsers = replaceAdminUser(data.adminUsers, nextUser);
-  } else {
-    data.adminUsers.unshift(nextUser);
-  }
-
-  return nextUser;
-}
-
 function upsertEmergencyHrRecoveryAccount(data, passwordSalt, passwordHash, changedAt, lastLoginAt = "") {
   const existingRecoveryUser = findAdminUsersByUsername(data.adminUsers, EMERGENCY_HR_USERNAME)[0]
     || data.adminUsers.find((user) => isAdminRecoveryOnly(user) && adminUserHasRole(user, "hr"))
@@ -1538,25 +1513,6 @@ function activeCookieValues(req = {}, names = []) {
   }
 
   return [...new Set(values)];
-}
-
-function findValidAdminSession(data, sessionId) {
-  const session = findActiveAdminSession(data.adminSessions, sessionId);
-
-  if (!session) {
-    return null;
-  }
-
-  const adminUser = findAdminUserById(data.adminUsers, session.adminUserId);
-
-  if (!adminUser || adminUser.active === false || !hasConfiguredAdminUser(adminUser)) {
-    return null;
-  }
-
-  return {
-    session,
-    adminUser
-  };
 }
 
 function requireHrManagerAccess(data, req = {}) {
