@@ -18,7 +18,6 @@ This manual is intended for non-technical operators, administrators, and support
 ### 2.1 Routes
 
 - Launcher: `https://<your-host>/palzivalerts` (internal shared entry)
-- Admin gateway: `https://<your-host>/palzivalerts/admin`
 - Employee portal: `https://<your-host>/palzivalerts/employee` (share this URL with employees)
 - HR portal: `https://<your-host>/palzivalerts/hr`
 - Systems portal: `https://<your-host>/palzivalerts/webmaster`
@@ -26,10 +25,9 @@ This manual is intended for non-technical operators, administrators, and support
 
 > Notes:
 > - Employees should use `/palzivalerts/employee` directly rather than the internal launcher.
-> - Signed-out admin access begins at `/palzivalerts/admin`.
-> - Direct admin routes return to the launcher until an HR, Systems, or IT session is active.
+> - Signed-out HR, Systems, and IT access can begin directly on their own portal routes.
 > - Employee installs and shortcuts should open the employee portal. Admin consoles are intentionally omitted from shortcuts.
-> - Legacy routes (`/employee`, `/hr`, `/webmaster`, `/admin`) redirect to the branded `/palzivalerts` paths.
+> - Legacy routes (`/employee`, `/hr`, `/webmaster`, `/it`, `/admin`) redirect to the branded `/palzivalerts` paths.
 > - Public pages are only accessible after authentication.
 
 ### 2.2 User Roles
@@ -77,10 +75,9 @@ This manual is intended for non-technical operators, administrators, and support
 
 ### 4.1 Sign In
 
-1. Open the admin gateway URL.
-2. Select **HR Login**.
-3. Sign in with your HR admin credentials.
-4. Confirm **HR Control Center** opens before you begin publishing or account work.
+1. Open the HR portal URL.
+2. Sign in with your HR admin credentials.
+3. Confirm **HR Control Center** opens before you begin publishing or account work.
 
 ### 4.2 Publish an Update
 
@@ -107,10 +104,9 @@ This manual is intended for non-technical operators, administrators, and support
 
 ### 5.1 Sign In
 
-1. Open the admin gateway URL.
-2. Select **Systems and Analytics Login**.
-3. Log in with Systems credentials.
-4. Confirm **Systems Command Center** opens and the summary cards load.
+1. Open the Systems portal URL.
+2. Log in with Systems credentials.
+3. Confirm **Systems Command Center** opens and the summary cards load.
 
 ### 5.2 Health Monitoring
 
@@ -133,10 +129,9 @@ Run or verify:
 
 ### 6.1 Sign In
 
-1. Open the admin gateway URL.
-2. Select **IT Login**.
-3. Sign in with your IT credentials.
-4. Confirm the IT control center opens before making governance changes.
+1. Open the IT portal URL.
+2. Sign in with your IT credentials.
+3. Confirm the IT control center opens before making governance changes.
 
 - Manage governance:
   - Named admin account control and recovery.
@@ -253,8 +248,8 @@ Run or verify:
 
 ### 11.2 Expected Standard
 
-- Confirm healthy access for the employee route first. If internal staff are affected too, then check the launcher and admin gateway.
-- Confirm signed-out admin access starts at the admin gateway, then verify HR, Systems, or IT login from that path.
+- Confirm healthy access for the employee route first. If internal staff are affected too, then check the launcher and the direct HR, Systems, or IT routes.
+- Confirm signed-out admin access starts on the intended HR, Systems, or IT route, then verify login from that path.
 - Confirm successful login and API health before deeper diagnosis.
 
 ---

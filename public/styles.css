@@ -4207,3 +4207,1048 @@ body[data-route="admin"] {
   }
 }
 
+/* iOS visual theme override */
+:root {
+  color-scheme: light dark;
+  --bg: #f2f2f7;
+  --bg-alt: #e5e5ea;
+  --surface: #ffffff;
+  --surface-strong: #ffffff;
+  --ink: #000000;
+  --muted: rgba(60, 60, 67, 0.72);
+  --line: rgba(60, 60, 67, 0.18);
+  --line-strong: rgba(60, 60, 67, 0.3);
+  --steel: #007aff;
+  --steel-soft: rgba(0, 122, 255, 0.12);
+  --signal: #ff9f0a;
+  --signal-soft: rgba(255, 159, 10, 0.14);
+  --safety: #ff9f0a;
+  --safety-soft: rgba(255, 159, 10, 0.14);
+  --cool: #007aff;
+  --cool-soft: rgba(0, 122, 255, 0.1);
+  --ok: #34c759;
+  --ok-soft: rgba(52, 199, 89, 0.14);
+  --danger: #ff3b30;
+  --danger-soft: rgba(255, 59, 48, 0.14);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --notice-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --radius-control: 14px;
+  --radius-card: 20px;
+  --radius-panel: 20px;
+  --radius-soft: 16px;
+  --launcher-surface-bg: rgba(255, 255, 255, 0.82);
+  --launcher-surface-border: rgba(60, 60, 67, 0.14);
+  --launcher-surface-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --bg-alt: #111113;
+    --surface: #1c1c1e;
+    --surface-strong: #2c2c2e;
+    --ink: #ffffff;
+    --muted: rgba(235, 235, 245, 0.6);
+    --line: rgba(84, 84, 88, 0.65);
+    --line-strong: rgba(84, 84, 88, 0.9);
+    --steel: #0a84ff;
+    --steel-soft: rgba(10, 132, 255, 0.2);
+    --signal: #ff9f0a;
+    --signal-soft: rgba(255, 159, 10, 0.18);
+    --safety: #ff9f0a;
+    --safety-soft: rgba(255, 159, 10, 0.18);
+    --cool: #0a84ff;
+    --cool-soft: rgba(10, 132, 255, 0.16);
+    --ok: #30d158;
+    --ok-soft: rgba(48, 209, 88, 0.16);
+    --danger: #ff453a;
+    --danger-soft: rgba(255, 69, 58, 0.18);
+    --shadow: none;
+    --notice-shadow: none;
+    --launcher-surface-bg: rgba(28, 28, 30, 0.78);
+    --launcher-surface-border: rgba(84, 84, 88, 0.55);
+    --launcher-surface-shadow: none;
+  }
+}
+
+html,
+body {
+  background: var(--bg) !important;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+  color: var(--ink);
+  font-size: 17px;
+  letter-spacing: -0.4px;
+  line-height: 1.5;
+}
+
+h1,
+.admin-auth-brand-copy h1,
+.launcher-title-block h2 {
+  letter-spacing: -0.4px;
+}
+
+.admin-auth-brand-copy h1,
+.launcher-title-block h2 {
+  font-size: clamp(2rem, 3vw, 2.125rem);
+  font-weight: 800;
+  line-height: 1.06;
+}
+
+.panel-title h2,
+.settings-hero-copy h2,
+.employee-brand-banner-kicker {
+  font-size: clamp(1.5rem, 2.4vw, 1.9rem);
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  line-height: 1.08;
+}
+
+.panel-title h3,
+.notice-card h2,
+.notice-card h3,
+.feed-head-copy strong {
+  font-weight: 700;
+  letter-spacing: -0.25px;
+}
+
+.eyebrow,
+.brand-lockup p,
+.panel-title p,
+.field > span,
+.field.inline span,
+.notice-date,
+.notice-footer,
+.employee-status-strip span,
+.admin-table-secondary,
+.settings-chip span,
+.settings-context-item span {
+  color: var(--muted);
+}
+
+.button,
+.ghost-button,
+.icon-button,
+.tab-button,
+.field input,
+.field select,
+.field textarea,
+.panel-card,
+.notice-card,
+.feed-item,
+.launch-card,
+.page-head,
+.tab-bar,
+.employee-brand-banner,
+.employee-subscription-banner,
+.employee-setup-panel,
+.admin-auth-card,
+.auth-gate-card,
+.stat-card,
+.settings-chip,
+.status-panel,
+.tool-panel,
+.empty-state,
+.device-row,
+.acknowledgement-detail-panel {
+  border-radius: var(--radius-card);
+}
+
+.page-shell {
+  padding: max(18px, env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+.page-head,
+.tab-bar,
+.topbar {
+  background: rgba(255, 255, 255, 0.75);
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-shadow: none;
+  backdrop-filter: saturate(180%) blur(20px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .page-head,
+  .tab-bar,
+  .topbar {
+    background: rgba(28, 28, 30, 0.75);
+    border-color: rgba(84, 84, 88, 0.65);
+  }
+}
+
+.panel-card,
+.status-panel,
+.tool-panel,
+.empty-state,
+.notice-card,
+.feed-item,
+.launch-card,
+.employee-brand-banner,
+.employee-subscription-banner,
+.employee-setup-panel,
+.admin-auth-card,
+.auth-gate-card,
+.stat-card,
+.settings-chip,
+.device-row,
+.acknowledgement-detail-panel {
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.notice-card,
+.feed-item {
+  background: var(--surface);
+  border-left: 0.5px solid var(--line);
+}
+
+.notice-card.priority-urgent,
+.feed-item.priority-urgent {
+  border-color: rgba(255, 69, 58, 0.38);
+}
+
+.notice-card.priority-important,
+.feed-item.priority-important {
+  border-color: rgba(255, 159, 10, 0.38);
+}
+
+.launcher-panel,
+.launcher-brand,
+.auth-shell,
+.admin-auth-shell {
+  justify-items: center;
+}
+
+.launcher-panel {
+  gap: 18px;
+}
+
+.launcher-grid {
+  align-items: stretch;
+}
+
+.launch-card {
+  min-height: 88px;
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.launch-card:hover,
+.launch-card:focus-visible {
+  transform: translateY(-1px);
+  border-color: var(--steel);
+  box-shadow: var(--shadow);
+}
+
+.button {
+  background: var(--steel);
+  color: #ffffff;
+  border: 0;
+  box-shadow: none;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
+.button.secondary,
+.button.danger {
+  background: var(--steel);
+}
+
+.ghost-button,
+.icon-button {
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  box-shadow: none;
+  color: var(--steel);
+  font-weight: 600;
+}
+
+.tab-button {
+  min-height: 50px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 0.5px solid var(--line);
+  box-shadow: none;
+}
+
+.tab-button:hover {
+  border-color: var(--steel);
+  box-shadow: none;
+}
+
+.tab-button.active {
+  background: var(--steel);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.tab-button.active,
+.tab-button.active .icon,
+.tab-button.active span {
+  color: #ffffff;
+}
+
+.field input,
+.field select,
+.field textarea {
+  min-height: 52px;
+  background: var(--surface-strong);
+  border: 0.5px solid var(--line);
+  box-shadow: none;
+  color: var(--ink);
+}
+
+.field textarea {
+  min-height: 128px;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--steel);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus {
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22);
+  }
+}
+
+.field input::placeholder,
+.field textarea::placeholder,
+.field select::placeholder,
+.button,
+.ghost-button,
+.icon-button,
+.tab-button span,
+.eyebrow,
+.sync-pill,
+.status-chip,
+.priority-pill,
+.notice-type,
+.admin-table th,
+.admin-table-chip,
+.field > span,
+.panel-title h2,
+.panel-title h3,
+.panel-stack h3,
+.stat-card span,
+.stat-card small,
+.kv-item span,
+.count-pill span,
+.request-status,
+.auth-frame-eyebrow,
+.employee-brand-banner-kicker,
+.employee-status-strip span,
+.employee-quiet-settings-summary,
+.device-setup-step-head strong,
+.feed-type,
+.feed-head-copy strong,
+.notice-card h2,
+.notice-card h3,
+.admin-table-primary {
+  text-transform: none;
+}
+
+.sync-pill,
+.priority-pill,
+.notice-type,
+.status-chip,
+.admin-table-chip,
+.employee-status-strip span {
+  border-radius: 999px;
+  border: 0.5px solid transparent;
+  letter-spacing: -0.1px;
+}
+
+.sync-pill,
+.notice-type {
+  background: var(--steel-soft);
+  color: var(--steel);
+}
+
+.priority-pill {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.priority-pill.urgent {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.priority-pill.important {
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+
+.employee-status-strip,
+.hero-strip,
+.panel-metrics {
+  gap: 10px;
+}
+
+.stat-card {
+  min-height: 86px;
+  padding: 14px 16px;
+}
+
+.stat-card strong {
+  font-size: 1.3rem;
+}
+
+.admin-table {
+  background: transparent;
+}
+
+.admin-table th,
+.admin-table td {
+  border-bottom: 0.5px solid var(--line);
+  background: transparent;
+}
+
+.admin-table tbody tr:hover,
+.admin-table tbody tr:nth-child(even) {
+  background: var(--steel-soft);
+}
+
+.device-row,
+.acknowledgement-detail-item,
+.request-list > *,
+.count-list > * {
+  border-bottom: 0.5px solid var(--line);
+}
+
+.device-row:last-child,
+.acknowledgement-detail-item:last-child {
+  border-bottom: 0;
+}
+
+.employee-brand-banner,
+.launcher-panel,
+.auth-gate-card,
+.admin-auth-card {
+  background: var(--surface);
+}
+
+.brand-lockup-logo,
+.launcher-brand-logo,
+.employee-brand-banner-logo,
+.admin-auth-brand-logo {
+  filter: none;
+}
+
+/* Accessibility contrast tuning */
+:root {
+  --muted: rgba(28, 28, 30, 0.82);
+  --line: rgba(60, 60, 67, 0.28);
+  --line-strong: rgba(60, 60, 67, 0.44);
+  --launcher-surface-border: rgba(60, 60, 67, 0.24);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #161618;
+    --surface-strong: #2c2c2e;
+    --muted: rgba(235, 235, 245, 0.82);
+    --line: rgba(120, 120, 128, 0.72);
+    --line-strong: rgba(120, 120, 128, 0.9);
+    --launcher-surface-border: rgba(120, 120, 128, 0.68);
+  }
+}
+
+.page-head,
+.tab-bar,
+.topbar {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: var(--line-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+  .page-head,
+  .tab-bar,
+  .topbar {
+    background: rgba(28, 28, 30, 0.94);
+    border-color: var(--line-strong);
+  }
+}
+
+.button {
+  min-height: 52px;
+  padding: 0 16px;
+  font-size: 0.96rem;
+  font-weight: 700;
+}
+
+.ghost-button,
+.icon-button {
+  min-height: 52px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.ghost-button:hover,
+.ghost-button:focus-visible,
+.icon-button:hover,
+.icon-button:focus-visible {
+  border-color: var(--steel);
+  background: var(--steel-soft);
+}
+
+.tab-button {
+  min-height: 52px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+.launch-card {
+  min-height: 96px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+}
+
+.launch-card-label {
+  color: var(--ink);
+  font-size: 1.08rem;
+  line-height: 1.24;
+  letter-spacing: 0.01em;
+}
+
+.launch-card[data-route="employee"] {
+  background: var(--steel) !important;
+  border-color: var(--steel) !important;
+}
+
+.launch-card[data-route="employee"] .launch-card-label {
+  color: #ffffff;
+}
+
+.launch-card[data-route="hr"],
+.launch-card[data-route="webmaster"],
+.launch-card[data-route="it"] {
+  background: var(--surface-strong) !important;
+  border-color: var(--line-strong) !important;
+}
+
+.launcher-panel,
+.panel-card,
+.notice-card,
+.feed-item,
+.admin-auth-card,
+.auth-gate-card,
+.employee-brand-banner,
+.employee-subscription-banner,
+.employee-setup-panel,
+.stat-card,
+.empty-state {
+  border-color: var(--line-strong);
+}
+
+.brand-lockup p,
+.panel-title p,
+.notice-date,
+.notice-footer,
+.employee-status-strip span,
+.admin-table-secondary,
+.settings-chip span,
+.settings-context-item span,
+.field.inline span {
+  color: var(--muted);
+}
+
+.employee-status-strip span {
+  min-height: 36px;
+  padding: 0 10px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.sync-pill,
+.notice-type,
+.admin-table-chip,
+.status-chip {
+  border-color: transparent;
+}
+
+.priority-pill,
+.sync-pill,
+.notice-type,
+.admin-table-chip,
+.status-chip,
+.employee-status-strip span {
+  font-size: 0.82rem;
+}
+
+/* Readability tuning for launcher and admin shells */
+.launcher-title-block h2,
+.launcher-panel .panel-title h2,
+.launch-card-label,
+.page-head .brand-lockup p,
+.page-actions .button,
+.page-actions .ghost-button,
+.tab-button span,
+.panel-title h2,
+.panel-title h3,
+.admin-auth-brand-copy h1 {
+  text-transform: none !important;
+}
+
+.admin-auth-brand-copy h1,
+.launcher-title-block h2 {
+  font-size: clamp(2.15rem, 3.4vw, 2.35rem);
+  line-height: 1.08;
+}
+
+.panel-title h2,
+.settings-hero-copy h2,
+.employee-brand-banner-kicker {
+  font-size: clamp(1.62rem, 2.6vw, 2rem);
+  line-height: 1.12;
+}
+
+.panel-title h3,
+.notice-card h2,
+.notice-card h3,
+.feed-head-copy strong {
+  font-size: 1.08rem;
+  line-height: 1.3;
+}
+
+.button,
+.ghost-button,
+.icon-button,
+.tab-button {
+  min-height: 54px;
+}
+
+.button,
+.ghost-button,
+.icon-button,
+.tab-button span,
+.launch-card-label {
+  font-size: 1rem;
+  letter-spacing: 0;
+}
+
+.launch-card {
+  min-height: 102px;
+}
+
+.eyebrow,
+.brand-lockup p,
+.panel-title p,
+.admin-table-secondary,
+.field > span,
+.field.inline span,
+.settings-chip span,
+.settings-context-item span {
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.hr-shell .eyebrow,
+.webmaster-shell .eyebrow,
+.it-shell .eyebrow,
+.hr-shell .brand-lockup p,
+.webmaster-shell .brand-lockup p,
+.it-shell .brand-lockup p,
+.hr-shell .panel-title p,
+.webmaster-shell .panel-title p,
+.it-shell .panel-title p,
+.hr-shell .admin-table-secondary,
+.webmaster-shell .admin-table-secondary,
+.it-shell .admin-table-secondary,
+.hr-shell .field > span,
+.webmaster-shell .field > span,
+.it-shell .field > span,
+.hr-shell .field.inline span,
+.webmaster-shell .field.inline span,
+.it-shell .field.inline span,
+.hr-shell .settings-chip span,
+.webmaster-shell .settings-chip span,
+.it-shell .settings-chip span,
+.hr-shell .settings-context-item span,
+.webmaster-shell .settings-context-item span,
+.it-shell .settings-context-item span {
+  color: rgba(28, 28, 30, 0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+  .hr-shell .eyebrow,
+  .webmaster-shell .eyebrow,
+  .it-shell .eyebrow,
+  .hr-shell .brand-lockup p,
+  .webmaster-shell .brand-lockup p,
+  .it-shell .brand-lockup p,
+  .hr-shell .panel-title p,
+  .webmaster-shell .panel-title p,
+  .it-shell .panel-title p,
+  .hr-shell .admin-table-secondary,
+  .webmaster-shell .admin-table-secondary,
+  .it-shell .admin-table-secondary,
+  .hr-shell .field > span,
+  .webmaster-shell .field > span,
+  .it-shell .field > span,
+  .hr-shell .field.inline span,
+  .webmaster-shell .field.inline span,
+  .it-shell .field.inline span,
+  .hr-shell .settings-chip span,
+  .webmaster-shell .settings-chip span,
+  .it-shell .settings-chip span,
+  .hr-shell .settings-context-item span,
+  .webmaster-shell .settings-context-item span,
+  .it-shell .settings-context-item span {
+    color: rgba(235, 235, 245, 0.9);
+  }
+}
+
+/* Auth screen proportion tuning */
+.launcher-brand-logo {
+  width: 122px;
+  height: 122px;
+}
+
+.admin-auth-shell {
+  padding: max(28px, env(safe-area-inset-top)) 18px calc(24px + env(safe-area-inset-bottom));
+}
+
+.admin-auth-card {
+  width: min(410px, calc(100% - 8px));
+  padding: 24px 20px;
+  gap: 18px;
+}
+
+.admin-auth-header,
+.admin-auth-body,
+.admin-auth-form,
+.admin-auth-primary-actions,
+.admin-auth-footer {
+  width: 100%;
+}
+
+.admin-auth-brand {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.admin-auth-brand-disc {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+}
+
+.admin-auth-brand-logo {
+  width: 56px;
+  height: 56px;
+}
+
+.admin-auth-brand-copy {
+  justify-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.admin-auth-brand-copy h1 {
+  font-size: clamp(1.78rem, 4.8vw, 2rem);
+}
+
+.admin-auth-brand-copy p:not(.eyebrow),
+.admin-auth-brand-copy .eyebrow {
+  text-align: center;
+}
+
+.admin-auth-card .field input,
+.admin-auth-card .field select,
+.admin-auth-card .field textarea,
+.admin-auth-card .button {
+  width: 100%;
+}
+
+.admin-auth-footer {
+  justify-content: center;
+}
+
+.admin-auth-footer-actions {
+  width: 100%;
+  justify-content: center;
+  gap: 12px;
+}
+
+.admin-auth-footer .auth-inline-action {
+  justify-self: center;
+}
+
+@media (max-width: 720px) {
+  .launcher-brand-logo {
+    width: 110px;
+    height: 110px;
+  }
+
+  .admin-auth-card {
+    width: min(390px, 100%);
+    padding: 22px 18px;
+  }
+
+  .admin-auth-brand-disc {
+    width: 78px;
+    height: 78px;
+  }
+
+  .admin-auth-brand-logo {
+    width: 50px;
+    height: 50px;
+  }
+}
+
+/* Auth surface alignment */
+.auth-shell {
+  padding: max(28px, env(safe-area-inset-top)) 18px calc(24px + env(safe-area-inset-bottom));
+}
+
+.auth-gate-card {
+  width: min(410px, calc(100% - 8px));
+  padding: 24px 20px;
+  gap: 18px;
+}
+
+.auth-gate-card .brand,
+.auth-frame-title,
+.auth-frame-title > div {
+  width: 100%;
+  justify-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.auth-gate-card .brand-lockup {
+  gap: 12px;
+}
+
+.auth-gate-card .brand-logo-disc,
+.admin-auth-brand-disc {
+  width: 124px;
+  height: 124px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.auth-gate-card .brand-lockup-logo,
+.admin-auth-brand-logo {
+  width: 90px;
+  height: 90px;
+  object-fit: contain;
+  filter: drop-shadow(0 16px 28px rgba(15, 23, 42, 0.16));
+}
+
+.auth-frame-title h2,
+.admin-auth-brand-copy h1 {
+  font-size: clamp(1.86rem, 4.8vw, 2.08rem);
+  line-height: 1.08;
+}
+
+.auth-frame-eyebrow,
+.admin-auth-brand-copy .eyebrow {
+  font-size: 0.96rem;
+  letter-spacing: 0.01em;
+}
+
+.auth-gate-card .auth-form,
+.auth-gate-card .auth-frame-content,
+.auth-gate-card .field,
+.auth-gate-card .field input,
+.auth-gate-card .field select,
+.auth-gate-card .field textarea,
+.auth-gate-card .button {
+  width: 100%;
+}
+
+.auth-form-actions {
+  justify-content: center;
+}
+
+.auth-gate-card .auth-inline-action,
+.admin-auth-footer .auth-inline-action {
+  justify-self: center;
+}
+
+.auth-gate-card .auth-inline-meta,
+.admin-auth-footer-note {
+  text-align: center;
+}
+
+.admin-auth-brand-copy,
+.admin-auth-brand,
+.admin-auth-header {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .auth-gate-card {
+    width: min(390px, 100%);
+    padding: 22px 18px;
+  }
+
+  .auth-gate-card .brand-logo-disc,
+  .admin-auth-brand-disc {
+    width: 112px;
+    height: 112px;
+  }
+
+  .auth-gate-card .brand-lockup-logo,
+  .admin-auth-brand-logo {
+    width: 82px;
+    height: 82px;
+  }
+}
+
+/* Global white text pass */
+:root {
+  --ink: #ffffff;
+  --muted: rgba(255, 255, 255, 0.88);
+}
+
+body,
+body *:not(img) {
+  color: #ffffff !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Global icon centering */
+.icon {
+  display: block;
+  align-self: center;
+  justify-self: center;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.brand-lockup-logo,
+.launcher-brand-logo,
+.employee-brand-banner-logo,
+.employee-brand-banner-wordmark,
+.admin-auth-brand-logo,
+.brand-lockup-wordmark {
+  display: block;
+  margin-inline: auto;
+}
+
+.brand-logo-disc,
+.launcher-brand-disc,
+.employee-brand-banner-disc,
+.admin-auth-brand-disc {
+  justify-items: center;
+  align-items: center;
+}
+
+.employee-status-strip {
+  justify-content: center;
+}
+
+.employee-status-strip span {
+  justify-content: center;
+  text-align: center;
+}
+
+/* Final release theme: keep white text readable in light and dark mode */
+:root {
+  --bg: #040507;
+  --bg-alt: #0c1014;
+  --surface: #15191f;
+  --surface-strong: #1d232b;
+  --ink: #ffffff;
+  --muted: rgba(255, 255, 255, 0.82);
+  --line: rgba(255, 255, 255, 0.14);
+  --line-strong: rgba(255, 255, 255, 0.24);
+}
+
+html,
+body {
+  background:
+    radial-gradient(circle at top, rgba(36, 93, 142, 0.18), transparent 34%),
+    linear-gradient(180deg, #090c10 0%, #040507 100%) !important;
+  color-scheme: dark;
+}
+
+.page-head,
+.tab-bar,
+.topbar,
+.launcher-panel,
+.launch-card,
+.panel-card,
+.status-panel,
+.tool-panel,
+.empty-state,
+.notice-card,
+.feed-item,
+.employee-brand-banner,
+.employee-subscription-banner,
+.employee-setup-panel,
+.employee-install-guide-body,
+.admin-auth-card,
+.auth-gate-card,
+.stat-card,
+.settings-chip,
+.device-row,
+.acknowledgement-detail-panel,
+.field input,
+.field select,
+.field textarea,
+.employee-status-strip span {
+  background: var(--surface) !important;
+  background-image: none !important;
+  border-color: var(--line-strong) !important;
+}
+
+.page-head,
+.tab-bar,
+.topbar {
+  background: rgba(18, 21, 27, 0.92) !important;
+}
+
+.launch-card[data-route="employee"],
+.button,
+.button.secondary,
+.button.danger {
+  background: #1f7ae8 !important;
+  border-color: transparent !important;
+}
+
+.ghost-button,
+.icon-button,
+.tab-button {
+  background: var(--surface-strong) !important;
+  border-color: var(--line-strong) !important;
+}
+
+.tab-button.active {
+  background: #1f7ae8 !important;
+}
+

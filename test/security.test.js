@@ -196,6 +196,109 @@ test("legacy webmaster records normalize to the default webmaster username", asy
   }
 });
 
+test("security store ignores legacy role-specific admin session arrays", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-legacy-session-arrays-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const webmasterSetup = await store.setupWebmasterAccess({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!",
+      userAgent: "test"
+    });
+    const itSetup = await store.setupItAccess({
+      username: "it.owner",
+      password: "OwnerSecret1!",
+      userAgent: "test"
+    });
+
+    const seededState = await store.readSecurityState();
+    const hrSession = seededState.adminSessions.find((session) => session.id === hrSetup.sessionId);
+    const webmasterSession = seededState.adminSessions.find((session) => session.id === webmasterSetup.sessionId);
+    const itSession = seededState.adminSessions.find((session) => session.id === itSetup.sessionId);
+
+    seededState.adminSessions = [];
+    seededState.hrSessions = [hrSession];
+    seededState.webmasterSessions = [webmasterSession];
+    seededState.itSessions = [itSession];
+    await store.writeData(seededState);
+
+    const reloadedState = await store.readSecurityState();
+    assert.equal(reloadedState.adminSessions.length, 0);
+
+    const hrAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    });
+    assert.equal(Boolean(hrAccess.authorized), false);
+
+    const webmasterAccess = await store.checkWebmasterAccess({
+      headers: {
+        cookie: `palziv_webmaster_auth=${webmasterSetup.sessionId}`
+      }
+    });
+    assert.equal(Boolean(webmasterAccess.authorized), false);
+
+    const itAccess = await store.checkItAccess({
+      headers: {
+        cookie: `palziv_it_auth=${itSetup.sessionId}`
+      }
+    });
+    assert.equal(Boolean(itAccess.authorized), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("security store ignores malformed canonical admin sessions", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-malformed-admin-sessions-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+
+    const seededState = await store.readSecurityState();
+    const validSession = seededState.adminSessions.find((session) => session.id === hrSetup.sessionId);
+
+    seededState.adminSessions = [
+      {
+        ...validSession,
+        adminUserId: "",
+        role: ""
+      }
+    ];
+    await store.writeData(seededState);
+
+    const reloadedState = await store.readSecurityState();
+    assert.equal(reloadedState.adminSessions.length, 0);
+
+    const access = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    });
+    assert.equal(Boolean(access.authorized), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("admin role assignments reject composite privileged accounts", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-single-role-admin-"));
   const dataFile = path.join(tempDir, "security.json");
@@ -463,7 +566,7 @@ test("HR recovery codes lock out after repeated invalid guesses", async () => {
   }
 });
 
-test("logoutAdmin revokes both current and legacy HR sessions", async () => {
+test("logoutAdmin only honors the canonical HR session cookie", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-logout-"));
   const dataFile = path.join(tempDir, "security.json");
 
@@ -476,20 +579,22 @@ test("logoutAdmin revokes both current and legacy HR sessions", async () => {
       userAgent: "test"
     });
 
-    const legacySession = await store.authenticateAdmin({
-      username: "hr",
-      password: "ManagerSecret1!",
-      userAgent: "legacy"
-    });
     const currentSession = await store.authenticateAdmin({
       username: "hr",
       password: "ManagerSecret1!",
       userAgent: "current"
     });
 
+    const legacyCookieAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_admin_auth=${currentSession.sessionId}`
+      }
+    });
+    assert.equal(Boolean(legacyCookieAccess.authorized), false);
+
     const logoutResult = await store.logoutAdmin({
       headers: {
-        cookie: `palziv_hr_auth=${currentSession.sessionId}; palziv_admin_auth=${legacySession.sessionId}`
+        cookie: `palziv_hr_auth=${currentSession.sessionId}`
       }
     });
     assert.equal(logoutResult.removed, true);
@@ -503,7 +608,7 @@ test("logoutAdmin revokes both current and legacy HR sessions", async () => {
 
     const legacyAccess = await store.checkHrAccess({
       headers: {
-        cookie: `palziv_admin_auth=${legacySession.sessionId}`
+        cookie: `palziv_admin_auth=${currentSession.sessionId}`
       }
     });
     assert.equal(Boolean(legacyAccess.authorized), false);

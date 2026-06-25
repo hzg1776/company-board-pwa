@@ -1722,22 +1722,78 @@ test("legacy owner URL aliases are no longer served", async (t) => {
   assert.equal(legacyOwnerBrandedAlias.status, 404);
 });
 
-test("client app exposes launcher logins and retains a dedicated admin gateway", async () => {
+test("legacy HR admin check alias is no longer served", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-legacy-admin-check-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const legacyAdminCheck = await fetch(`${server.baseUrl}/api/admin/check`);
+  assert.equal(legacyAdminCheck.status, 404);
+  const legacyAdminCheckBody = await legacyAdminCheck.json();
+  assert.equal(legacyAdminCheckBody.error, "API route not found.");
+});
+
+test("client app exposes direct launcher logins without a dedicated admin gateway", async () => {
   const appSource = await readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
   const launcherStart = appSource.indexOf("function renderLauncher()");
-  const launcherEnd = appSource.indexOf("function renderAdminGatewayCard(");
-  const launcherSource = launcherStart >= 0 && launcherEnd > launcherStart
-    ? appSource.slice(launcherStart, launcherEnd)
+  const renderStart = appSource.indexOf("function render(");
+  const launcherSource = launcherStart >= 0 && renderStart > launcherStart
+    ? appSource.slice(launcherStart, renderStart)
     : "";
 
-  assert.match(appSource, /function renderAdminGateway\(\)/);
-  assert.match(appSource, /if \(route === "admin"\) return appPath\("admin"\);/);
-  assert.match(appSource, /route === "admin"/);
   assert.match(launcherSource, /Employee Login/);
   assert.match(launcherSource, /HR Login/);
   assert.match(launcherSource, /Systems and Analytics Login/);
   assert.match(launcherSource, /IT Login/);
-  assert.match(appSource, /data-admin-entry-route/);
+  assert.doesNotMatch(appSource, /function renderAdminGateway\(\)/);
+  assert.doesNotMatch(appSource, /if \(route === "admin"\) return appPath\("admin"\);/);
+  assert.doesNotMatch(appSource, /route === "admin"/);
+  assert.doesNotMatch(appSource, /data-admin-entry-route/);
+  assert.match(appSource, /function renderLauncherAdminCard\(route, title\)/);
+  assert.match(appSource, /href="\$\{escapeHtml\(routePath\(route\)\)\}" data-route="\$\{escapeHtml\(route\)\}"/);
+});
+
+test("client app does not ship placeholder helper text in username or password inputs", async () => {
+  const appSource = await readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const credentialInputs = Array.from(
+    appSource.matchAll(/<input\b[^>]*(?:name="username"|type="password")[^>]*>/g)
+  ).map((match) => match[0]);
+
+  assert.ok(credentialInputs.length > 0);
+
+  for (const inputMarkup of credentialInputs) {
+    assert.doesNotMatch(inputMarkup, /\splaceholder=/);
+  }
+});
+
+test("client app does not ship static explanatory copy across the live screens", async () => {
+  const appSource = await readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const removedCopy = [
+    "Create a clear employee update and choose exactly who should receive it.",
+    "Important and urgent updates notify employees automatically. Routine updates stay in the feed unless you choose to send an alert.",
+    "Narrow the feed with a dropdown before deleting or reviewing older updates.",
+    "Review the latest failed logins, throttles, and lockouts across HR, Systems, and employee sign-in.",
+    "These counters are drawn from the most recent persisted security events.",
+    "Quick status for the site, the host, and the copy-ready brief.",
+    "These counts show how the site is being used and where errors are happening.",
+    "Use this tab to see the server, browser, and performance environment behind the portal.",
+    "See what is live, what is urgent, and what is about to expire.",
+    "Use these buttons to move the snapshot into Codex without rebuilding the context by hand.",
+    "Use this area for company profile, billing contact, data-retention, and compliance defaults once those services are connected.",
+    "Keep at least two active named IT accounts. Do not use shared master credentials for emergency access.",
+    "Checking the invitation details.",
+    "Google Authenticator is active for this account. Use the current 6-digit code whenever this role requires step-up verification."
+  ];
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  for (const copy of removedCopy) {
+    assert.doesNotMatch(appSource, new RegExp(escapeRegex(copy)));
+  }
 });
 
 test("manifest shortcuts do not expose privileged routes directly", async (t) => {

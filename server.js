@@ -59,8 +59,8 @@ const DEFAULT_SITE_CONFIG = Object.freeze({
   shortName: "Alert Center",
   subtitle: "Updates & Alerts Portal",
   description: "Updates and alerts portal for Communications and Alert Center with HR-managed company news, weather, and push notifications.",
-  themeColor: "#1b2329",
-  backgroundColor: "#f4f8fb"
+  themeColor: "#F2F2F7",
+  backgroundColor: "#F2F2F7"
 });
 
 function readSiteConfig() {
@@ -94,6 +94,7 @@ const ASSET_VERSION_PATHS = [
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
+const allowedDeliveryTargets = new Set(["feed", "alert", "both"]);
 const allowedAlertRetention = new Set(["24h", "48h", "168h", "manual"]);
 
 const mimeTypes = new Map([
@@ -663,8 +664,7 @@ function buildWebmasterSummary({ boardData, pushData, analyticsData, securityRun
       launcher: base,
       employee: `${base}/employee`,
       hr: `${base}/hr`,
-      webmaster: `${base}/webmaster`,
-      adminAlias: `${base}/admin`
+      webmaster: `${base}/webmaster`
     }
   };
 }
@@ -1243,7 +1243,13 @@ function normalizePost(input) {
   const body = cleanLongText(input.body, 700);
   const audience = cleanText(input.audience || "All employees", 80);
   const expiresAt = cleanText(input.expiresAt, 10);
-  const notifyEmployees = parseBooleanish(input.notifyEmployees) || priority === "Important" || priority === "Urgent";
+  const requestedDeliveryTarget = cleanText(input.deliveryTarget, 16).toLowerCase();
+  const hasExplicitDeliveryTarget = allowedDeliveryTargets.has(requestedDeliveryTarget);
+  const legacyNotifyEmployees = parseBooleanish(input.notifyEmployees) || priority === "Important" || priority === "Urgent";
+  const deliveryTarget = hasExplicitDeliveryTarget
+    ? requestedDeliveryTarget
+    : (legacyNotifyEmployees ? "both" : "feed");
+  const notifyEmployees = deliveryTarget !== "feed";
   const alertRetention = allowedAlertRetention.has(String(input.alertRetention || ""))
     ? String(input.alertRetention)
     : "48h";
@@ -1256,6 +1262,7 @@ function normalizePost(input) {
     id: crypto.randomUUID(),
     type,
     priority,
+    deliveryTarget,
     notifyEmployees,
     alertRetention: notifyEmployees ? alertRetention : "manual",
     title,
@@ -1277,8 +1284,16 @@ function acknowledgementsForPost(data, postId) {
     .sort((a, b) => new Date(b.acknowledgedAt) - new Date(a.acknowledgedAt));
 }
 
+function postVisibleToEmployees(post = {}) {
+  return String(post.deliveryTarget || "feed") !== "alert";
+}
+
 function postRequiresAcknowledgement(post = {}) {
-  return post.priority === "Important" || post.priority === "Urgent" || Boolean(post.notifyEmployees);
+  return postVisibleToEmployees(post) && (
+    post.priority === "Important" ||
+    post.priority === "Urgent" ||
+    Boolean(post.notifyEmployees)
+  );
 }
 
 function postForAccess(post, { data, access, employees = [] } = {}) {
@@ -1331,8 +1346,7 @@ async function handleApi(req, res, url) {
       secure: isSecureRequest(req)
     };
     const adminCookieHeader = [
-      serializeCookie(cookieNames.hr, "", hrCookieOptions),
-      serializeCookie(cookieNames.legacyHr, "", hrCookieOptions)
+      serializeCookie(cookieNames.hr, "", hrCookieOptions)
     ];
     const itCookieHeader = serializeCookie(cookieNames.it, "", {
       path: "/",
@@ -1362,8 +1376,7 @@ async function handleApi(req, res, url) {
         httpOnly: true,
         sameSite: "Lax",
         secure: isSecureRequest(req)
-      }),
-      serializeCookie(cookieNames.legacyHr, "", hrCookieOptions)
+      })
     ]);
     const webmasterSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.webmaster, sessionId, {
       path: "/",
@@ -1436,7 +1449,7 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (req.method === "GET" && (url.pathname === "/api/admin/check" || url.pathname === "/api/hr/check")) {
+    if (req.method === "GET" && url.pathname === "/api/hr/check") {
       const auth = await securityStore.checkHrAccess(req);
       sendJson(res, 200, auth);
       return;
@@ -2403,8 +2416,11 @@ async function handleApi(req, res, url) {
         boardStore.readData(),
         boardAccess.role === "employee" ? Promise.resolve([]) : securityStore.listEmployees()
       ]);
+      const visiblePosts = boardAccess.role === "employee"
+        ? data.posts.filter((post) => postVisibleToEmployees(post))
+        : data.posts;
       sendJson(res, 200, {
-        posts: sortedPosts(data.posts).map((post) => postForAccess(post, {
+        posts: sortedPosts(visiblePosts).map((post) => postForAccess(post, {
           data,
           access: boardAccess,
           employees
@@ -2835,8 +2851,8 @@ const server = http.createServer(async (req, res) => {
       ["/hr", appPath("hr")],
       ["/webmaster", appPath("webmaster")],
       ["/it", appPath("it")],
-      ["/admin", appPath("admin")],
-      ["/palzivalerts/admin", appPath("admin")]
+      ["/admin", appPath()],
+      ["/palzivalerts/admin", appPath()]
     ]);
     const nextLocation = redirects.get(url.pathname);
 
@@ -2848,7 +2864,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it") || url.pathname === appPath("admin"))) {
+  if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it"))) {
     await sendIndexHtml(res);
     return;
   }

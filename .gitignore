@@ -5,6 +5,7 @@ backups/
 logs/
 runtime/
 artifacts/
+tmp/
 /.codex/
 security-scans/
 data/board.json

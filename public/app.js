@@ -17,13 +17,9 @@ const APP_ASSET_VERSION = String(SITE_CONFIG.assetVersion || "20260615");
 const APP_TITLE = String(SITE_CONFIG.name || DEFAULT_SITE_CONFIG.name);
 const APP_NAME_SUFFIX = String(SITE_CONFIG.nameSuffix || DEFAULT_SITE_CONFIG.nameSuffix);
 const APP_DISPLAY_TITLE = APP_NAME_SUFFIX ? `${APP_TITLE} ${APP_NAME_SUFFIX}` : APP_TITLE;
-const APP_SUBTITLE = String(SITE_CONFIG.subtitle || DEFAULT_SITE_CONFIG.subtitle);
 const APP_BASE_PATH = "/palzivalerts";
 const app = document.querySelector("#app");
 const DEVICE_PROFILE_STORAGE_KEY = "palziv-employee-device-profile-v3";
-const ADMIN_GATEWAY_STORAGE_KEY = "palziv-admin-gateway-v1";
-const ADMIN_GATEWAY_TTL_MS = 5 * 60_000;
-const HIDDEN_ADMIN_ROUTES = new Set(["hr", "webmaster", "it"]);
 
 function safeStorageGet(key) {
   try {
@@ -36,30 +32,6 @@ function safeStorageGet(key) {
 function safeStorageSet(key, value) {
   try {
     window.localStorage.setItem(key, value);
-  } catch {
-    // Ignore storage failures on restricted browsers.
-  }
-}
-
-function safeSessionStorageGet(key) {
-  try {
-    return window.sessionStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function safeSessionStorageSet(key, value) {
-  try {
-    window.sessionStorage.setItem(key, value);
-  } catch {
-    // Ignore storage failures on restricted browsers.
-  }
-}
-
-function safeSessionStorageRemove(key) {
-  try {
-    window.sessionStorage.removeItem(key);
   } catch {
     // Ignore storage failures on restricted browsers.
   }
@@ -448,10 +420,6 @@ function currentRoute() {
     return "hr";
   }
 
-  if (pathname === `${APP_BASE_PATH}/admin` || pathname === "/admin" || hash === "#admin") {
-    return "admin";
-  }
-
   if (pathname === `${APP_BASE_PATH}/employee` || pathname === "/employee") {
     return "employee";
   }
@@ -478,59 +446,8 @@ function routePath(route) {
   if (route === "it") return appPath("it");
   if (route === "webmaster") return appPath("webmaster");
   if (route === "hr") return appPath("hr");
-  if (route === "admin") return appPath("admin");
   if (route === "employee") return appPath("employee");
   return appPath();
-}
-
-function readAdminGatewayPass() {
-  const raw = safeSessionStorageGet(ADMIN_GATEWAY_STORAGE_KEY);
-
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw);
-    const expiresAt = Number(parsed.expiresAt || 0);
-
-    if (!expiresAt || expiresAt <= Date.now()) {
-      safeSessionStorageRemove(ADMIN_GATEWAY_STORAGE_KEY);
-      return null;
-    }
-
-    return {
-      expiresAt,
-      route: typeof parsed.route === "string" ? parsed.route : ""
-    };
-  } catch {
-    safeSessionStorageRemove(ADMIN_GATEWAY_STORAGE_KEY);
-    return null;
-  }
-}
-
-function grantAdminGatewayPass(route = "") {
-  safeSessionStorageSet(ADMIN_GATEWAY_STORAGE_KEY, JSON.stringify({
-    route: HIDDEN_ADMIN_ROUTES.has(route) ? route : "",
-    expiresAt: Date.now() + ADMIN_GATEWAY_TTL_MS
-  }));
-}
-
-function clearAdminGatewayPass() {
-  safeSessionStorageRemove(ADMIN_GATEWAY_STORAGE_KEY);
-}
-
-function hasAdminGatewayPass(route = "") {
-  const pass = readAdminGatewayPass();
-
-  if (!pass) return false;
-  if (!route || !HIDDEN_ADMIN_ROUTES.has(route)) return true;
-  return !pass.route || pass.route === route;
-}
-
-function shouldAllowSignedOutAdminRoute(route, access) {
-  if (!HIDDEN_ADMIN_ROUTES.has(route)) return true;
-  if (access?.authorized) return true;
-  if (currentInviteToken()) return true;
-  return hasAdminGatewayPass(route);
 }
 
 function formatDurationMs(value) {
@@ -887,14 +804,14 @@ Copying this into Codex should give it enough context to trace the site health a
 `;
 }
 
-  function brandBlock(subtitle = APP_SUBTITLE) {
+  function brandBlock(title = "") {
     return `
       <div class="brand">
         <div class="brand-lockup">
           <div class="brand-logo-disc">
-            <img class="brand-lockup-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+            <img class="brand-lockup-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
           </div>
-          ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
+          ${title ? `<p>${escapeHtml(title)}</p>` : ""}
         </div>
       </div>
     `;
@@ -903,7 +820,6 @@ Copying this into Codex should give it enough context to trace the site health a
 function renderAuthFrame({
   title,
   eyebrow = "",
-  description = "",
   error = "",
   content,
   className = "",
@@ -920,7 +836,6 @@ function renderAuthFrame({
           <div>
             ${eyebrow ? `<p class="eyebrow auth-frame-eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
             <h2>${escapeHtml(title)}</h2>
-            ${description ? `<p>${escapeHtml(description)}</p>` : ""}
           </div>
         </div>
         ${error ? `<div class="employee-banner">${escapeHtml(error)}</div>` : ""}
@@ -932,7 +847,7 @@ function renderAuthFrame({
   `;
 }
 
-function renderAdminAuthFrame({ route, title, description = "", error = "", content, footer = "" }) {
+function renderAdminAuthFrame({ route, title, error = "", content, footer = "" }) {
   const routeLabel = route === "webmaster" ? "System Ops admin" : route === "it" ? "IT admin" : "HR admin";
 
   return `
@@ -941,12 +856,11 @@ function renderAdminAuthFrame({ route, title, description = "", error = "", cont
         <header class="admin-auth-header">
           <div class="admin-auth-brand">
             <div class="admin-auth-brand-disc">
-              <img class="admin-auth-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+              <img class="admin-auth-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             </div>
             <div class="admin-auth-brand-copy">
               <p class="eyebrow">${escapeHtml(routeLabel)}</p>
               <h1>${escapeHtml(title)}</h1>
-              ${description ? `<p>${escapeHtml(description)}</p>` : ""}
             </div>
           </div>
         </header>
@@ -983,12 +897,11 @@ function renderTabBar(tabs, activeTab, group, label) {
   `;
 }
 
-function renderStatCard(value, label, note = "") {
+function renderStatCard(value, label) {
   return `
     <article class="stat-card">
       <strong>${escapeHtml(value)}</strong>
       <span>${escapeHtml(label)}</span>
-      ${note ? `<p>${escapeHtml(note)}</p>` : ""}
     </article>
   `;
 }
@@ -1025,8 +938,6 @@ function renderWebmasterDrilldownStatCard({ value, label, note = "", tab, cardId
     >
       <strong>${escapeHtml(value)}</strong>
       <span>${escapeHtml(label)}</span>
-      ${note ? `<p>${escapeHtml(note)}</p>` : ""}
-      <small class="webmaster-stat-hint">Click for details</small>
     </button>
   `;
 }
@@ -1086,9 +997,7 @@ function renderWebmasterExpandableCard({
   id,
   eyebrow,
   title,
-  description = "",
   badge = "",
-  hint = "Click to toggle",
   iconName = "chart",
   summaryMetrics = [],
   body = "",
@@ -1108,11 +1017,9 @@ function renderWebmasterExpandableCard({
           <div class="webmaster-expand-summary-copy">
             <p class="eyebrow">${icon(iconName)} ${escapeHtml(eyebrow)}</p>
             <h3>${escapeHtml(title)}</h3>
-            ${description ? `<p>${escapeHtml(description)}</p>` : ""}
           </div>
           <div class="webmaster-expand-summary-meta">
             ${badge ? `<span class="sync-pill">${escapeHtml(badge)}</span>` : ""}
-            <span class="webmaster-expand-hint">${escapeHtml(hint)}</span>
             <span class="webmaster-expand-caret" aria-hidden="true"></span>
           </div>
         </div>
@@ -2383,7 +2290,6 @@ function renderInstallGuideToggle() {
     <details class="employee-install-guide"${state.employeeInstallGuideOpen ? " open" : ""} data-employee-install-guide>
       <summary class="ghost-button employee-install-guide-toggle">Install On Phone</summary>
       <div class="employee-install-guide-body">
-        <p class="panel-copy">Use the phone that should receive ${escapeHtml(APP_TITLE)} alerts.</p>
         <ol class="employee-install-guide-list">
           ${installGuideSteps().map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
         </ol>
@@ -2542,6 +2448,14 @@ function formatAlertRetentionLabel(value) {
   }[String(value || "48h")] || "48 Hours";
 }
 
+function formatDeliveryTargetLabel(value) {
+  return {
+    feed: "Feed Only",
+    alert: "Alert Only",
+    both: "Feed and Alert"
+  }[String(value || "feed")] || "Feed Only";
+}
+
 function renderNotice(post, includeControls = false) {
   const safePriority = priorityClass(post.priority);
   const acknowledgementSummary = post.acknowledgementSummary || null;
@@ -2681,8 +2595,6 @@ function renderAccessPinPanel() {
       </div>
 
       ${renderWebmasterPushActions()}
-
-      <p class="panel-copy">If a device needs cleanup, unsubscribe it from the roster or turn alerts off on that browser.</p>
     `
   });
 }
@@ -2691,17 +2603,18 @@ function renderEmployeeAuthGate() {
   const authError = state.access.employee.error || state.message;
 
   return renderAuthFrame({
-    title: "Employee login",
+    title: "Employee sign in",
+    eyebrow: "Employee access",
     error: authError,
     content: `
       <form class="auth-form" data-employee-login-form>
         <label class="field">
           <span>Username</span>
-          <input name="username" maxlength="80" required autocomplete="username" placeholder="e.g. maria.lopez">
+          <input name="username" maxlength="80" required autocomplete="username">
         </label>
         <label class="field">
           <span>Password</span>
-          <input name="password" type="password" minlength="10" required autocomplete="current-password" placeholder="Your employee password">
+          <input name="password" type="password" minlength="10" required autocomplete="current-password">
         </label>
         <div class="auth-form-actions">
           <button class="button" type="submit">Sign In</button>
@@ -2721,7 +2634,7 @@ function renderAdminInviteGate(route) {
     return renderAuthFrame({
       title: "Loading invitation",
       error: "",
-      content: '<div class="auth-form"><p class="auth-inline-meta">Checking the invitation details.</p></div>'
+      content: '<div class="auth-form"></div>'
     });
   }
 
@@ -2754,11 +2667,11 @@ function renderAdminInviteGate(route) {
         <form class="auth-form" data-accept-admin-invite-form>
           <label class="field">
             <span>Create password</span>
-            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="Create your password">
+            <input name="password" type="password" minlength="10" required autocomplete="new-password">
           </label>
           <label class="field">
             <span>Confirm password</span>
-            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat your password">
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password">
           </label>
           <div class="auth-form-actions">
             <button class="button" type="submit"${state.adminInvite.busy ? " disabled" : ""}>${escapeHtml(state.adminInvite.busy ? "Saving..." : "Accept Invite")}</button>
@@ -2782,33 +2695,25 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
   const needsVerify = access.mfaRequired && access.mfaMode === "verify";
   const needsSetup = access.mfaRequired && access.mfaMode === "setup";
   const showEnrollment = Boolean(setup.details);
-  const graceNote = mfa.status === "grace" && mfa.graceUntil
-    ? `Google Authenticator is recommended before ${formatDate(mfa.graceUntil)}.`
-    : mfa.status === "enabled"
-      ? "Google Authenticator is enabled for this account."
-      : "Google Authenticator is required before the grace window ends.";
-
   return `
     <section class="panel-card settings-credential-card">
       <div class="panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("shield")} Multi-factor authentication</p>
           <h3>${escapeHtml(roleLabel)} Google Authenticator</h3>
-          <p>${escapeHtml(graceNote)}</p>
         </div>
         <span class="admin-table-chip ${mfa.status === "enabled" ? "is-positive" : mfa.status === "grace" ? "is-info" : "is-muted"}">${escapeHtml(mfa.status === "enabled" ? "Enabled" : mfa.status === "grace" ? "Grace" : "Required")}</span>
       </div>
       ${showEnrollment ? `
         <div class="auth-recovery-stack">
           <div class="invite-summary">
-            <div class="invite-summary-row"><strong>1. Scan with Google Authenticator</strong></div>
             <div class="invite-summary-row">${setup.details.qrCodeDataUrl ? `<img src="${escapeHtml(setup.details.qrCodeDataUrl)}" alt="Authenticator QR code" style="max-width:220px;width:100%;height:auto;">` : ""}</div>
             <div class="invite-summary-row">${escapeHtml(setup.details.manualEntryKey || "")}</div>
           </div>
           <form class="auth-form" data-admin-mfa-verify-form data-admin-route="${escapeHtml(normalizedRoute)}">
             <label class="field">
               <span>6-digit code</span>
-              <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code" placeholder="123456">
+              <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code">
             </label>
             <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Verifying..." : "Verify Authenticator")}</button>
           </form>
@@ -2817,14 +2722,12 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
         <form class="auth-form" data-admin-mfa-verify-form data-admin-route="${escapeHtml(normalizedRoute)}">
           <label class="field">
             <span>6-digit code</span>
-            <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code" placeholder="123456">
+            <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code">
           </label>
           <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Verifying..." : "Verify Code")}</button>
         </form>
       ` : mfa.status === "enabled" && !needsSetup ? `
-        <div class="admin-auth-message">
-          Google Authenticator is active for this account. Use the current 6-digit code whenever this role requires step-up verification.
-        </div>
+
       ` : `
         <form class="auth-form" data-admin-mfa-enroll-form data-admin-route="${escapeHtml(normalizedRoute)}">
           <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Preparing..." : compact ? "Set Up Google Authenticator" : "Generate Google Authenticator QR")}</button>
@@ -2863,26 +2766,10 @@ function renderAdminAuthGate(route) {
       : canSetup
         ? `Create first ${sectionTitle} admin`
         : `${sectionTitle} sign in`;
-  const description = access.mfaRequired
-    ? access.mfaMode === "verify"
-      ? "Enter the current 6-digit code from Google Authenticator to finish signing in."
-      : "Scan the QR code with Google Authenticator, then enter the 6-digit code to finish access setup."
-    : recoveryMode
-    ? normalizedRoute === "hr"
-      ? "Use the current HR recovery key to set a new password."
-      : "A different active System Ops admin must reset this password from Systems Settings."
-    : setupBlocked
-      ? "HR must finish setup or grant Systems access before this screen can be used."
-      : canSetup
-        ? `Create the first named admin account for ${sectionTitle}.`
-        : normalizedRoute === "it"
-          ? "Use the named IT account to continue."
-        : `Use your named admin account to continue.`;
 
   return renderAdminAuthFrame({
     route: normalizedRoute,
     title: heading,
-    description,
     error: authError,
     content: access.mfaRequired
       ? renderAdminMfaPanel(normalizedRoute, { compact: true })
@@ -2892,32 +2779,26 @@ function renderAdminAuthGate(route) {
           <form class="auth-form admin-auth-form" data-hr-master-recovery-form>
             <label class="field">
               <span>Recovery key</span>
-              <input name="recoveryToken" type="password" required autocomplete="one-time-code" placeholder="Current HR recovery key">
+              <input name="recoveryToken" type="password" required autocomplete="one-time-code">
             </label>
             <label class="field">
               <span>New password</span>
-              <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New password">
+              <input name="password" type="password" minlength="10" required autocomplete="new-password">
             </label>
             <label class="field">
               <span>Confirm new password</span>
-              <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+              <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password">
             </label>
             <button class="button admin-auth-submit" type="submit">Recover With Recovery Key</button>
           </form>
         `
         : `
-          <div class="admin-auth-message">
-            Another active System Ops admin must reset this password from Systems Settings and the System Ops Admin Accounts panel.
-          </div>
           <div class="admin-auth-primary-actions">
           <button class="button admin-auth-submit" type="button" data-route="webmaster">Back to Systems Sign In</button>
           </div>
         `
       : setupBlocked
       ? `
-        <div class="admin-auth-message">
-          HR must finish the first admin setup or assign Systems access before this sign-in becomes available.
-        </div>
         <div class="admin-auth-primary-actions">
           <button class="button admin-auth-submit" type="button" data-route="hr">Open HR</button>
         </div>
@@ -2927,16 +2808,16 @@ function renderAdminAuthGate(route) {
           ${(normalizedRoute === "it" || normalizedRoute === "hr") && canSetup ? `
           <label class="field">
             <span>Deployment setup secret</span>
-            <input name="setupToken" type="password" required autocomplete="one-time-code" placeholder="Bootstrap secret">
+            <input name="setupToken" type="password" required autocomplete="one-time-code">
           </label>
           ` : ""}
           <label class="field">
             <span>${escapeHtml(canSetup ? "Create username" : "Username")}</span>
-            <input name="username" maxlength="80" required autocomplete="username" placeholder="e.g. alex.smith">
+            <input name="username" maxlength="80" required autocomplete="username">
           </label>
           <label class="field">
             <span>${escapeHtml(canSetup ? "Create password" : "Password")}</span>
-            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}" placeholder="${escapeHtml(canSetup ? "Create a password" : "Your password")}">
+            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}">
           </label>
           <button class="button admin-auth-submit" type="submit">${escapeHtml(canSetup ? "Save Credentials" : "Sign In")}</button>
         </form>
@@ -2962,13 +2843,6 @@ function renderAdminAuthGate(route) {
       `
       : canSetup
       ? `
-        <p class="admin-auth-footer-note">${escapeHtml(
-          normalizedRoute === "webmaster"
-            ? "Finish HR setup first if Systems access has not been assigned yet."
-            : normalizedRoute === "it"
-              ? "After setup, create backup IT access and keep daily operations work in scoped accounts."
-            : "After setup, use Admin Management to create or invite additional admins."
-        )}</p>
         <div class="admin-auth-footer-actions">
           <button class="auth-inline-action" type="button" data-route="launcher">Back to Launcher</button>
         </div>
@@ -3015,7 +2889,7 @@ function renderEmployeeDirectoryRow(employee) {
       <td>
         <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
           <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New Temporary Password">
+          <input name="password" type="password" minlength="10" required autocomplete="new-password">
           <button class="ghost-button" type="submit">${icon("lock")} Reset</button>
         </form>
       </td>
@@ -3182,7 +3056,7 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
           </span>
           <form class="admin-table-inline-form admin-password-inline-form" data-reset-admin-password-form data-admin-scope="${escapeHtml(scopeValue)}">
             <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
-            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="${escapeHtml(isCurrentUser ? "Use settings for your password" : "New Temporary Password")}"${isCurrentUser ? " disabled" : ""}>
+            <input name="password" type="password" minlength="10" required autocomplete="new-password"${isCurrentUser ? " disabled" : ""}>
             <button class="ghost-button" type="submit"${isCurrentUser ? " disabled" : ""}>${icon("lock")} Reset</button>
           </form>
         </div>
@@ -3248,16 +3122,6 @@ function renderAdminAccountsPanel(scope = "hr") {
   const adminUsers = Array.isArray(readAdminDirectory(normalizedScope).adminUsers) ? readAdminDirectory(normalizedScope).adminUsers : [];
   const title = normalizedScope === "it" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
   const countLabel = normalizedScope === "it" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
-  const summaryText = normalizedScope === "it"
-    ? "Manage named IT, HR, and System Ops identities here. Each account carries exactly one privileged role."
-    : normalizedScope === "webmaster"
-      ? "Manage named System Ops identities here. These accounts stay separate from HR and IT access."
-      : "Manage named HR identities here. System Ops and IT accounts stay outside the HR console.";
-  const createNote = normalizedScope === "it"
-    ? "Create one role per account. Keep backup IT access separate from day-to-day HR and System Ops work."
-    : normalizedScope === "webmaster"
-      ? "This surface creates System Ops-only admin accounts."
-      : "This surface creates HR-only admin accounts.";
   const roleControl = normalizedScope === "it"
     ? `
         <div class="field">
@@ -3299,7 +3163,6 @@ function renderAdminAccountsPanel(scope = "hr") {
       <div class="employee-access-head">
         <div>
           <h3>${escapeHtml(title)}</h3>
-          <p>${escapeHtml(summaryText)}</p>
         </div>
         <span class="sync-pill">${escapeHtml(`${adminUsers.length} ${countLabel}${adminUsers.length === 1 ? "" : "s"}`)}</span>
       </div>
@@ -3315,11 +3178,11 @@ function renderAdminAccountsPanel(scope = "hr") {
         </label>
         <label class="field">
           <span>Username</span>
-          <input name="username" maxlength="80" required placeholder="Admin Username">
+          <input name="username" maxlength="80" required>
         </label>
         <label class="field">
           <span>Temporary password</span>
-          <input name="password" type="password" minlength="10" autocomplete="new-password" placeholder="Only needed for manual setup">
+          <input name="password" type="password" minlength="10" autocomplete="new-password">
         </label>
         ${roleControl}
         <div class="admin-create-actions">
@@ -3327,7 +3190,6 @@ function renderAdminAccountsPanel(scope = "hr") {
           <button class="ghost-button" type="submit" data-admin-create-action="password">${icon("lock")} Create With Password</button>
         </div>
       </form>
-      <p class="form-note admin-create-note">${escapeHtml(createNote)}</p>
 
       ${renderAdminDirectoryTable(adminUsers, normalizedScope)}
     </section>
@@ -3380,7 +3242,7 @@ function renderEmployeeDirectoryPanel() {
         </label>
         <label class="field">
           <span>Username</span>
-          <input name="username" maxlength="80" required placeholder="Username">
+          <input name="username" maxlength="80" required>
         </label>
         <label class="field">
           <span>Email</span>
@@ -3417,7 +3279,7 @@ function renderEmployeeDirectoryPanel() {
         </label>
         <label class="field field-span-2">
           <span>Temporary password</span>
-          <input name="password" type="password" minlength="10" required placeholder="Temporary Password">
+          <input name="password" type="password" minlength="10" required>
         </label>
         <label class="checkbox-row field-span-2">
           <input name="passwordResetRequired" type="checkbox" checked>
@@ -3439,7 +3301,7 @@ function renderEmployee() {
     <main class="page-shell employee-shell">
         <section class="employee-brand-banner" aria-label="${escapeHtml(APP_TITLE)} brand banner">
           <div class="employee-brand-banner-head">
-            <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+            <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             <div class="employee-brand-banner-copy">
               <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
             </div>
@@ -3478,9 +3340,9 @@ function renderLauncherCard(route, title) {
 
 function renderLauncherAdminCard(route, title) {
   return `
-    <button class="launch-card" type="button" data-admin-entry-route="${escapeHtml(route)}">
+    <a class="launch-card" href="${escapeHtml(routePath(route))}" data-route="${escapeHtml(route)}">
       <strong class="launch-card-label">${escapeHtml(title)}</strong>
-    </button>
+    </a>
   `;
 }
 
@@ -3491,7 +3353,7 @@ function renderLauncher() {
         <section class="launcher-stage">
           <div class="launcher-brand" aria-label="${escapeHtml(APP_TITLE)}">
             <div class="launcher-brand-disc">
-              <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+              <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             </div>
           </div>
 
@@ -3513,48 +3375,6 @@ function renderLauncher() {
   `;
 }
 
-function renderAdminGatewayCard(route, title, description) {
-  return `
-    <button class="launch-card launch-card-module-link" type="button" data-admin-entry-route="${escapeHtml(route)}">
-      <strong class="launch-card-label">${escapeHtml(title)}</strong>
-      <span class="launch-card-description">${escapeHtml(description)}</span>
-    </button>
-  `;
-}
-
-function renderAdminGateway() {
-  return `
-    <main class="page-shell launcher-shell">
-      ${renderAppUpdateBanner()}
-      <section class="launcher-stage">
-        <div class="launcher-brand" aria-label="${escapeHtml(APP_TITLE)}">
-          <div class="launcher-brand-disc">
-            <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260617c" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
-          </div>
-        </div>
-
-        <div class="launcher-panel">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("lock")} Admin Gateway</p>
-              <h2>Privileged Access</h2>
-              <p>Welcome To The Admin Gateway. You Are In The Right Place For HR, Systems, and IT Access.</p>
-            </div>
-          </div>
-          <div class="launcher-grid">
-            ${renderAdminGatewayCard("hr", "HR Login", "People Operations and Employee Communications")}
-            ${renderAdminGatewayCard("webmaster", "Systems and Analytics Login", "Operational Monitoring, Analytics, and System Controls")}
-            ${renderAdminGatewayCard("it", "IT Login", "Governance, Audit, and Emergency Access")}
-          </div>
-          <div class="admin-auth-footer-actions">
-            <button class="auth-inline-action" type="button" data-route="launcher">Back To Launcher</button>
-          </div>
-        </div>
-      </section>
-    </main>
-  `;
-}
-
 function renderAdminPublishPanel() {
   return `
     <section class="panel-stack">
@@ -3562,7 +3382,6 @@ function renderAdminPublishPanel() {
         <div>
           <p class="eyebrow">${icon("megaphone")} Publish</p>
           <h2>New Update</h2>
-          <p>Create a clear employee update and choose exactly who should receive it.</p>
         </div>
       </div>
       <section class="tool-panel composer-panel panel-card">
@@ -3606,6 +3425,14 @@ function renderAdminPublishPanel() {
               </select>
             </label>
             <label class="field">
+              <span>Publish Target</span>
+              <select name="deliveryTarget">
+                <option value="feed" selected>Feed Only</option>
+                <option value="both">Feed and Alert</option>
+                <option value="alert">Alert Only</option>
+              </select>
+            </label>
+            <label class="field">
               <span>Alert Retention</span>
               <select name="alertRetention">
                 <option value="24h">24 Hours</option>
@@ -3615,11 +3442,6 @@ function renderAdminPublishPanel() {
               </select>
             </label>
           </div>
-          <label class="checkbox-row">
-            <input type="checkbox" name="notifyEmployees">
-            <span>Send a push alert to subscribed employees</span>
-          </label>
-          <p class="form-note">Important and urgent updates notify employees automatically. Routine updates stay in the feed unless you choose to send an alert.</p>
           <div class="form-actions">
             <button class="button" type="submit">${icon("send")} Publish</button>
           </div>
@@ -3638,7 +3460,6 @@ function renderAdminHistoryPanel() {
         <div>
           <p class="eyebrow">${icon("board")} Update history</p>
           <h2>Published updates</h2>
-          <p>Narrow the feed with a dropdown before deleting or reviewing older updates.</p>
         </div>
         <div class="panel-toolbar">
           ${renderFilterSelect({
@@ -3669,6 +3490,7 @@ function renderHistoryTable(posts) {
             <th>Category</th>
             <th>Priority</th>
             <th>Audience</th>
+            <th>Target</th>
             <th>Alert</th>
             <th>Retention</th>
             <th>Actions</th>
@@ -3710,6 +3532,9 @@ function renderHistoryTableRow(post) {
       </td>
       <td>
         <div class="admin-table-primary">${escapeHtml(post.audience || "All Employees")}</div>
+      </td>
+      <td>
+        <span class="admin-table-chip">${escapeHtml(formatDeliveryTargetLabel(post.deliveryTarget))}</span>
       </td>
       <td>
         <span class="admin-table-chip ${post.notifyEmployees ? "is-info" : "is-muted"}">${escapeHtml(post.notifyEmployees ? "Sent" : "No")}</span>
@@ -3866,7 +3691,6 @@ function renderAdminSecurityPanel() {
         <div>
           <p class="eyebrow">${icon("alert")} Security visibility</p>
           <h2>Recent auth events</h2>
-          <p>Review the latest failed logins, throttles, and lockouts across HR, Systems, and employee sign-in.</p>
         </div>
         <span class="sync-pill">Persisted</span>
       </div>
@@ -3876,7 +3700,6 @@ function renderAdminSecurityPanel() {
           <div>
             <p class="eyebrow">${icon("lock")} Auth pressure</p>
             <h3>Current snapshot</h3>
-            <p>These counters are drawn from the most recent persisted security events.</p>
           </div>
         </div>
         <div class="hero-strip hero-strip-hr" aria-label="Security summary">
@@ -3904,27 +3727,19 @@ function renderRoleSettingsHero(route) {
         <div class="settings-hero-copy">
           <p class="eyebrow">${icon("lock")} Settings</p>
           <h2>${escapeHtml(role)} account settings</h2>
-          <p>${escapeHtml(
-            route === "webmaster"
-              ? "Keep diagnostics and system review in the operational tabs. Use this space for identity, credential, and account maintenance."
-              : "Keep publishing and employee operations in the working tabs. Use this space only for HR account and credential maintenance."
-          )}</p>
         </div>
         <div class="settings-chip-grid" aria-label="${escapeHtml(role)} settings summary">
           <div class="settings-chip">
             <span>Surface</span>
             <strong>Settings Only</strong>
-            <small>Sensitive controls stay out of the daily workflow.</small>
           </div>
           <div class="settings-chip">
             <span>Session rule</span>
             <strong>Contained</strong>
-            <small>Other active sessions for this account are signed out after a password change.</small>
           </div>
           <div class="settings-chip">
             <span>Last password change</span>
             <strong>${escapeHtml(passwordStatus ? formatDate(passwordStatus.changedAt) : "Not changed in this session")}</strong>
-            <small>${escapeHtml(passwordStatus ? "Verified in the current session." : "No local confirmation yet.")}</small>
           </div>
         </div>
       </div>
@@ -3941,22 +3756,21 @@ function renderPrivilegedPasswordPanel(route) {
         <div>
           <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} Credentials</p>
           <h3>Change ${escapeHtml(role)} Password</h3>
-          <p>Update the password for this account.</p>
         </div>
       </div>
       <form class="auth-form" data-privileged-password-form data-role-route="${escapeHtml(route)}">
         <div class="composer-grid">
           <label class="field">
             <span>Current Password</span>
-            <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password" placeholder="Current ${escapeHtml(role)} Password">
+            <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password">
           </label>
           <label class="field">
             <span>New Password</span>
-            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New ${escapeHtml(role)} Password">
+            <input name="password" type="password" minlength="10" required autocomplete="new-password">
           </label>
           <label class="field field-span-2">
             <span>Confirm New Password</span>
-            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat The New Password">
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password">
           </label>
         </div>
         <div class="auth-form-actions">
@@ -3974,18 +3788,17 @@ function renderWebmasterHrResetPanel() {
         <div>
           <p class="eyebrow">${icon("users")} HR recovery</p>
           <h3>Reset the HR password</h3>
-          <p>Use Systems authority to rotate the HR password and immediately sign out existing HR sessions.</p>
         </div>
       </div>
       <form class="auth-form" data-webmaster-reset-hr-password-form>
         <div class="composer-grid">
           <label class="field">
             <span>New HR password</span>
-            <input name="password" type="password" minlength="10" required autocomplete="new-password" placeholder="New HR password">
+            <input name="password" type="password" minlength="10" required autocomplete="new-password">
           </label>
           <label class="field">
             <span>Confirm new HR password</span>
-            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password" placeholder="Repeat the new password">
+            <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password">
           </label>
         </div>
         <div class="auth-form-actions">
@@ -4010,29 +3823,6 @@ function renderWebmasterSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
       ${renderRoleSettingsHero("webmaster")}
-
-      <section class="panel-card settings-context-card">
-        <div class="panel-title panel-title-wide">
-          <div>
-            <p class="eyebrow">${icon("monitor")} Control boundary</p>
-            <h3>Keep diagnostics separate from credentials</h3>
-            <p>The systems console should feel analytical and calm. Credential changes belong in a separate settings surface so operators do not treat security actions like routine navigation.</p>
-          </div>
-        </div>
-
-        <div class="settings-context-grid">
-          <div class="settings-context-item">
-            <span>Operational tabs</span>
-            <strong>Overview, traffic, system, content, Codex</strong>
-            <small>System review remains uncluttered and fast to scan.</small>
-          </div>
-          <div class="settings-context-item">
-            <span>Credential action</span>
-            <strong>Isolated under settings</strong>
-            <small>Changing the systems password signs out other active sessions for that account immediately.</small>
-          </div>
-        </div>
-      </section>
 
       ${renderPrivilegedPasswordPanel("webmaster")}
       ${state.access.webmaster.user?.mfa?.available ? renderAdminMfaPanel("webmaster") : ""}
@@ -4064,8 +3854,7 @@ function renderWebmasterOverviewPanel() {
       <div class="panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("chart")} Power Center</p>
-          <h2>Systems overview</h2>
-          <p>Quick status for the site, the host, and the copy-ready brief.</p>
+          <h2>Systems Overview</h2>
         </div>
         <span class="sync-pill">${icon("check")} Live snapshot</span>
       </div>
@@ -4151,7 +3940,6 @@ function renderWebmasterTrafficPanel() {
         <div>
           <p class="eyebrow">${icon("refresh")} Traffic</p>
           <h2>Request activity</h2>
-          <p>These counts show how the site is being used and where errors are happening.</p>
         </div>
       </div>
 
@@ -4241,7 +4029,6 @@ function renderWebmasterSystemPanel() {
         <div>
           <p class="eyebrow">${icon("monitor")} System</p>
           <h2>Host and device diagnostics</h2>
-          <p>Use this tab to see the server, browser, and performance environment behind the portal.</p>
         </div>
       </div>
 
@@ -4338,7 +4125,6 @@ function renderWebmasterContentPanel() {
         <div>
           <p class="eyebrow">${icon("board")} Content</p>
           <h2>Portal inventory</h2>
-          <p>See what is live, what is urgent, and what is about to expire.</p>
         </div>
       </div>
 
@@ -4415,7 +4201,6 @@ function renderWebmasterCodexPanel() {
         <div>
           <p class="eyebrow">${icon("clipboard")} Codex</p>
           <h2>Copy the incident brief</h2>
-          <p>Use these buttons to move the snapshot into Codex without rebuilding the context by hand.</p>
         </div>
       </div>
 
@@ -4548,7 +4333,6 @@ function renderItCompanySettingsPanel() {
           <div>
             <p class="eyebrow">${icon("board")} Company Settings</p>
             <h3>Business Control</h3>
-            <p>Use this area for company profile, billing contact, data-retention, and compliance defaults once those services are connected.</p>
           </div>
           <span class="sync-pill">Planned</span>
         </div>
@@ -4589,7 +4373,6 @@ function renderItEmergencyPanel() {
           <div>
             <p class="eyebrow">${icon("alert")} Emergency Access</p>
             <h3>Recovery Readiness</h3>
-            <p>Keep at least two active named IT accounts. Do not use shared master credentials for emergency access.</p>
           </div>
           <span class="sync-pill">${escapeHtml(`${activeItAdmins.length} Active IT Account${activeItAdmins.length === 1 ? "" : "s"}`)}</span>
         </div>
@@ -4724,7 +4507,6 @@ async function routeTo(route) {
   resetAdminInviteState();
 
   if (route === "launcher") {
-    clearAdminGatewayPass();
     activeAdminTab = "publish";
     activeHistoryFilter = "All";
     activeWebmasterTab = "overview";
@@ -4758,17 +4540,8 @@ async function hydrateRoute() {
     return;
   }
 
-  if (route === "admin") {
-    return;
-  }
-
   if (route === "hr") {
     await refreshAdminData();
-    if (!shouldAllowSignedOutAdminRoute("hr", state.access.hr)) {
-      window.history.replaceState({}, "", routePath("launcher"));
-      resetAdminInviteState();
-      return;
-    }
     if (!state.access.hr.authorized && currentInviteToken()) {
       await loadAdminInvitePreview("hr");
     } else {
@@ -4779,22 +4552,12 @@ async function hydrateRoute() {
 
   if (route === "it") {
     await refreshItData();
-    if (!shouldAllowSignedOutAdminRoute("it", state.access.it)) {
-      window.history.replaceState({}, "", routePath("launcher"));
-      resetAdminInviteState();
-      return;
-    }
     resetAdminInviteState();
     return;
   }
 
   if (route === "webmaster") {
     await refreshWebmasterData();
-    if (!shouldAllowSignedOutAdminRoute("webmaster", state.access.webmaster)) {
-      window.history.replaceState({}, "", routePath("launcher"));
-      resetAdminInviteState();
-      return;
-    }
     if (!state.access.webmaster.authorized && currentInviteToken()) {
       await loadAdminInvitePreview("webmaster");
     } else {
@@ -4835,8 +4598,6 @@ function render() {
     ? '<main class="auth-shell"><section class="empty-state">Loading portal...</section></main>'
     : route === "launcher"
       ? renderLauncher()
-    : route === "admin"
-      ? renderAdminGateway()
     : route === "hr"
         ? (state.access.hr.authorized ? renderAdmin() : renderAdminAuthGate("hr"))
       : route === "it"
@@ -4846,8 +4607,6 @@ function render() {
           : (state.access.employee.authorized ? renderEmployee() : renderEmployeeAuthGate());
   document.title = route === "launcher"
     ? APP_DISPLAY_TITLE
-    : route === "admin"
-    ? `${APP_DISPLAY_TITLE} Admin`
     : route === "it"
     ? `${APP_DISPLAY_TITLE} IT`
     : route === "hr"
@@ -4967,6 +4726,7 @@ async function handlePostSubmit(event) {
     const result = await createPost(data);
     form.reset();
     form.elements.audience.value = "All Employees";
+    form.elements.deliveryTarget.value = "feed";
     form.elements.alertRetention.value = "48h";
     if (result.notification?.error) {
       setMessage(`Published, but alert delivery failed: ${result.notification.error}`, "warning");
@@ -5750,7 +5510,6 @@ document.addEventListener("click", async (event) => {
   if (target.closest("input, select, textarea, label")) return;
 
   const routeButton = target.closest("button[data-route], a[data-route], [role='button'][data-route]");
-  const adminEntryButton = target.closest("[data-admin-entry-route]");
   const openAuthRecoveryButton = target.closest("[data-open-auth-recovery]");
   const closeAuthRecoveryButton = target.closest("[data-close-auth-recovery]");
   const tabButton = target.closest("[data-tab]");
@@ -5778,17 +5537,6 @@ document.addEventListener("click", async (event) => {
   if (routeButton) {
     event.preventDefault();
     await routeTo(routeButton.dataset.route);
-    return;
-  }
-
-  if (adminEntryButton) {
-    event.preventDefault();
-    const route = String(adminEntryButton.dataset.adminEntryRoute || "");
-
-    if (HIDDEN_ADMIN_ROUTES.has(route)) {
-      grantAdminGatewayPass(route);
-      await routeTo(route);
-    }
     return;
   }
 
@@ -5897,7 +5645,6 @@ document.addEventListener("click", async (event) => {
       method: "POST",
       body: JSON.stringify({})
     });
-    clearAdminGatewayPass();
     clearAdminMfaState(route);
     if (route === "it") {
       state.access.it = {
@@ -6166,10 +5913,10 @@ app.addEventListener("change", (event) => {
   }
 
   const form = event.target.form;
-  const checkbox = form?.elements.namedItem("notifyEmployees");
+  const deliveryTarget = form?.elements.namedItem("deliveryTarget");
 
-  if (checkbox instanceof HTMLInputElement) {
-    checkbox.checked = event.target.value !== "Normal";
+  if (deliveryTarget instanceof HTMLSelectElement && event.target.value !== "Normal" && deliveryTarget.value === "feed") {
+    deliveryTarget.value = "both";
   }
 });
 

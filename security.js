@@ -139,7 +139,6 @@ function accessCookieNames() {
   return {
     admin: "palziv_hr_auth",
     hr: "palziv_hr_auth",
-    legacyHr: "palziv_admin_auth",
     it: "palziv_it_auth",
     webmaster: "palziv_webmaster_auth",
     employee: "palziv_employee_auth"
@@ -570,24 +569,12 @@ function normalizeAdminSessions(input = {}, adminUsers = []) {
       }
     }
   };
-  const itUser = findConfiguredRoleUser(adminUsers, "it");
-  const hrUser = findConfiguredRoleUser(adminUsers, "hr");
-  const webmasterUser = findConfiguredRoleUser(adminUsers, "webmaster");
   const canonicalAdminSessions = Array.isArray(input.adminSessions) ? input.adminSessions : [];
-  const legacyAdminSessions = Array.isArray(input.hrSessions) ? input.hrSessions : [];
-  const legacyWebmasterSessions = Array.isArray(input.webmasterSessions) ? input.webmasterSessions : [];
 
   addSessions(
     canonicalAdminSessions.filter((session) => cleanText(session?.adminUserId, 80) && cleanText(session?.role, 40)),
     {}
   );
-  addSessions(
-    canonicalAdminSessions.filter((session) => !cleanText(session?.adminUserId, 80) || !cleanText(session?.role, 40)),
-    hrUser ? { adminUserId: hrUser.id, role: "hr" } : {}
-  );
-  addSessions(legacyAdminSessions, hrUser ? { adminUserId: hrUser.id, role: "hr" } : {});
-  addSessions(legacyWebmasterSessions, webmasterUser ? { adminUserId: webmasterUser.id, role: "webmaster" } : {});
-  addSessions(Array.isArray(input.itSessions) ? input.itSessions : [], itUser ? { adminUserId: itUser.id, role: "it" } : {});
 
   return sessions;
 }
@@ -1517,7 +1504,7 @@ function activeCookieValues(req = {}, names = []) {
 
 function requireHrManagerAccess(data, req = {}) {
   const cookieNames = accessCookieNames();
-  const access = findValidRoleSession(data, "hr", activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]));
+  const access = findValidRoleSession(data, "hr", activeCookieValue(req, [cookieNames.hr]));
 
   if (!access) {
     throw new Error("You must be signed in as HR.");
@@ -1620,7 +1607,7 @@ function accessCookieNamesForRole(role = "") {
     ? [cookieNames.it]
     : role === "webmaster"
       ? [cookieNames.webmaster]
-      : [cookieNames.hr, cookieNames.legacyHr];
+      : [cookieNames.hr];
 }
 
 function requireRoleSessionForMfa(data, req = {}, role = "") {
@@ -1875,7 +1862,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     }
 
     const cookieNames = getAccessCookieNames();
-    const access = findValidRoleSession(data, "hr", activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]));
+    const access = findValidRoleSession(data, "hr", activeCookieValue(req, [cookieNames.hr]));
 
     if (!access) {
       return {
@@ -2364,7 +2351,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
   async function logoutAdmin(req = {}) {
     await init();
     const cookieNames = getAccessCookieNames();
-    const sessionIds = activeCookieValues(req, [cookieNames.hr, cookieNames.legacyHr]);
+    const sessionIds = activeCookieValues(req, [cookieNames.hr]);
 
     if (!sessionIds.length) {
       return { removed: false };
@@ -3898,7 +3885,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
 
     return updateData((data) => {
       const cookieNames = getAccessCookieNames();
-      const activeSessionId = activeCookieValue(req, [cookieNames.hr, cookieNames.legacyHr]);
+      const activeSessionId = activeCookieValue(req, [cookieNames.hr]);
       const access = findValidRoleSession(data, "hr", activeSessionId);
 
       if (!access) {

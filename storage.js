@@ -7,6 +7,7 @@ import { createDefaultWeather, normalizeStoredWeather } from "./weather.js";
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
+const allowedDeliveryTargets = new Set(["feed", "alert", "both"]);
 const DEFAULT_BOARD_SEED_FILE = fileURLToPath(new URL("./data/board.seed.json", import.meta.url));
 
 function nowIso() {
@@ -53,6 +54,7 @@ function createDefaultSeedData() {
         id: "seed-weather-1",
         type: "Weather",
         priority: "Important",
+        deliveryTarget: "both",
         notifyEmployees: true,
         title: "Rain expected during evening commute",
         body: "Keep walkways clear and use the south entrance if the front lot becomes congested.",
@@ -65,6 +67,7 @@ function createDefaultSeedData() {
         id: "seed-news-1",
         type: "News",
         priority: "Normal",
+        deliveryTarget: "feed",
         notifyEmployees: false,
         title: "Open enrollment reminder",
         body: "Benefits selections are due Friday. HR is available from 10:00 AM to 3:00 PM for questions.",
@@ -77,6 +80,7 @@ function createDefaultSeedData() {
         id: "seed-safety-1",
         type: "Safety",
         priority: "Urgent",
+        deliveryTarget: "both",
         notifyEmployees: true,
         title: "Loading dock inspection today",
         body: "Dock 2 is closed from 1:00 PM to 4:00 PM. Use Dock 1 for scheduled deliveries.",
@@ -110,15 +114,23 @@ function normalizeStoredPost(post = {}) {
   const title = cleanText(post.title, 90);
   const body = cleanLongText(post.body, 700);
   const expiresAt = cleanText(post.expiresAt, 10);
+  const rawDeliveryTarget = cleanText(post.deliveryTarget, 16).toLowerCase();
+  const hasExplicitDeliveryTarget = allowedDeliveryTargets.has(rawDeliveryTarget);
+  const legacyNotifyEmployees =
+    parseBooleanish(post.notifyEmployees) ||
+    post.priority === "Important" ||
+    post.priority === "Urgent";
+  const deliveryTarget = hasExplicitDeliveryTarget
+    ? rawDeliveryTarget
+    : (legacyNotifyEmployees ? "both" : "feed");
+  const notifyEmployees = deliveryTarget !== "feed";
 
   return {
     id: cleanText(post.id, 128) || crypto.randomUUID(),
     type: allowedTypes.has(post.type) ? post.type : "News",
     priority: allowedPriorities.has(post.priority) ? post.priority : "Normal",
-    notifyEmployees:
-      parseBooleanish(post.notifyEmployees) ||
-      post.priority === "Important" ||
-      post.priority === "Urgent",
+    deliveryTarget,
+    notifyEmployees,
     title: title || "Untitled post",
     body,
     audience: cleanText(post.audience || "All employees", 80),

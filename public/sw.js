@@ -10,7 +10,7 @@ const SHELL_ASSETS = [
   "/device-setup.js",
   "/manifest.webmanifest",
   "/assets/logo.svg",
-  "/assets/palziv-logo-transparent.png?v=20260617c",
+  "/assets/palziv-logo-transparent.png?v=20260625b",
   "/assets/palziv-wordmark.png"
 ];
 
@@ -75,8 +75,8 @@ self.addEventListener("push", (event) => {
     (async () => {
       await self.registration.showNotification(title, {
         body: String(payload.body || fallback.body),
-        icon: "/assets/palziv-logo-transparent.png?v=20260617c",
-        badge: "/assets/palziv-logo-transparent.png?v=20260617c",
+        icon: "/assets/palziv-logo-transparent.png?v=20260625b",
+        badge: "/assets/palziv-logo-transparent.png?v=20260625b",
         tag,
         renotify: Boolean(payload.renotify),
         requireInteraction: Boolean(payload.requireInteraction),

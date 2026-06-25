@@ -44,11 +44,13 @@ Internal staff access:
 
 `https://itotexpress.com/palzivalerts`
 
-Admin gateway:
+Direct admin routes:
 
-`https://itotexpress.com/palzivalerts/admin`
+- HR: `https://itotexpress.com/palzivalerts/hr`
+- Systems and Analytics: `https://itotexpress.com/palzivalerts/webmaster`
+- IT: `https://itotexpress.com/palzivalerts/it`
 
-Use the internal launcher or admin gateway for HR, Systems and Analytics, and IT access. Do not distribute admin access links in employee-facing communication.
+Use the internal launcher or the direct HR, Systems and Analytics, or IT routes for staff access. Do not distribute admin access links in employee-facing communication.
 
 Reminder:
 

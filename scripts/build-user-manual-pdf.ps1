@@ -17,7 +17,9 @@ New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
 $routes = @(
     @{ name = '01-launcher';     url = "$resolvedBaseUrl/palzivalerts";            label = 'Launcher page (/palzivalerts)' },
     @{ name = '02-employee';     url = "$resolvedBaseUrl/palzivalerts/employee";   label = 'Employee login and feed view (/palzivalerts/employee)' },
-    @{ name = '03-admin';        url = "$resolvedBaseUrl/palzivalerts/admin";      label = 'Admin gateway for HR, Systems, and IT access (/palzivalerts/admin)' }
+    @{ name = '03-hr';           url = "$resolvedBaseUrl/palzivalerts/hr";         label = 'HR login route (/palzivalerts/hr)' },
+    @{ name = '04-webmaster';    url = "$resolvedBaseUrl/palzivalerts/webmaster";  label = 'Systems login route (/palzivalerts/webmaster)' },
+    @{ name = '05-it';           url = "$resolvedBaseUrl/palzivalerts/it";         label = 'IT login route (/palzivalerts/it)' }
 )
 
 foreach ($r in $routes) {
@@ -25,7 +27,7 @@ foreach ($r in $routes) {
     npx playwright screenshot --device="iPhone 13" --wait-for-timeout=1200 $r.url $out
 }
 
-$markdownHtml = & npx -y marked --gfm $mdPath
+$markdownHtml = ((& npx -y marked --gfm $mdPath) | Out-String).TrimEnd()
 
 $header = @"
 <!doctype html>
@@ -100,7 +102,7 @@ $shotBlock += @"
 </body></html>
 "@
 
-$manualHtml = $header + "`n`n" + $markdownHtml + "`n`n" + $shotBlock
+$manualHtml = ($header + "`n`n" + $markdownHtml + "`n`n" + $shotBlock).TrimEnd()
 Set-Content -Encoding UTF8 -Path $htmlPath -Value $manualHtml
 
 npx playwright pdf "file:///$($htmlPath -replace '\\','/')" $pdfPath --viewport-size "1240,1754" --wait-for-timeout 1200
