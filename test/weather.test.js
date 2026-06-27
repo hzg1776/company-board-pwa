@@ -28,6 +28,10 @@ test("createDefaultWeather returns a placeholder snapshot", () => {
   assert.equal(weather.resolvedName, "");
   assert.equal(weather.condition, "Weather not configured");
   assert.equal(weather.temperature, "--");
+  assert.equal(weather.highTemperature, "--");
+  assert.equal(weather.lowTemperature, "--");
+  assert.equal(weather.sunrise, "");
+  assert.equal(weather.sunset, "");
   assert.equal(weather.level, "Clear");
   assert.equal(weather.updatedAt, "");
 });
@@ -38,6 +42,10 @@ test("normalizeStoredWeather preserves stored weather fields", () => {
     resolvedName: "Austin, Texas, United States",
     condition: "Light rain",
     temperature: "68 F",
+    highTemperature: "74 F",
+    lowTemperature: "61 F",
+    sunrise: "6:14 AM",
+    sunset: "8:31 PM",
     impact: "Wet floors possible.",
     level: "Watch",
     updatedAt: "2026-06-12T12:00:00.000Z"
@@ -48,6 +56,10 @@ test("normalizeStoredWeather preserves stored weather fields", () => {
     resolvedName: "Austin, Texas, United States",
     condition: "Light rain",
     temperature: "68 F",
+    highTemperature: "74 F",
+    lowTemperature: "61 F",
+    sunrise: "6:14 AM",
+    sunset: "8:31 PM",
     impact: "Wet floors possible.",
     level: "Watch",
     updatedAt: "2026-06-12T12:00:00.000Z"
@@ -108,6 +120,12 @@ test("resolveLiveWeather looks up geocoding and current weather", async () => {
           temperature: 84.2,
           weathercode: 61,
           windspeed: 11.8
+        },
+        daily: {
+          temperature_2m_max: [91.4],
+          temperature_2m_min: [73.6],
+          sunrise: ["2026-06-25T06:21"],
+          sunset: ["2026-06-25T20:34"]
         }
       });
     }
@@ -124,6 +142,10 @@ test("resolveLiveWeather looks up geocoding and current weather", async () => {
   assert.equal(weather.resolvedName, "Dallas, Texas, United States");
   assert.equal(weather.condition, "Light rain");
   assert.equal(weather.temperature, "84°F");
+  assert.equal(weather.highTemperature, "91°F");
+  assert.equal(weather.lowTemperature, "74°F");
+  assert.equal(weather.sunrise, "6:21 AM");
+  assert.equal(weather.sunset, "8:34 PM");
   assert.equal(weather.level, "Watch");
   assert.match(weather.impact, /Wet floors possible/);
   assert.match(weather.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -161,6 +183,12 @@ test("resolveLiveWeather retries simplified location terms", async () => {
           temperature: 84.2,
           weathercode: 3,
           windspeed: 8
+        },
+        daily: {
+          temperature_2m_max: [90],
+          temperature_2m_min: [72],
+          sunrise: ["2026-06-25T06:21"],
+          sunset: ["2026-06-25T20:34"]
         }
       });
     }
@@ -220,6 +248,18 @@ test("resolveLiveWeather falls back to wttr when Open-Meteo is rate limited", as
             weatherCode: "113",
             windspeedMiles: "9"
           }
+        ],
+        weather: [
+          {
+            maxtempF: "96",
+            mintempF: "77",
+            astronomy: [
+              {
+                sunrise: "06:33 AM",
+                sunset: "08:29 PM"
+              }
+            ]
+          }
         ]
       });
     }
@@ -238,6 +278,10 @@ test("resolveLiveWeather falls back to wttr when Open-Meteo is rate limited", as
   assert.equal(weather.resolvedName, "Austin, Texas, United States of America");
   assert.equal(weather.condition, "Clear");
   assert.equal(weather.temperature, "89°F");
+  assert.equal(weather.highTemperature, "96°F");
+  assert.equal(weather.lowTemperature, "77°F");
+  assert.equal(weather.sunrise, "6:33 AM");
+  assert.equal(weather.sunset, "8:29 PM");
   assert.equal(weather.level, "Clear");
   assert.equal(weather.impact, "Normal operations.");
 });

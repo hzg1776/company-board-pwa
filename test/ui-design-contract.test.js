@@ -128,8 +128,12 @@ test("employee weather renders as a full isolated detail card", async () => {
   assert.match(app, /class="employee-weather-temperature"/);
   assert.match(app, /class="employee-weather-details"/);
   assert.match(app, />Current weather</);
+  assert.match(app, />High</);
+  assert.match(app, />Low</);
   assert.match(app, />Local time</);
   assert.match(app, />Last refreshed</);
+  assert.match(app, />Sunrise</);
+  assert.match(app, />Sunset</);
   assert.doesNotMatch(app, /const weatherLevel = String\(weather\.level/);
 
   assert.equal(getDeclarationValue(weatherCardBody, "display"), "grid");

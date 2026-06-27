@@ -1761,6 +1761,10 @@ function defaultWeather() {
     resolvedName: "",
     condition: "Weather not configured",
     temperature: "--",
+    highTemperature: "--",
+    lowTemperature: "--",
+    sunrise: "",
+    sunset: "",
     impact: "Enter a location in HR to fetch live weather.",
     level: "Clear",
     updatedAt: ""
@@ -2652,9 +2656,13 @@ function renderEmployeeWeatherCard() {
   const weather = state.weather || defaultWeather();
   const condition = String(weather.condition || "Weather not configured");
   const temperature = String(weather.temperature || "--");
+  const highTemperature = String(weather.highTemperature || "--");
+  const lowTemperature = String(weather.lowTemperature || "--");
   const level = String(weather.level || "Clear");
   const location = String(weather.resolvedName || weather.location || "No location configured");
   const impact = String(weather.impact || "Normal operations.");
+  const sunrise = String(weather.sunrise || "Not available");
+  const sunset = String(weather.sunset || "Not available");
   const updatedLabel = weather.updatedAt
     ? `${formatDate(weather.updatedAt)} · ${formatTime(weather.updatedAt)}`
     : "Not refreshed";
@@ -2683,8 +2691,24 @@ function renderEmployeeWeatherCard() {
           <dd>${escapeHtml(level)}</dd>
         </div>
         <div>
+          <dt>High</dt>
+          <dd>${escapeHtml(highTemperature)}</dd>
+        </div>
+        <div>
+          <dt>Low</dt>
+          <dd>${escapeHtml(lowTemperature)}</dd>
+        </div>
+        <div>
           <dt>Local time</dt>
           <dd>${escapeHtml(localTimeLabel)}</dd>
+        </div>
+        <div>
+          <dt>Sunrise</dt>
+          <dd>${escapeHtml(sunrise)}</dd>
+        </div>
+        <div>
+          <dt>Sunset</dt>
+          <dd>${escapeHtml(sunset)}</dd>
         </div>
         <div>
           <dt>Last refreshed</dt>

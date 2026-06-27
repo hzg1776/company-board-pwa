@@ -68,6 +68,10 @@ function createDefaultWeather() {
     resolvedName: "",
     condition: "Weather not configured",
     temperature: "--",
+    highTemperature: "--",
+    lowTemperature: "--",
+    sunrise: "",
+    sunset: "",
     impact: "Enter a location in Admin to fetch live weather.",
     level: "Clear",
     updatedAt: ""
@@ -108,6 +112,10 @@ function normalizeStoredWeather(input) {
     resolvedName: cleanText(input.resolvedName, 120),
     condition: cleanText(input.condition, 80) || "Weather not configured",
     temperature: cleanText(input.temperature, 24) || "--",
+    highTemperature: cleanText(input.highTemperature, 24) || "--",
+    lowTemperature: cleanText(input.lowTemperature, 24) || "--",
+    sunrise: cleanText(input.sunrise, 40),
+    sunset: cleanText(input.sunset, 40),
     impact: cleanLongText(input.impact, 300) || "Enter a location in Admin to fetch live weather.",
     level,
     updatedAt: cleanText(input.updatedAt, 40)
@@ -206,6 +214,35 @@ function formatTemperature(value) {
   return `${Math.round(number)}°F`;
 }
 
+function formatClockTime(value) {
+  const text = cleanText(value, 40);
+
+  if (!text) {
+    return "";
+  }
+
+  const explicitClock = text.match(/^0?(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if (explicitClock) {
+    return `${Number(explicitClock[1])}:${explicitClock[2]} ${explicitClock[3].toUpperCase()}`;
+  }
+
+  const clockMatch = text.match(/(?:T|^)(\d{1,2}):(\d{2})/);
+  if (!clockMatch) {
+    return text;
+  }
+
+  const hour = Number(clockMatch[1]);
+  const minute = clockMatch[2];
+
+  if (!Number.isFinite(hour)) {
+    return text;
+  }
+
+  const period = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${minute} ${period}`;
+}
+
 function buildImpactFromDetails(details, windSpeed) {
   const parts = [details.impact];
 
@@ -282,6 +319,8 @@ async function resolveOpenMeteoWeather(location, fetchImpl) {
     latitude: String(match.latitude),
     longitude: String(match.longitude),
     current_weather: "true",
+    daily: "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+    forecast_days: "1",
     timezone: "auto",
     temperature_unit: "fahrenheit",
     windspeed_unit: "mph"
@@ -295,12 +334,17 @@ async function resolveOpenMeteoWeather(location, fetchImpl) {
   }
 
   const details = weatherDetailsForCode(current.weathercode);
+  const daily = forecast.daily || {};
 
   return {
     location,
     resolvedName: formatResolvedName(match),
     condition: details.condition,
     temperature: formatTemperature(current.temperature),
+    highTemperature: formatTemperature(daily.temperature_2m_max?.[0]),
+    lowTemperature: formatTemperature(daily.temperature_2m_min?.[0]),
+    sunrise: formatClockTime(daily.sunrise?.[0]),
+    sunset: formatClockTime(daily.sunset?.[0]),
     impact: buildImpactFromDetails(details, current.windspeed),
     level: details.level,
     updatedAt: nowIso()
@@ -323,6 +367,8 @@ async function resolveWttrWeather(location, fetchImpl) {
   }
 
   const details = weatherDetailsFromDescription(current.weatherDesc?.[0]?.value);
+  const day = weather.weather?.[0] || {};
+  const astronomy = day.astronomy?.[0] || {};
 
   return {
     location,
@@ -333,6 +379,10 @@ async function resolveWttrWeather(location, fetchImpl) {
     }),
     condition: details.condition,
     temperature: formatTemperature(current.temp_F),
+    highTemperature: formatTemperature(day.maxtempF),
+    lowTemperature: formatTemperature(day.mintempF),
+    sunrise: formatClockTime(astronomy.sunrise),
+    sunset: formatClockTime(astronomy.sunset),
     impact: buildImpactFromDetails(details, current.windspeedMiles),
     level: details.level,
     updatedAt: nowIso()
