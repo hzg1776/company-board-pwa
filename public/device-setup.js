@@ -12,3 +12,7 @@ export function resolveDeviceSetupAction({ submitterAction, primaryActionId } = 
 
   return "profile";
 }
+
+export function resolveDeviceSetupSecondaryAction({ hasCurrentDevice } = {}) {
+  return hasCurrentDevice ? "disable-alerts" : null;
+}

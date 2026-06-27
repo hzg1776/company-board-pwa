@@ -2,6 +2,7 @@ const OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search
 const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 const WTTR_URL = "https://wttr.in";
 const WEATHER_LEVELS = new Set(["Clear", "Watch", "Warning"]);
+const DEFAULT_AUTO_WEATHER_LOCATION = "27549";
 
 const WEATHER_LOOKUP = new Map([
   [0, { condition: "Clear sky", level: "Clear", impact: "Normal operations." }],
@@ -71,6 +72,28 @@ function createDefaultWeather() {
     level: "Clear",
     updatedAt: ""
   };
+}
+
+function resolveAutoWeatherLocation(weather, fallbackLocation = DEFAULT_AUTO_WEATHER_LOCATION) {
+  const storedLocation = cleanText(weather?.location, 120);
+  const fallback = cleanText(fallbackLocation, 120);
+  return storedLocation || fallback;
+}
+
+function shouldAutoRefreshWeather(weather, refreshMs, nowMs = Date.now(), fallbackLocation = DEFAULT_AUTO_WEATHER_LOCATION) {
+  const intervalMs = Math.max(60_000, Number(refreshMs) || 0);
+  const targetLocation = resolveAutoWeatherLocation(weather, fallbackLocation);
+
+  if (!targetLocation) {
+    return false;
+  }
+
+  const updatedAtMs = Date.parse(cleanText(weather?.updatedAt, 40));
+  if (!Number.isFinite(updatedAtMs)) {
+    return true;
+  }
+
+  return nowMs - updatedAtMs >= intervalMs;
 }
 
 function normalizeStoredWeather(input) {
@@ -365,10 +388,13 @@ async function resolveLiveWeather(locationInput, fetchImpl = globalThis.fetch) {
 export {
   buildImpact,
   createDefaultWeather,
+  DEFAULT_AUTO_WEATHER_LOCATION,
   formatResolvedName,
   formatTemperature,
   normalizeStoredWeather,
   resolveLiveWeather,
+  resolveAutoWeatherLocation,
+  shouldAutoRefreshWeather,
   weatherDetailsForCode,
   weatherDetailsFromDescription
 };

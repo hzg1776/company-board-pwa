@@ -11,7 +11,12 @@ import { createNotificationHub } from "./notifications.js";
 import { createBoardStore } from "./storage.js";
 import { createSecurityStore } from "./security.js";
 import { normalizeRelativeAppPath } from "./url-safety.js";
-import { resolveLiveWeather } from "./weather.js";
+import {
+  DEFAULT_AUTO_WEATHER_LOCATION,
+  resolveAutoWeatherLocation,
+  resolveLiveWeather,
+  shouldAutoRefreshWeather
+} from "./weather.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +56,8 @@ const RECOVERY_TIME_ZONE = "America/New_York";
 const ALERT_RETENTION_DAYS = Math.max(1, Number(process.env.ALERT_RETENTION_DAYS || 2));
 const ALERT_RETENTION_MS = ALERT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const ALERT_CLEANUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.ALERT_CLEANUP_INTERVAL_MS || 24 * 60 * 60 * 1000));
+const WEATHER_AUTO_REFRESH_LOCATION = cleanText(process.env.WEATHER_AUTO_REFRESH_LOCATION || DEFAULT_AUTO_WEATHER_LOCATION, 120) || DEFAULT_AUTO_WEATHER_LOCATION;
+const WEATHER_AUTO_REFRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.WEATHER_AUTO_REFRESH_MS || 60 * 60 * 1000));
 const MAX_BODY_BYTES = 1_000_000;
 const EMPLOYEE_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const DEFAULT_SITE_CONFIG = Object.freeze({
@@ -62,6 +69,7 @@ const DEFAULT_SITE_CONFIG = Object.freeze({
   themeColor: "#F2F2F7",
   backgroundColor: "#F2F2F7"
 });
+const SERVER_STARTED_AT = nowIso();
 
 function readSiteConfig() {
   const name = cleanText(process.env.SITE_NAME, 80) || DEFAULT_SITE_CONFIG.name;
@@ -83,6 +91,10 @@ function readSiteConfig() {
   };
 }
 
+function parseBoolean(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
 const siteConfig = readSiteConfig();
 const ASSET_VERSION_PATHS = [
   path.join(PUBLIC_DIR, "app.js"),
@@ -95,7 +107,7 @@ const ASSET_VERSION_PATHS = [
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
 const allowedPriorities = new Set(["Normal", "Important", "Urgent"]);
 const allowedDeliveryTargets = new Set(["feed", "alert", "both"]);
-const allowedAlertRetention = new Set(["24h", "48h", "168h", "manual"]);
+const allowedAlertRetention = new Set(["24h", "48h", "168h", "720h", "manual"]);
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -122,9 +134,14 @@ const securityStore = createSecurityStore({
   dataFile: SECURITY_DATA_FILE,
   adminMfaEnabled: ADMIN_MFA_ENABLED
 });
+let weatherRefreshInFlight = null;
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function uptimeSeconds() {
+  return Math.max(0, Math.round((Date.now() - Date.parse(SERVER_STARTED_AT)) / 1000));
 }
 
 function readLocalBootstrapToken(filePath) {
@@ -482,7 +499,7 @@ function pruneOldAlertPosts(posts, now = Date.now()) {
 
     const retentionMode = allowedAlertRetention.has(post?.alertRetention)
       ? post.alertRetention
-      : "48h";
+      : "720h";
     if (retentionMode === "manual") {
       return true;
     }
@@ -492,6 +509,8 @@ function pruneOldAlertPosts(posts, now = Date.now()) {
         ? 24 * 60 * 60 * 1000
         : retentionMode === "168h"
           ? 7 * 24 * 60 * 60 * 1000
+          : retentionMode === "720h"
+            ? 30 * 24 * 60 * 60 * 1000
           : retentionMode === "48h"
             ? 48 * 60 * 60 * 1000
             : ALERT_RETENTION_MS;
@@ -705,6 +724,37 @@ async function renderServiceWorker() {
   const assetVersion = await resolveAssetVersion();
   const serviceWorkerTemplate = await readFile(SERVICE_WORKER_TEMPLATE_PATH, "utf8");
   return serviceWorkerTemplate.replaceAll("__ASSET_VERSION__", assetVersion);
+}
+
+async function buildHealthDiagnostics() {
+  const [assetVersion, analyticsData] = await Promise.all([
+    resolveAssetVersion(),
+    analyticsStore.readData()
+  ]);
+
+  return {
+    ok: true,
+    now: nowIso(),
+    app: {
+      startedAt: SERVER_STARTED_AT,
+      uptimeSeconds: uptimeSeconds(),
+      assetVersion,
+      basePath: APP_BASE_PATH
+    },
+    client: {
+      totalEvents: analyticsData.totals.clientEvents || 0,
+      recentEvents: Array.isArray(analyticsData.recentClientEvents) ? analyticsData.recentClientEvents.slice(0, 10) : [],
+      recentErrors: Array.isArray(analyticsData.recentErrors)
+        ? analyticsData.recentErrors.filter((entry) => entry.method === "CLIENT").slice(0, 10)
+        : []
+    },
+    traffic: {
+      requests: analyticsData.totals.requests || 0,
+      pageViews: analyticsData.totals.pageViews || 0,
+      apiRequests: analyticsData.totals.apiRequests || 0,
+      serverErrors: analyticsData.totals.serverErrors || 0
+    }
+  };
 }
 
 async function sendIndexHtml(res) {
@@ -1036,6 +1086,15 @@ function equivalentTrustedOrigin(candidateOrigin, expectedOrigin) {
   return canonicalCandidateHost === canonicalExpectedHost;
 }
 
+function isLoopbackOrigin(value) {
+  const parts = parsedOriginParts(value);
+  if (!parts) {
+    return false;
+  }
+
+  return parts.hostname === "localhost" || parts.hostname === "127.0.0.1" || parts.hostname === "::1";
+}
+
 function isSameOriginRequest(req) {
   const expectedOrigin = normalizedRequestOrigin(appBaseUrl(req));
   const requestOrigins = [
@@ -1043,12 +1102,23 @@ function isSameOriginRequest(req) {
     normalizedRequestOrigin(req.headers.referer),
     normalizedRequestOrigin(req.headers.referrer)
   ].filter(Boolean);
+  const localRequestOrigin = normalizedRequestOrigin(requestOrigin(req));
 
   if (!requestOrigins.length) {
     return true;
   }
 
-  return requestOrigins.some((origin) => equivalentTrustedOrigin(origin, expectedOrigin));
+  return requestOrigins.some((origin) => {
+    if (equivalentTrustedOrigin(origin, expectedOrigin)) {
+      return true;
+    }
+
+    if (!isLoopbackOrigin(origin) || !isLoopbackOrigin(localRequestOrigin)) {
+      return false;
+    }
+
+    return equivalentTrustedOrigin(origin, localRequestOrigin);
+  });
 }
 
 function requireSameOrigin(req, res) {
@@ -1171,6 +1241,58 @@ async function disableEmployeePushAccess(employeeId) {
   });
 }
 
+async function refreshLiveWeatherIfNeeded({ force = false } = {}) {
+  if (weatherRefreshInFlight) {
+    return weatherRefreshInFlight;
+  }
+
+  weatherRefreshInFlight = (async () => {
+    const currentData = await boardStore.readData();
+    const currentWeather = currentData.weather || {};
+    const targetLocation = resolveAutoWeatherLocation(currentWeather, WEATHER_AUTO_REFRESH_LOCATION);
+
+    if (!targetLocation) {
+      return currentWeather;
+    }
+
+    if (!force && !shouldAutoRefreshWeather(currentWeather, WEATHER_AUTO_REFRESH_MS, Date.now(), WEATHER_AUTO_REFRESH_LOCATION)) {
+      return currentWeather;
+    }
+
+    const nextWeather = await resolveLiveWeather(targetLocation);
+    await boardStore.updateData((data) => {
+      data.weather = nextWeather;
+      return nextWeather;
+    });
+    return nextWeather;
+  })();
+
+  try {
+    return await weatherRefreshInFlight;
+  } finally {
+    weatherRefreshInFlight = null;
+  }
+}
+
+async function unenrollEmployeePushDevices(employeeId) {
+  const targetEmployeeId = cleanText(employeeId, 80);
+
+  if (!targetEmployeeId) {
+    return { removedCount: 0, totalSubscriptions: 0 };
+  }
+
+  return notificationHub.updateData((data) => {
+    const originalLength = Array.isArray(data.subscriptions) ? data.subscriptions.length : 0;
+    data.subscriptions = (Array.isArray(data.subscriptions) ? data.subscriptions : [])
+      .filter((subscription) => subscription.employeeId !== targetEmployeeId);
+
+    return {
+      removedCount: Math.max(0, originalLength - data.subscriptions.length),
+      totalSubscriptions: data.subscriptions.length
+    };
+  });
+}
+
 function scopedEmployeePushStatus(pushData, employeeId) {
   const devices = summarizeNotificationDevices({
     subscriptions: Array.isArray(pushData?.subscriptions)
@@ -1244,16 +1366,11 @@ function normalizePost(input) {
   const body = cleanLongText(input.body, 700);
   const audience = cleanText(input.audience || "All employees", 80);
   const expiresAt = cleanText(input.expiresAt, 10);
-  const requestedDeliveryTarget = cleanText(input.deliveryTarget, 16).toLowerCase();
-  const hasExplicitDeliveryTarget = allowedDeliveryTargets.has(requestedDeliveryTarget);
-  const legacyNotifyEmployees = parseBooleanish(input.notifyEmployees) || priority === "Important" || priority === "Urgent";
-  const deliveryTarget = hasExplicitDeliveryTarget
-    ? requestedDeliveryTarget
-    : (legacyNotifyEmployees ? "both" : "feed");
-  const notifyEmployees = deliveryTarget !== "feed";
+  const deliveryTarget = "both";
+  const notifyEmployees = true;
   const alertRetention = allowedAlertRetention.has(String(input.alertRetention || ""))
     ? String(input.alertRetention)
-    : "48h";
+    : "720h";
 
   if (!title) throw new Error("Title is required.");
   if (!body) throw new Error("Message is required.");
@@ -1265,7 +1382,7 @@ function normalizePost(input) {
     priority,
     deliveryTarget,
     notifyEmployees,
-    alertRetention: notifyEmployees ? alertRetention : "manual",
+    alertRetention,
     title,
     body,
     audience,
@@ -1417,6 +1534,30 @@ async function handleApi(req, res, url) {
 
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, { ok: true, now: nowIso() });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/health/diagnostics") {
+      sendJson(res, 200, await buildHealthDiagnostics());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/client-events") {
+      const body = await readJsonBody(req);
+
+      await analyticsStore.recordClientEvent({
+        at: nowIso(),
+        type: cleanText(body.type, 60) || "client-event",
+        severity: cleanText(body.severity, 16) || "info",
+        route: cleanText(body.route, 40) || "launcher",
+        pathname: cleanText(body.pathname, 160) || APP_BASE_PATH,
+        detail: cleanText(body.detail, 240),
+        message: cleanText(body.message, 240),
+        assetVersion: cleanText(body.assetVersion, 40),
+        userAgent: req.headers["user-agent"]
+      });
+
+      sendJson(res, 201, { ok: true });
       return;
     }
 
@@ -2409,6 +2550,19 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const employeeDevicesUnenrollMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/devices\/unenroll$/);
+    if (req.method === "POST" && employeeDevicesUnenrollMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeeDevicesUnenrollMatch[1]);
+      const result = await unenrollEmployeePushDevices(employeeId);
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/posts") {
       const boardAccess = await requireBoardReadAccess(req, res);
       if (!boardAccess) return;
@@ -2729,6 +2883,13 @@ async function handleApi(req, res, url) {
 
     if (req.method === "GET" && url.pathname === "/api/weather") {
       if (!(await requireBoardReadAccess(req, res))) return;
+      const force = parseBoolean(url.searchParams.get("force")) || parseBoolean(url.searchParams.get("refresh")) || parseBoolean(url.searchParams.get("live"));
+
+      try {
+        await refreshLiveWeatherIfNeeded({ force });
+      } catch (error) {
+        console.error("Live weather refresh failed before weather read.", error);
+      }
 
       const data = await boardStore.readData();
       sendJson(res, 200, { weather: data.weather });
@@ -2893,11 +3054,19 @@ await notificationHub.init();
 await analyticsStore.init();
 await securityStore.init();
 await runAlertRetentionCleanup();
+refreshLiveWeatherIfNeeded().catch((error) => {
+  console.error("Initial live weather refresh failed.", error);
+});
 setInterval(() => {
   runAlertRetentionCleanup().catch((error) => {
     console.error("Alert retention cleanup failed.", error);
   });
 }, ALERT_CLEANUP_INTERVAL_MS);
+setInterval(() => {
+  refreshLiveWeatherIfNeeded().catch((error) => {
+    console.error("Scheduled live weather refresh failed.", error);
+  });
+}, WEATHER_AUTO_REFRESH_MS);
 
 server.listen(PORT, () => {
   console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);

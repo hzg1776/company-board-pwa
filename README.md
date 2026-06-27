@@ -39,20 +39,21 @@ For a permanent Windows host, set the same values with `setx` or in System Prope
 ## Run Locally
 
 ```powershell
+$env:PORT = "3116"
 npm start
 ```
 
 Open:
 
-- Employee portal: http://localhost:3000/palzivalerts/employee
-- Launcher: http://localhost:3000/palzivalerts
-- HR portal: http://localhost:3000/palzivalerts/hr
-- Systems portal: http://localhost:3000/palzivalerts/webmaster
-- IT portal: http://localhost:3000/palzivalerts/it
+- Employee portal: http://localhost:3116/palzivalerts/employee
+- Launcher: http://localhost:3116/palzivalerts
+- HR portal: http://localhost:3116/palzivalerts/hr
+- Systems portal: http://localhost:3116/palzivalerts/webmaster
+- IT portal: http://localhost:3116/palzivalerts/it
 
 Clean phone-friendly routes also work:
 
-- Employee portal: http://localhost:3000/palzivalerts/employee
+- Employee portal: http://localhost:3116/palzivalerts/employee
 
 Old routes like `/employee`, `/hr`, and `/webmaster` now redirect into the branded `/palzivalerts` path.
 

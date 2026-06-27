@@ -538,17 +538,19 @@ test(
     await evaluateExpression(session, `
       (() => {
         const form = document.querySelector('[data-device-setup-form]');
-        const employeeField = form?.querySelector('input[name="employeeName"]');
 
-        if (!form || !employeeField) {
-          throw new Error('Employee setup form is missing required fields.');
+        if (!form) {
+          throw new Error('Employee setup form is missing.');
         }
 
         if (form.querySelector('input[name="accessPin"]')) {
           throw new Error('Legacy enrollment field should not render.');
         }
 
-        employeeField.value = 'Test Employee';
+        if (form.querySelector('input[name="employeeName"]')) {
+          throw new Error('Legacy employee name field should not render.');
+        }
+
         form.requestSubmit();
         return true;
       })()

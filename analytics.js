@@ -4,7 +4,8 @@ import path from "node:path";
 
 const DEFAULT_LIMITS = Object.freeze({
   recentRequests: 120,
-  recentErrors: 40
+  recentErrors: 40,
+  recentClientEvents: 40
 });
 
 function nowIso() {
@@ -56,6 +57,7 @@ function normalizeTotals(value = {}) {
     pageViews: Math.max(0, Math.floor(ensureNumber(value.pageViews, 0))),
     apiRequests: Math.max(0, Math.floor(ensureNumber(value.apiRequests, 0))),
     successfulRequests: Math.max(0, Math.floor(ensureNumber(value.successfulRequests, 0))),
+    clientEvents: Math.max(0, Math.floor(ensureNumber(value.clientEvents, 0))),
     clientErrors: Math.max(0, Math.floor(ensureNumber(value.clientErrors, 0))),
     serverErrors: Math.max(0, Math.floor(ensureNumber(value.serverErrors, 0))),
     durationMs: Math.max(0, Math.round(ensureNumber(value.durationMs, 0)))
@@ -90,6 +92,20 @@ function normalizeError(entry = {}) {
   };
 }
 
+function normalizeClientEvent(entry = {}) {
+  return {
+    at: isValidIsoTimestamp(entry.at) ? entry.at : nowIso(),
+    type: cleanText(entry.type || "client-event", 60) || "client-event",
+    severity: cleanText(entry.severity || "info", 16) || "info",
+    route: cleanText(entry.route || "launcher", 40) || "launcher",
+    pathname: cleanPath(entry.pathname || "/", 160),
+    detail: cleanText(entry.detail, 240),
+    message: cleanText(entry.message, 240),
+    assetVersion: cleanText(entry.assetVersion, 40),
+    userAgent: cleanText(entry.userAgent, 180)
+  };
+}
+
 function normalizeRequests(value, limit) {
   if (!Array.isArray(value)) {
     return [];
@@ -106,6 +122,14 @@ function normalizeErrors(value, limit) {
   return value.slice(0, limit).map((entry) => normalizeError(entry));
 }
 
+function normalizeClientEvents(value, limit) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.slice(0, limit).map((entry) => normalizeClientEvent(entry));
+}
+
 function defaultAnalyticsSnapshot() {
   const timestamp = nowIso();
 
@@ -117,7 +141,8 @@ function defaultAnalyticsSnapshot() {
     byStatus: {},
     byRoute: {},
     recentRequests: [],
-    recentErrors: []
+    recentErrors: [],
+    recentClientEvents: []
   };
 }
 
@@ -134,7 +159,8 @@ function normalizeAnalyticsSnapshot(data, limits = DEFAULT_LIMITS) {
     byStatus: ensureCountMap(data.byStatus),
     byRoute: ensureCountMap(data.byRoute),
     recentRequests: normalizeRequests(data.recentRequests, limits.recentRequests),
-    recentErrors: normalizeErrors(data.recentErrors, limits.recentErrors)
+    recentErrors: normalizeErrors(data.recentErrors, limits.recentErrors),
+    recentClientEvents: normalizeClientEvents(data.recentClientEvents, limits.recentClientEvents)
   };
 }
 
@@ -177,11 +203,12 @@ function incrementCount(map, key) {
   map[key] = Math.max(0, Math.floor(ensureNumber(map[key], 0))) + 1;
 }
 
-export function createAnalyticsStore({ dataFile, recentRequestLimit, recentErrorLimit } = {}) {
+export function createAnalyticsStore({ dataFile, recentRequestLimit, recentErrorLimit, recentClientEventLimit } = {}) {
   const backend = "file";
   const limits = {
     recentRequests: recentRequestLimit || DEFAULT_LIMITS.recentRequests,
-    recentErrors: recentErrorLimit || DEFAULT_LIMITS.recentErrors
+    recentErrors: recentErrorLimit || DEFAULT_LIMITS.recentErrors,
+    recentClientEvents: recentClientEventLimit || DEFAULT_LIMITS.recentClientEvents
   };
 
   let initPromise = null;
@@ -284,6 +311,39 @@ export function createAnalyticsStore({ dataFile, recentRequestLimit, recentError
     return next;
   }
 
+  async function recordClientEvent(entry = {}) {
+    await init();
+
+    const next = writeQueue.then(async () => {
+      const data = await readSnapshot(dataFile, limits);
+      const clientEvent = normalizeClientEvent(entry);
+
+      data.updatedAt = clientEvent.at;
+      data.totals.clientEvents += 1;
+      data.recentClientEvents.unshift(clientEvent);
+      data.recentClientEvents = data.recentClientEvents.slice(0, limits.recentClientEvents);
+
+      if (clientEvent.severity === "error" || clientEvent.type === "blank-screen") {
+        data.totals.clientErrors += 1;
+        data.recentErrors.unshift(normalizeError({
+          at: clientEvent.at,
+          method: "CLIENT",
+          pathname: clientEvent.pathname,
+          statusCode: 0,
+          durationMs: 0,
+          error: `${clientEvent.type}: ${clientEvent.detail || clientEvent.message || "Client error"}`
+        }));
+        data.recentErrors = data.recentErrors.slice(0, limits.recentErrors);
+      }
+
+      await writeFileAtomic(dataFile, data);
+      return data;
+    });
+
+    writeQueue = next.catch(() => {});
+    return next;
+  }
+
   async function close() {
     await flushQueue();
   }
@@ -295,6 +355,7 @@ export function createAnalyticsStore({ dataFile, recentRequestLimit, recentError
     writeData,
     updateData,
     recordRequest,
+    recordClientEvent,
     close
   };
 }

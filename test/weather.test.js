@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   createDefaultWeather,
+  DEFAULT_AUTO_WEATHER_LOCATION,
   normalizeStoredWeather,
-  resolveLiveWeather
+  resolveAutoWeatherLocation,
+  resolveLiveWeather,
+  shouldAutoRefreshWeather
 } from "../weather.js";
 
 function jsonResponse(body, status = 200, statusText = "OK") {
@@ -49,6 +52,33 @@ test("normalizeStoredWeather preserves stored weather fields", () => {
     level: "Watch",
     updatedAt: "2026-06-12T12:00:00.000Z"
   });
+});
+
+test("resolveAutoWeatherLocation prefers stored weather location and falls back to Palziv North America default", () => {
+  assert.equal(resolveAutoWeatherLocation({ location: "Dallas, TX" }), "Dallas, TX");
+  assert.equal(resolveAutoWeatherLocation({ location: "" }), DEFAULT_AUTO_WEATHER_LOCATION);
+  assert.equal(resolveAutoWeatherLocation(null), DEFAULT_AUTO_WEATHER_LOCATION);
+});
+
+test("shouldAutoRefreshWeather refreshes missing or stale weather snapshots", () => {
+  const nowMs = Date.parse("2026-06-25T20:00:00.000Z");
+
+  assert.equal(
+    shouldAutoRefreshWeather({ location: "27549", updatedAt: "" }, 60 * 60 * 1000, nowMs),
+    true
+  );
+  assert.equal(
+    shouldAutoRefreshWeather({ location: "27549", updatedAt: "2026-06-25T19:15:00.000Z" }, 60 * 60 * 1000, nowMs),
+    false
+  );
+  assert.equal(
+    shouldAutoRefreshWeather({ location: "27549", updatedAt: "2026-06-25T18:30:00.000Z" }, 60 * 60 * 1000, nowMs),
+    true
+  );
+  assert.equal(
+    shouldAutoRefreshWeather({ location: "", updatedAt: "2026-06-25T18:30:00.000Z" }, 60 * 60 * 1000, nowMs),
+    true
+  );
 });
 
 test("resolveLiveWeather looks up geocoding and current weather", async () => {

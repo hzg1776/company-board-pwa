@@ -48,3 +48,33 @@ test("createAnalyticsStore records request traffic", async () => {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("createAnalyticsStore records recent client events for blank-screen triage", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-analytics-client-"));
+  const dataFile = path.join(tempDir, "analytics.json");
+  const store = createAnalyticsStore({ dataFile });
+
+  try {
+    await store.init();
+
+    await store.recordClientEvent({
+      at: "2026-06-25T22:30:00.000Z",
+      type: "blank-screen",
+      route: "launcher",
+      pathname: "/palzivalerts",
+      severity: "error",
+      detail: "App container stayed empty after boot.",
+      assetVersion: "abc123"
+    });
+
+    const data = await store.readData();
+
+    assert.equal(data.totals.clientEvents, 1);
+    assert.equal(data.recentClientEvents[0].type, "blank-screen");
+    assert.equal(data.recentClientEvents[0].assetVersion, "abc123");
+    assert.equal(data.recentErrors[0].error, "blank-screen: App container stayed empty after boot.");
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

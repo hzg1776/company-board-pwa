@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$SetupToken = "it-bootstrap-2026",
-  [string]$ItUrl = "http://localhost:3000/palzivalerts/it",
+  [int]$Port = 3116,
+  [string]$ItUrl = "",
   [switch]$SkipInstall
 )
 
@@ -50,7 +51,11 @@ Write-Step "Wrote local bootstrap token"
 Write-Host $bootstrapTokenFile
 
 $serverJsPath = (Join-Path $projectRoot "server.js")
-$existingPids = Get-ListeningProcessIdsForPort -Port 3000
+if (-not $ItUrl) {
+  $ItUrl = "http://localhost:$Port/palzivalerts/it"
+}
+
+$existingPids = Get-ListeningProcessIdsForPort -Port $Port
 
 foreach ($processId in $existingPids) {
   $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
@@ -59,7 +64,7 @@ foreach ($processId in $existingPids) {
   }
 
   if ([string]$process.CommandLine -match [regex]::Escape($serverJsPath) -or [string]$process.CommandLine -match 'node\.exe"\s+server\.js') {
-    Write-Step "Stopping existing local app on port 3000 (PID $processId)"
+    Write-Step "Stopping existing local app on port $Port (PID $processId)"
     Stop-Process -Id $processId -Force
   }
 }
@@ -75,7 +80,7 @@ if (-not $SkipInstall) {
 
 $escapedProjectRoot = $projectRoot.Replace('"', '\"')
 $escapedSetupToken = $SetupToken.Replace('"', '\"')
-$cmdLine = "cd /d `"$escapedProjectRoot`" && set ADMIN_SETUP_TOKEN=$escapedSetupToken && npm start"
+$cmdLine = "cd /d `"$escapedProjectRoot`" && set PORT=$Port && set ADMIN_SETUP_TOKEN=$escapedSetupToken && npm start"
 
 Write-Step "Starting app server in a new window"
 Start-Process -FilePath "cmd.exe" -ArgumentList "/k", $cmdLine -WorkingDirectory $projectRoot

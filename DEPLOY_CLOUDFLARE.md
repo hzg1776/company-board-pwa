@@ -17,18 +17,18 @@ npm install
 
 ## 3. Start The App Locally
 
-Manual launches use `PORT` and default to `3000`.
-The boot script below uses `3116` so the tunnel can stay fixed to the current host port.
+Manual launches should use `3116` so the tunnel, health checks, and local recovery scripts stay on the same host port.
+If `PORT` is unset, the Node server still defaults to `3000` for ad hoc development.
 
 ```powershell
-$env:PORT = "3000"
+$env:PORT = "3116"
 npm start
 ```
 
 Verify the local app:
 
 ```powershell
-Invoke-WebRequest -Uri "http://localhost:3000/api/health" -UseBasicParsing
+Invoke-WebRequest -Uri "http://localhost:3116/api/health" -UseBasicParsing
 ```
 
 ## 4. Install cloudflared
@@ -155,7 +155,7 @@ When you change code:
 cd "C:\Users\admin\Documents\Codex\Project-A"
 git pull
 npm install
-$env:PORT = "3000"
+$env:PORT = "3116"
 npm start
 ```
 

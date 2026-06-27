@@ -1,4 +1,7 @@
-import { resolveDeviceSetupAction } from "./device-setup.js";
+import {
+  resolveDeviceSetupAction,
+  resolveDeviceSetupSecondaryAction
+} from "./device-setup.js";
 
 const DEFAULT_SITE_CONFIG = {
   name: "Communications and Alert Center",
@@ -20,6 +23,7 @@ const APP_DISPLAY_TITLE = APP_NAME_SUFFIX ? `${APP_TITLE} ${APP_NAME_SUFFIX}` : 
 const APP_BASE_PATH = "/palzivalerts";
 const app = document.querySelector("#app");
 const DEVICE_PROFILE_STORAGE_KEY = "palziv-employee-device-profile-v3";
+const CLIENT_TELEMETRY_ENDPOINT = "/api/client-events";
 
 function safeStorageGet(key) {
   try {
@@ -306,6 +310,7 @@ const state = {
   employeeInstallGuideOpen: false,
   loading: true
 };
+const clientTelemetrySent = new Set();
 
 const icons = {
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
@@ -348,18 +353,38 @@ function escapeHtml(value) {
 
 function formatDate(value) {
   if (!value) return "Never";
-  const text = String(value);
+  const text = String(value).trim();
   const dateOnlyMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const date = dateOnlyMatch
-    ? new Date(Number(dateOnlyMatch[1]), Number(dateOnlyMatch[2]) - 1, Number(dateOnlyMatch[3]))
-    : new Date(text);
-  if (Number.isNaN(date.getTime())) return "Never";
+  const hasTime = text.includes("T") || /^\d{4}-\d{2}-\d{2}\s+\d{2}:/.test(text);
+
+  let date = null;
+
+  if (dateOnlyMatch) {
+    date = new Date(Number(dateOnlyMatch[1]), Number(dateOnlyMatch[2]) - 1, Number(dateOnlyMatch[3]));
+  } else {
+    const directDate = new Date(text);
+
+    if (Number.isNaN(directDate.getTime()) && text.includes(" ") && !text.includes("T")) {
+      date = new Date(text.replace(" ", "T"));
+    } else {
+      date = directDate;
+    }
+  }
+
+  if (Number.isNaN(date.getTime())) {
+    const fallbackText = `${text}Z`;
+    date = new Date(fallbackText);
+  }
+
+  if (Number.isNaN(date.getTime())) {
+    return "Never";
+  }
 
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
-    hour: text.includes("T") ? "numeric" : undefined,
-    minute: text.includes("T") ? "2-digit" : undefined
+    hour: hasTime ? "numeric" : undefined,
+    minute: hasTime ? "2-digit" : undefined
   }).format(date);
 }
 
@@ -377,6 +402,75 @@ function safeFilename(value) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sendClientTelemetry(payload, options = {}) {
+  const onceKey = String(options.onceKey || "").trim();
+
+  if (onceKey && clientTelemetrySent.has(onceKey)) {
+    return;
+  }
+
+  if (onceKey) {
+    clientTelemetrySent.add(onceKey);
+  }
+
+  const body = JSON.stringify({
+    pathname: window.location.pathname,
+    route: currentRoute(),
+    assetVersion: APP_ASSET_VERSION,
+    ...payload
+  });
+
+  try {
+    if (typeof navigator.sendBeacon === "function") {
+      const blob = new Blob([body], { type: "application/json" });
+      navigator.sendBeacon(CLIENT_TELEMETRY_ENDPOINT, blob);
+      return;
+    }
+  } catch {
+    // Fall back to fetch below.
+  }
+
+  void fetch(CLIENT_TELEMETRY_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body,
+    keepalive: true
+  }).catch(() => {});
+}
+
+function appShellHasVisibleContent() {
+  if (!app) {
+    return false;
+  }
+
+  if (app.textContent && app.textContent.trim()) {
+    return true;
+  }
+
+  return Boolean(app.querySelector("img, button, input, main, section, article, a, h1, h2, h3, p, form"));
+}
+
+function scheduleClientShellCheck(reason = "boot") {
+  window.setTimeout(() => {
+    if (appShellHasVisibleContent()) {
+      sendClientTelemetry({
+        type: "boot-visible",
+        severity: "info",
+        detail: `Client shell rendered after ${reason}.`
+      }, { onceKey: `boot-visible:${reason}` });
+      return;
+    }
+
+    sendClientTelemetry({
+      type: "blank-screen",
+      severity: "error",
+      detail: `App container stayed empty after ${reason}.`
+    }, { onceKey: "blank-screen" });
+  }, 250);
 }
 
 function normalizePathname(pathname = window.location.pathname) {
@@ -798,6 +892,7 @@ ${issues.map((issue) => `- ${issue}`).join("\n")}
 - Employee feed: ${urls.employee || `${origin}${appPath("employee")}`}
 - HR console: ${urls.hr || `${origin}${appPath("hr")}`}
 - Systems console: ${urls.webmaster || `${origin}${appPath("webmaster")}`}
+- IT console: ${urls.it || `${origin}${appPath("it")}`}
 
 ## Raw Notes
 Copying this into Codex should give it enough context to trace the site health and likely failure points quickly.
@@ -892,7 +987,6 @@ function renderTabBar(tabs, activeTab, group, label) {
             </button>
           `
         )
-- IT console: ${urls.it || `${origin}${appPath("it")}`}
         .join("")}
     </nav>
   `;
@@ -1658,6 +1752,14 @@ function defaultWeather() {
   };
 }
 
+function renderAdminSignoutFooter() {
+  return `
+    <footer class="admin-signout-floor">
+      <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
+    </footer>
+  `;
+}
+
   function formatPushError(error, fallback) {
     const message = String(error?.message || "").trim();
     const lower = message.toLowerCase();
@@ -1791,11 +1893,7 @@ function buildCurrentPushDeviceState() {
 }
 
 function buildEmployeeSetupState() {
-  const employeeName = String(
-    state.deviceProfile.employeeName ||
-    state.deviceProfile.label ||
-    ""
-  ).trim();
+  const signedInEmployeeName = String(state.access.employee.employee?.name || "").trim();
   const currentPush = buildCurrentPushDeviceState();
   const pushSupported = currentPush.supported;
   const pushSubscribed = currentPush.subscribed;
@@ -1805,9 +1903,9 @@ function buildEmployeeSetupState() {
   const installed = !installRequired || isInstalledWebApp();
   const notificationGranted = pushPermission === "granted";
   let nextStep = {
-    title: "Save the employee name",
-    detail: "Enter the employee's name so the roster shows exactly who subscribed.",
-    action: "profile"
+    title: "Subscribe this device",
+    detail: "Use this signed-in employee account to enroll the current device for notifications.",
+    action: "push"
   };
 
   if (installRequired && !installed) {
@@ -1823,29 +1921,23 @@ function buildEmployeeSetupState() {
       ? {
           title: "Install this site to Home Screen",
           detail: "On iPhone, web push only works from the installed web app. Add this site to your Home Screen, reopen the installed app, then subscribe.",
-          action: "profile"
+          action: "push"
         }
       : {
           title: "No push support",
           detail: "This browser cannot use web push. Open the portal in a push-capable browser to enable alerts.",
-          action: "profile"
+          action: "push"
         };
-  } else if (!employeeName) {
-    nextStep = {
-      title: "Enter name to subscribe",
-      detail: "Use your employee name, then tap Subscribe.",
-      action: pushPermission === "denied" ? "profile" : "push"
-    };
   } else if (pushPermission === "denied") {
       nextStep = {
         title: "Enable notifications for this site",
-        detail: "Notification access is turned off here. Enter the employee name, then turn it back on and tap subscribe.",
-        action: "profile"
+        detail: "Notification access is turned off here. Turn it back on, then tap subscribe.",
+        action: "push"
       };
   } else if (!pushSubscribed) {
       nextStep = {
       title: "Subscribe This Browser",
-      detail: "This browser can receive web push. Enter the employee name, then tap subscribe to finish setup.",
+      detail: "This browser can receive web push. Tap subscribe to finish setup.",
       action: "push"
     };
   } else if (!currentPush.device) {
@@ -1877,8 +1969,8 @@ function buildEmployeeSetupState() {
         icon: "bell"
       }
     : {
-        id: "profile",
-        label: "Save",
+        id: "push",
+        label: "Subscribe",
         icon: "clipboard"
       };
 
@@ -1890,12 +1982,6 @@ function buildEmployeeSetupState() {
         ? `Open the installed ${APP_TITLE} app from your Home Screen before you finish alert setup.`
         : "Phone installation is only required on mobile devices.",
       complete: installed
-    },
-    {
-      title: "Employee name",
-      value: employeeName,
-      detail: "Saved locally so this device stays easy to identify.",
-      complete: Boolean(employeeName)
     },
     {
       title: "Notifications",
@@ -1912,7 +1998,7 @@ function buildEmployeeSetupState() {
       complete: notificationGranted
     },
     {
-      title: "Alert delivery",
+      title: "Device status",
       value: pushSupported
         ? (pushReady ? "Active" : pushPermission === "denied" ? "Blocked" : pushSubscribed ? currentPush.serverLabel : "Available")
         : "Unavailable",
@@ -1926,14 +2012,14 @@ function buildEmployeeSetupState() {
   ];
 
   return {
-    employeeName,
+    employeeName: signedInEmployeeName,
     installRequired,
     installed,
     pushSupported,
     pushSubscribed,
     pushPermission,
     busy: Boolean(state.push.busy),
-    ready: Boolean(employeeName) && installed && notificationGranted && pushReady,
+    ready: installed && notificationGranted && pushReady,
     currentPush,
     nextStep,
     primaryAction,
@@ -2069,7 +2155,7 @@ async function enablePushAlerts(profile = state.deviceProfile) {
         body: JSON.stringify({
           subscription: typeof subscription.toJSON === "function" ? subscription.toJSON() : subscription,
           deviceId: profile.deviceId,
-          label: profile.employeeName || profile.label,
+          label: state.access.employee.employee?.name || profile.label,
           browser,
           platform,
           userAgent: navigator.userAgent,
@@ -2223,6 +2309,7 @@ async function unsubscribeDevice(endpoint) {
   });
 
   await loadPushStatus();
+  await syncPushState();
 }
 
 function renderTestPushControl() {
@@ -2237,9 +2324,8 @@ function compactDeviceChecklistTitle(title) {
   return {
     "Install on phone": "Install",
     "Install On Phone": "App",
-    "Employee name": "Name",
     Notifications: "Notify",
-    "Alert delivery": "Delivery"
+    "Device status": "Status"
   }[title] || title;
 }
 
@@ -2306,8 +2392,6 @@ function renderEmployeeSubscriptionBanner(setup) {
   const firstIncomplete = incompleteSteps[0];
   const headline = firstIncomplete?.title === "Install on phone"
     ? "Finish phone install to receive alerts."
-    : firstIncomplete?.title === "Employee name"
-      ? "Add your name to finish setup."
     : "Finish alert setup for this phone.";
 
   return `
@@ -2332,20 +2416,21 @@ function renderEmployeeSubscriptionBanner(setup) {
 function renderEmployeeSetupWizard() {
   const setup = buildEmployeeSetupState();
   const busy = setup.busy;
-
+  const currentDevice = setup.currentPush.device;
+  const secondaryAction = resolveDeviceSetupSecondaryAction({
+    hasCurrentDevice: Boolean(currentDevice?.endpoint)
+  });
   const formMarkup = `
     <form class="device-setup-form" data-device-setup-form>
-      <div class="device-setup-grid">
-        <label class="field full">
-          <span>Name</span>
-          <input name="employeeName" maxlength="80" required value="${escapeHtml(setup.employeeName)}" placeholder="e.g. Maria Lopez" autocomplete="off" autocapitalize="words" spellcheck="false" data-employee-name-field>
-        </label>
-      </div>
-
       <div class="device-setup-actions">
         <button class="button" type="submit" data-device-action="${escapeHtml(setup.primaryAction.id)}" ${busy ? "disabled aria-disabled=\"true\"" : ""}>
           ${icon(setup.primaryAction.icon)} ${escapeHtml(setup.primaryAction.label)}
         </button>
+        ${secondaryAction === "disable-alerts" ? `
+          <button class="ghost-button" type="button" data-disable-alerts ${busy ? "disabled aria-disabled=\"true\"" : ""}>
+            ${icon("delete")} Unenroll
+          </button>
+        ` : ""}
       </div>
     </form>
   `;
@@ -2417,9 +2502,9 @@ function typeIcon(type) {
     "HR": "users",
     HR: "users",
     News: "news",
+    Weather: "cloud",
     Safety: "shield",
-    Shift: "board",
-    Weather: "cloud"
+    Shift: "board"
   }[type] || "bell";
 }
 
@@ -2445,16 +2530,9 @@ function formatAlertRetentionLabel(value) {
     "24h": "24 Hours",
     "48h": "48 Hours",
     "168h": "7 Days",
+    "720h": "30 Days",
     manual: "Manual Only"
-  }[String(value || "48h")] || "48 Hours";
-}
-
-function formatDeliveryTargetLabel(value) {
-  return {
-    feed: "Feed Only",
-    alert: "Alert Only",
-    both: "Feed and Alert"
-  }[String(value || "feed")] || "Feed Only";
+  }[String(value || "720h")] || "30 Days";
 }
 
 function renderNotice(post, includeControls = false) {
@@ -2470,7 +2548,6 @@ function renderNotice(post, includeControls = false) {
       <div class="notice-meta">
         <span class="notice-type">${icon(typeIcon(post.type))}${escapeHtml(post.type)}</span>
         <span class="priority-pill ${safePriority}">${escapeHtml(post.priority)}</span>
-        ${post.notifyEmployees ? `<span class="sync-pill">${icon("bell")} Alert sent</span>` : ""}
         ${post.requiresAcknowledgement ? `<span class="sync-pill acknowledgement-pill">${icon("check")} Read ${acknowledged}/${totalEmployees}</span>` : ""}
         <span class="notice-date">${escapeHtml(formatDate(post.createdAt))}</span>
       </div>
@@ -2519,27 +2596,23 @@ function renderFeedItem(post) {
     <article class="feed-item priority-${safePriority}">
       <div class="feed-main">
         <div class="feed-head">
-          <div class="feed-head-copy">
+          <div class="feed-head-meta">
             <span class="feed-type">${escapeHtml(feedType)}</span>
-            <strong>${escapeHtml(feedTitle)}</strong>
+            ${feedPriority !== "Normal" ? `<span class="priority-pill ${safePriority}">${escapeHtml(feedPriority)}</span>` : ""}
           </div>
-          <time class="feed-time" datetime="${escapeHtml(createdAt)}">${escapeHtml(feedTime)}</time>
+          <div class="feed-head-side">
+            <time class="feed-time" datetime="${escapeHtml(createdAt)}">${escapeHtml(feedTime)}</time>
+            ${
+              requiresAcknowledgement
+                ? acknowledged
+                  ? `<span class="feed-read-indicator is-read" aria-label="Read">${icon("check")}</span>`
+                  : `<button class="feed-read-indicator" type="button" data-acknowledge-post="${escapeHtml(post.id)}" aria-label="Mark update as read" title="Mark update as read">${icon("check")}</button>`
+                : ""
+            }
+          </div>
         </div>
-        ${(feedPriority !== "Normal" || post.notifyEmployees) ? `
-        <div class="feed-badges">
-          ${feedPriority !== "Normal" ? `<span class="priority-pill ${safePriority}">${escapeHtml(feedPriority)}</span>` : ""}
-          ${post.notifyEmployees ? `<span class="sync-pill">Alert sent</span>` : ""}
-          ${requiresAcknowledgement ? `<span class="sync-pill acknowledgement-pill">${acknowledged ? `${icon("check")} Read` : `${icon("alert")} Needs read`}</span>` : ""}
-        </div>
-        ` : ""}
+        <h2 class="feed-title">${escapeHtml(feedTitle)}</h2>
         <p class="feed-body">${escapeHtml(feedBody)}</p>
-        ${requiresAcknowledgement ? `
-          <div class="feed-actions">
-            <button class="${acknowledged ? "ghost-button" : "button"} acknowledgement-button" type="button" data-acknowledge-post="${escapeHtml(post.id)}" ${acknowledged ? "disabled aria-disabled=\"true\"" : ""}>
-              ${acknowledged ? `${icon("check")} Read` : `${icon("check")} Mark read`}
-            </button>
-          </div>
-        ` : ""}
       </div>
     </article>
   `;
@@ -2553,10 +2626,12 @@ function renderEmployeeStatusStrip(notices, setup) {
 
   return `
     <section class="employee-status-strip" aria-label="Employee portal status">
-      <span>${icon("cloud")} ${escapeHtml(weatherLevel)}</span>
-      <span>${icon("bell")} ${escapeHtml(alertState)}</span>
-      <span>${icon("alert")} ${urgentCount} urgent</span>
-      <span>${icon("news")} ${notices.length} live</span>
+      <div class="employee-status-ribbon">
+        <span class="employee-status-pill">${icon("cloud")} ${escapeHtml(weatherLevel)}</span>
+        <span class="employee-status-pill">${icon("bell")} ${escapeHtml(alertState)}</span>
+        <span class="employee-status-pill">${icon("alert")} ${urgentCount} urgent</span>
+        <span class="employee-status-pill">${icon("news")} ${notices.length} live</span>
+      </div>
     </section>
   `;
 }
@@ -2591,7 +2666,7 @@ function renderAccessPinPanel() {
         </div>
         <div class="push-metric">
           <strong>${escapeHtml(state.pushStatus.supported ? "Ready" : "Off")}</strong>
-          <span>Push delivery</span>
+          <span>Device status</span>
         </div>
       </div>
 
@@ -2661,7 +2736,6 @@ function renderAdminInviteGate(route) {
       <div class="auth-form auth-recovery-stack">
         <div class="invite-summary">
           <div class="invite-summary-row"><strong>${escapeHtml(adminUser.displayName || adminUser.username || "Admin")}</strong></div>
-          <div class="invite-summary-row">${escapeHtml(adminUser.email || "")}</div>
           <div class="invite-summary-row">${escapeHtml(`@${adminUser.username || ""} · ${roles}`)}</div>
           <div class="invite-summary-row">${escapeHtml(adminUser.inviteExpiresAt ? `Expires ${formatDate(adminUser.inviteExpiresAt)}` : "")}</div>
         </div>
@@ -2858,19 +2932,10 @@ function renderAdminAuthGate(route) {
 }
 
 function renderEmployeeDirectoryRow(employee) {
-  const identitySummary = [employee.email || "", employee.department || "", employee.location || ""]
-    .filter(Boolean)
-    .join(" · ");
-  const accountSummary = [employee.externalEmployeeId ? `ID ${employee.externalEmployeeId}` : "", employee.identityProvider && employee.identityProvider !== "local" ? employee.identityProvider : ""]
-    .filter(Boolean)
-    .join(" · ");
-
   return `
     <tr>
       <td>
         <div class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</div>
-        ${identitySummary ? `<div class="admin-table-secondary">${escapeHtml(identitySummary)}</div>` : ""}
-        ${accountSummary ? `<div class="admin-table-secondary">${escapeHtml(accountSummary)}</div>` : ""}
       </td>
       <td>
         <div class="admin-table-primary">@${escapeHtml(employee.username)}</div>
@@ -2886,6 +2951,12 @@ function renderEmployeeDirectoryRow(employee) {
       <td>
         <div class="admin-table-primary">${escapeHtml(String(employee.authorizedDevices || 0))}</div>
         <div class="admin-table-secondary">${escapeHtml(`${employee.devices || 0} Total Enrolled`)}</div>
+        <form class="employee-device-inline-form" data-unenroll-employee-devices-form>
+          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+          <button class="ghost-button" type="submit"${employee.devices ? "" : " disabled"}>
+            ${icon("delete")} Unenroll
+          </button>
+        </form>
       </td>
       <td>
         <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
@@ -2924,18 +2995,6 @@ function renderAdminRoleChips(roles = []) {
 function adminInviteStatusText(adminUser) {
   if (adminUser.credentialsConfigured) {
     return adminUser.lastLoginAt ? `Last Login ${formatDate(adminUser.lastLoginAt)}` : "No Login Yet";
-  }
-
-  if (adminUser.inviteState === "pending") {
-    return adminUser.inviteExpiresAt
-      ? `Invite Pending Until ${formatDate(adminUser.inviteExpiresAt)}`
-      : "Invite Pending";
-  }
-
-  if (adminUser.inviteState === "expired") {
-    return adminUser.inviteExpiresAt
-      ? `Invite Expired ${formatDate(adminUser.inviteExpiresAt)}`
-      : "Invite Expired";
   }
 
   return "Credentials Not Configured";
@@ -3003,7 +3062,7 @@ function renderAdminRoleCell(adminUser, scope = "hr") {
 
 function renderAdminDirectoryRow(adminUser, scope = "hr") {
   const isCurrentUser = Boolean(adminUser.currentUser);
-  const identitySummary = [adminUser.email || "Email required", adminUser.username ? `@${adminUser.username}` : ""]
+  const identitySummary = [adminUser.username ? `@${adminUser.username}` : ""]
     .filter(Boolean)
     .join(" · ");
   const statusSummary = isCurrentUser
@@ -3023,10 +3082,6 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
             <label class="field">
               <span>Display name</span>
               <input name="displayName" maxlength="120" required value="${escapeHtml(adminUser.displayName || "")}" placeholder="Admin name">
-            </label>
-            <label class="field">
-              <span>Email</span>
-              <input name="email" type="email" maxlength="200" required value="${escapeHtml(adminUser.email || "")}" placeholder="admin@company.com">
             </label>
           </div>
           <button class="ghost-button" type="submit">${icon("check")} Save Identity</button>
@@ -3048,11 +3103,7 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
             ${escapeHtml(
               adminUser.credentialsConfigured
                 ? "Configured"
-                : adminUser.inviteState === "pending"
-                  ? "Invite Pending"
-                : adminUser.inviteState === "expired"
-                    ? "Invite Expired"
-                    : "Needs Invite"
+                : "Needs Password"
             )}
           </span>
           <form class="admin-table-inline-form admin-password-inline-form" data-reset-admin-password-form data-admin-scope="${escapeHtml(scopeValue)}">
@@ -3064,12 +3115,6 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
       </td>
       <td>
         <div class="admin-table-actions">
-          ${!adminUser.credentialsConfigured ? `
-          <form data-resend-admin-invite-form data-admin-scope="${escapeHtml(scopeValue)}">
-            <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
-            <button class="ghost-button" type="submit">${icon("send")} ${escapeHtml(adminUser.inviteState === "pending" ? "Resend Invite" : "Send Invite")}</button>
-          </form>
-          ` : ""}
           <form data-admin-access-form data-admin-scope="${escapeHtml(scopeValue)}">
             <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
             <input type="hidden" name="active" value="${adminUser.active ? "false" : "true"}">
@@ -3174,10 +3219,6 @@ function renderAdminAccountsPanel(scope = "hr") {
           <input name="displayName" maxlength="120" required placeholder="Alex Morgan">
         </label>
         <label class="field">
-          <span>Email</span>
-          <input name="email" type="email" maxlength="200" required placeholder="alex@company.com">
-        </label>
-        <label class="field">
           <span>Username</span>
           <input name="username" maxlength="80" required>
         </label>
@@ -3187,8 +3228,7 @@ function renderAdminAccountsPanel(scope = "hr") {
         </label>
         ${roleControl}
         <div class="admin-create-actions">
-          <button class="button employee-create-submit" type="submit" data-admin-create-action="invite">${icon("send")} Send Invite</button>
-          <button class="ghost-button" type="submit" data-admin-create-action="password">${icon("lock")} Create With Password</button>
+          <button class="button employee-create-submit" type="submit" data-admin-create-action="password">${icon("lock")} Create Account</button>
         </div>
       </form>
 
@@ -3236,60 +3276,36 @@ function renderEmployeeDirectoryPanel() {
         <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
       </div>
 
-      <form class="employee-create-form employee-create-grid" data-create-employee-form>
-        <label class="field">
-          <span>Name</span>
-          <input name="name" maxlength="120" required placeholder="Employee Name">
-        </label>
-        <label class="field">
-          <span>Username</span>
-          <input name="username" maxlength="80" required>
-        </label>
-        <label class="field">
-          <span>Email</span>
-          <input name="email" type="email" maxlength="200" placeholder="employee@company.com">
-        </label>
-        <label class="field">
-          <span>Recovery email</span>
-          <input name="recoveryEmail" type="email" maxlength="200" placeholder="personal@example.com">
-        </label>
-        <label class="field">
-          <span>Employee ID</span>
-          <input name="externalEmployeeId" maxlength="80" placeholder="EMP-1024">
-        </label>
-        <label class="field">
-          <span>Department</span>
-          <input name="department" maxlength="80" placeholder="Operations">
-        </label>
-        <label class="field">
-          <span>Location</span>
-          <input name="location" maxlength="80" placeholder="Boston">
-        </label>
-        <label class="field">
-          <span>Identity provider</span>
-          <select name="identityProvider">
-            <option value="local" selected>Local</option>
-            <option value="google">Google Workspace</option>
-            <option value="microsoft">Microsoft Entra ID</option>
-            <option value="okta">Okta</option>
-          </select>
-        </label>
-        <label class="field field-span-2">
-          <span>SSO subject</span>
-          <input name="ssoSubject" maxlength="160" placeholder="Optional external identity subject">
-        </label>
-        <label class="field field-span-2">
-          <span>Temporary password</span>
-          <input name="password" type="password" minlength="10" required>
-        </label>
-        <label class="checkbox-row field-span-2">
-          <input name="passwordResetRequired" type="checkbox" checked>
-          <span>Require password reset on first use</span>
-        </label>
-        <button class="button employee-create-submit" type="submit">${icon("users")} Create Account</button>
-      </form>
-
       ${renderEmployeeDirectoryTable(employees)}
+    </section>
+  `;
+}
+
+function renderEmployeeCreatePanel() {
+  return `
+    <section class="panel-card employee-access-card">
+      <details class="settings-collapse">
+        <summary class="ghost-button settings-collapse-toggle">${icon("users")} Create User</summary>
+        <form class="employee-create-form employee-create-grid" data-create-employee-form>
+          <label class="field">
+            <span>Name</span>
+            <input name="name" maxlength="120" required placeholder="Employee Name">
+          </label>
+          <label class="field">
+            <span>Username</span>
+            <input name="username" maxlength="80" required>
+          </label>
+          <label class="field field-span-2">
+            <span>Temporary password</span>
+            <input name="password" type="password" minlength="10" required>
+          </label>
+          <label class="checkbox-row field-span-2">
+            <input name="passwordResetRequired" type="checkbox" checked>
+            <span>Require password reset on first use</span>
+          </label>
+          <button class="button employee-create-submit" type="submit">${icon("users")} Create Account</button>
+        </form>
+      </details>
     </section>
   `;
 }
@@ -3309,7 +3325,7 @@ function renderEmployee() {
           </div>
         </section>
 
-        ${renderAppUpdateBanner()}
+      ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
       ${renderEmployeeSubscriptionBanner(setup)}
       ${renderEmployeeStatusStrip(notices, setup)}
@@ -3324,9 +3340,10 @@ function renderEmployee() {
         </div>
       </section>
 
-      <section class="employee-bottom-actions" aria-label="Account actions">
-        <button class="ghost-button employee-signout-button" type="button" data-employee-logout>Sign Out</button>
+      <section class="employee-signout-floor" aria-label="Sign out">
+        <button class="ghost-button employee-signout-button employee-footer-signout" type="button" data-employee-logout>Sign Out</button>
       </section>
+
     </main>
   `;
 }
@@ -3426,19 +3443,11 @@ function renderAdminPublishPanel() {
               </select>
             </label>
             <label class="field">
-              <span>Publish Target</span>
-              <select name="deliveryTarget">
-                <option value="feed" selected>Feed Only</option>
-                <option value="both">Feed and Alert</option>
-                <option value="alert">Alert Only</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Alert Retention</span>
+              <span>Retention</span>
               <select name="alertRetention">
                 <option value="24h">24 Hours</option>
-                <option value="48h" selected>48 Hours</option>
                 <option value="168h">7 Days</option>
+                <option value="720h" selected>30 Days</option>
                 <option value="manual">Manual Only</option>
               </select>
             </label>
@@ -3491,8 +3500,6 @@ function renderHistoryTable(posts) {
             <th>Category</th>
             <th>Priority</th>
             <th>Audience</th>
-            <th>Target</th>
-            <th>Alert</th>
             <th>Retention</th>
             <th>Actions</th>
           </tr>
@@ -3533,12 +3540,6 @@ function renderHistoryTableRow(post) {
       </td>
       <td>
         <div class="admin-table-primary">${escapeHtml(post.audience || "All Employees")}</div>
-      </td>
-      <td>
-        <span class="admin-table-chip">${escapeHtml(formatDeliveryTargetLabel(post.deliveryTarget))}</span>
-      </td>
-      <td>
-        <span class="admin-table-chip ${post.notifyEmployees ? "is-info" : "is-muted"}">${escapeHtml(post.notifyEmployees ? "Sent" : "No")}</span>
       </td>
       <td>
         <div class="admin-table-primary">${escapeHtml(formatAlertRetentionLabel(post.alertRetention))}</div>
@@ -3750,15 +3751,8 @@ function renderRoleSettingsHero(route) {
 
 function renderPrivilegedPasswordPanel(route) {
   const role = route === "webmaster" ? "Systems" : "HR";
-
-  return `
-    <section class="panel-card settings-credential-card" data-privileged-password-panel>
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} Credentials</p>
-          <h3>Change ${escapeHtml(role)} Password</h3>
-        </div>
-      </div>
+  const collapsible = route === "hr";
+  const formMarkup = `
       <form class="auth-form" data-privileged-password-form data-role-route="${escapeHtml(route)}">
         <div class="composer-grid">
           <label class="field">
@@ -3776,6 +3770,54 @@ function renderPrivilegedPasswordPanel(route) {
         </div>
         <div class="auth-form-actions">
           <button class="ghost-button" type="submit">${icon("lock")} Save New Password</button>
+        </div>
+      </form>
+  `;
+
+  return `
+    <section class="panel-card settings-credential-card" data-privileged-password-panel>
+      ${collapsible
+        ? `<details class="settings-collapse">
+            <summary class="ghost-button settings-collapse-toggle">${icon("lock")} Change Password</summary>
+            ${formMarkup}
+          </details>`
+        : `
+          <div class="panel-title panel-title-wide">
+            <div>
+              <p class="eyebrow">${icon("lock")} ${escapeHtml(role)} Credentials</p>
+              <h3>Change ${escapeHtml(role)} Password</h3>
+            </div>
+          </div>
+          ${formMarkup}`}
+    </section>
+  `;
+}
+
+function renderWeatherSettingsPanel() {
+  const weather = state.weather || defaultWeather();
+  const locationValue = weather.location || weather.resolvedName || "";
+  const updatedLabel = weather.updatedAt ? formatDate(weather.updatedAt) : "Not refreshed";
+
+  return `
+    <section class="panel-card weather-card">
+      <div class="panel-title panel-title-wide">
+        <div class="weather-copy">
+          <p class="eyebrow">${icon("cloud")} Weather</p>
+          <h3>Live weather source</h3>
+          <p>${escapeHtml(weather.condition || "Weather not configured")} · ${escapeHtml(weather.temperature || "--")} · ${escapeHtml(weather.impact || "Normal operations.")}</p>
+          <div class="weather-location">${escapeHtml(weather.resolvedName || weather.location || "No location configured")}</div>
+          <div class="weather-updated">${escapeHtml(updatedLabel)}</div>
+        </div>
+      </div>
+      <form class="auth-form" data-weather-form>
+        <div class="composer-grid">
+          <label class="field field-span-2">
+            <span>Location</span>
+            <input name="location" maxlength="120" required value="${escapeHtml(locationValue)}" placeholder="City, State or ZIP">
+          </label>
+        </div>
+        <div class="auth-form-actions">
+          <button class="ghost-button" type="submit">${icon("refresh")} Refresh Weather</button>
         </div>
       </form>
     </section>
@@ -3814,6 +3856,7 @@ function renderAdminSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
       ${renderRoleSettingsHero("hr")}
+      ${renderWeatherSettingsPanel()}
       ${state.access.hr.user?.mfa?.available ? renderAdminMfaPanel("hr") : ""}
       ${renderPrivilegedPasswordPanel("hr")}
     </section>
@@ -3837,7 +3880,7 @@ function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
       ${renderEmployeeDirectoryPanel()}
-      ${renderAdminAccountsPanel()}
+      ${renderEmployeeCreatePanel()}
     </section>
   `;
 }
@@ -4140,7 +4183,7 @@ function renderWebmasterContentPanel() {
           { label: "Active", value: String(board.activePosts || 0) },
           { label: "Urgent", value: String(board.urgentPosts || 0) },
           { label: "Expiring", value: String(board.expiringSoon || 0) },
-          { label: "Alerts", value: String(board.alertPosts || 0) }
+          { label: "Notified", value: String(board.alertPosts || 0) }
         ],
         body: `
           ${renderKeyValueGrid([
@@ -4148,7 +4191,7 @@ function renderWebmasterContentPanel() {
             ["Active posts", String(board.activePosts || 0), "Not expired"],
             ["Urgent posts", String(board.urgentPosts || 0), "Require immediate attention"],
             ["Important posts", String(board.importantPosts || 0), "Visible to staff"],
-            ["Alert-enabled", String(board.alertPosts || 0), "Will notify subscribed devices"],
+            ["Notifications", String(board.alertPosts || 0), "Sent to subscribed devices"],
             ["Expiring soon", String(board.expiringSoon || 0), "Next 7 days"]
           ])}
 
@@ -4253,7 +4296,6 @@ function renderWebmaster() {
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
           <button class="ghost-button" type="button" data-copy-webmaster-brief>${icon("clipboard")} Copy brief</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
-          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
         </div>
       </header>
 
@@ -4318,10 +4360,11 @@ function renderWebmaster() {
                 : activeWebmasterTab === "content"
                   ? renderWebmasterContentPanel()
                   : activeWebmasterTab === "codex"
-                    ? renderWebmasterCodexPanel()
+                  ? renderWebmasterCodexPanel()
                     : renderWebmasterSettingsPanel()
         }
       </section>
+      ${renderAdminSignoutFooter()}
     </main>
   `;
 }
@@ -4404,7 +4447,6 @@ function renderIt() {
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
           <button class="ghost-button" type="button" data-route="webmaster">${icon("monitor")} Systems Console</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
-          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
         </div>
       </header>
 
@@ -4431,6 +4473,7 @@ function renderIt() {
                 : renderAdminAccountsPanel("it")
         }
       </section>
+      ${renderAdminSignoutFooter()}
     </main>
   `;
 }
@@ -4450,14 +4493,13 @@ function renderAdmin() {
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
-          <button class="ghost-button" type="button" data-admin-logout>${icon("lock")} Sign Out</button>
         </div>
       </header>
 
       ${renderAppUpdateBanner()}
       <section class="hero-strip" aria-label="HR summary">
         ${renderHrSummaryStatCard({ value: String(activeCount), label: "Active Updates", tab: "history", filter: "Active" })}
-        ${renderHrSummaryStatCard({ value: String(urgentCount), label: "Urgent Alerts", tab: "history", filter: "Urgent" })}
+        ${renderHrSummaryStatCard({ value: String(urgentCount), label: "Urgent Updates", tab: "history", filter: "Urgent" })}
         ${renderHrSummaryStatCard({ value: String(activeEmployeeCount), label: "Active Employees", tab: "share" })}
       </section>
 
@@ -4471,11 +4513,14 @@ function renderAdmin() {
             ? renderAdminPublishPanel()
             : activeAdminTab === "share"
               ? renderAdminAccessPanel()
-              : activeAdminTab === "history"
-                ? renderAdminHistoryPanel()
-                : renderAdminSettingsPanel()
+            : activeAdminTab === "history"
+              ? renderAdminHistoryPanel()
+            : activeAdminTab === "settings"
+              ? renderAdminSettingsPanel()
+              : renderAdminAccessPanel()
         }
       </section>
+      ${renderAdminSignoutFooter()}
     </main>
   `;
 }
@@ -4618,8 +4663,6 @@ function render() {
     const focusSnapshot = captureFocusSnapshot();
     app.innerHTML = pageMarkup;
     restoreFocusSnapshot(focusSnapshot);
-    syncEmployeeNameField();
-    window.requestAnimationFrame(syncEmployeeNameField);
   }
 
 function captureFocusSnapshot() {
@@ -4645,21 +4688,6 @@ function restoreFocusSnapshot(snapshot) {
     typeof target.setSelectionRange === "function"
   ) {
     target.setSelectionRange(snapshot.start, snapshot.end);
-  }
-}
-
-function syncEmployeeNameField() {
-  const input = app.querySelector("[data-employee-name-field]");
-  if (!(input instanceof HTMLInputElement)) return;
-
-  const storedEmployeeName = String(
-    state.deviceProfile.employeeName ||
-    state.deviceProfile.label ||
-    ""
-  ).trim();
-
-  if (!storedEmployeeName) {
-    input.value = "";
   }
 }
 
@@ -4727,8 +4755,7 @@ async function handlePostSubmit(event) {
     const result = await createPost(data);
     form.reset();
     form.elements.audience.value = "All Employees";
-    form.elements.deliveryTarget.value = "feed";
-    form.elements.alertRetention.value = "48h";
+    form.elements.alertRetention.value = "720h";
     if (result.notification?.error) {
       setMessage(`Published, but alert delivery failed: ${result.notification.error}`, "warning");
     } else if (result.post.notifyEmployees) {
@@ -4769,40 +4796,25 @@ async function handleWeatherSubmit(event) {
 
 async function handleDeviceSetupSubmit(event) {
   event.preventDefault();
-  const form = event.target;
   const submitter = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
-  const data = Object.fromEntries(new FormData(form));
-  const nextProfile = saveDeviceProfile({
-    ...state.deviceProfile,
-    employeeName: String(data.employeeName || data.label || "").trim()
-  });
   const setup = buildEmployeeSetupState();
   const action = resolveDeviceSetupAction({
     submitterAction: submitter?.dataset.deviceAction,
     primaryActionId: setup.primaryAction.id
   });
-
-  state.deviceProfile = nextProfile;
   render();
 
   try {
     if (action === "push") {
-      await enablePushAlerts(nextProfile);
+      await enablePushAlerts(state.deviceProfile);
       render();
       const nextUrl = new URL(window.location.href);
       nextUrl.searchParams.set("subscribed", String(Date.now()));
       window.location.replace(nextUrl.toString());
       return;
-    } else {
-      state.push.error = "";
-      setMessage("Saved the employee name.", "success");
     }
   } catch (error) {
-    if (action === "push") {
-      setMessage(formatPushError(error, "Could not subscribe this device."));
-    } else {
-      setMessage(error.message || "Could not save the employee name.");
-    }
+    setMessage(formatPushError(error, "Could not subscribe this device."));
   }
 
   render();
@@ -5074,68 +5086,38 @@ async function handleCreateAdminSubmit(event) {
   event.preventDefault();
   const form = event.target;
   const formData = new FormData(form);
-  const submitter = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
-  const action = submitter?.dataset.adminCreateAction === "password" ? "password" : "invite";
   const scope = normalizeAdminScope(form.dataset.adminScope);
   const adminApi = adminApiBase(scope);
   const payload = {
     displayName: formData.get("displayName"),
-    email: formData.get("email"),
     username: formData.get("username"),
     roles: formData.getAll("roles")
   };
 
   try {
-    if (action === "password") {
-      const password = String(formData.get("password") || "");
+    const password = String(formData.get("password") || "");
 
-      if (password.length < 10) {
-        throw new Error("Temporary password must be at least 10 characters.");
-      }
-
-      const result = await requestJson(adminApi, {
-        method: "POST",
-        body: JSON.stringify({
-          ...payload,
-          password
-        })
-      });
-      form.reset();
-      resetAdminCreateFormDefaults(form, scope);
-      await refreshAdminManagementScope(scope);
-      setMessage(
-        scope === "it"
-          ? "Admin account created with a temporary password."
-          : scope === "webmaster"
-          ? "System Ops admin account created with a temporary password."
-          : "Admin account created with a temporary password.",
-        "success"
-      );
-      render();
-      clearMessageSoon();
-      return result;
+    if (password.length < 10) {
+      throw new Error("Temporary password must be at least 10 characters.");
     }
 
-    const result = await requestJson(`${adminApi}/invite`, {
+    const result = await requestJson(adminApi, {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        password
+      })
     });
     form.reset();
     resetAdminCreateFormDefaults(form, scope);
     await refreshAdminManagementScope(scope);
     setMessage(
-      result.emailDelivered === false
-        ? scope === "it"
-          ? "Admin account created, but the invitation email could not be sent."
-          : scope === "webmaster"
-          ? "System Ops admin account created, but the invitation email could not be sent."
-          : "Admin account created, but the invitation email could not be sent."
-        : scope === "it"
-          ? "Admin invitation sent."
+      scope === "it"
+        ? "Admin account created with a temporary password."
         : scope === "webmaster"
-          ? "System Ops admin invitation sent."
-          : "Admin invitation sent.",
-      result.emailDelivered === false ? "warning" : "success"
+          ? "System Ops admin account created with a temporary password."
+          : "Admin account created with a temporary password.",
+      "success"
     );
   } catch (error) {
     setMessage(error.message || "Could not create the admin account.");
@@ -5156,48 +5138,13 @@ async function handleUpdateAdminProfileSubmit(event) {
     await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/profile`, {
       method: "POST",
       body: JSON.stringify({
-        displayName: formData.get("displayName"),
-        email: formData.get("email")
+        displayName: formData.get("displayName")
       })
     });
     await refreshAdminManagementScope(scope);
     setMessage(scope === "webmaster" ? "System Ops admin identity updated." : "Admin identity updated.", "success");
   } catch (error) {
     setMessage(error.message || "Could not update the admin identity.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
-async function handleResendAdminInviteSubmit(event) {
-  event.preventDefault();
-  const form = event.target;
-  const formData = new FormData(form);
-  const adminUserId = String(formData.get("adminUserId") || "");
-  const scope = normalizeAdminScope(form.dataset.adminScope);
-
-  try {
-    const result = await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}/invite`, {
-      method: "POST"
-    });
-    await refreshAdminManagementScope(scope);
-    setMessage(
-      result.emailDelivered === false
-        ? scope === "it"
-          ? "Invitation refreshed, but the email could not be sent."
-          : scope === "webmaster"
-          ? "System Ops invitation refreshed, but the email could not be sent."
-          : "Invitation refreshed, but the email could not be sent."
-        : scope === "it"
-          ? "Invitation sent."
-        : scope === "webmaster"
-          ? "System Ops invitation sent."
-          : "Invitation sent.",
-      result.emailDelivered === false ? "warning" : "success"
-    );
-  } catch (error) {
-    setMessage(error.message || "Could not send the invitation.");
   }
 
   render();
@@ -5330,6 +5277,31 @@ async function handleResetEmployeePasswordSubmit(event) {
     setMessage("Employee password reset.", "success");
   } catch (error) {
     setMessage(error.message || "Could not reset the password.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleUnenrollEmployeeDevicesSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  const employeeId = String(data.employeeId || "");
+
+  try {
+    const result = await requestJson(`/api/employees/${encodeURIComponent(employeeId)}/devices/unenroll`, {
+      method: "POST"
+    });
+    await refreshAdminData();
+    const removedCount = Number(result.removedCount || 0);
+    setMessage(
+      removedCount > 0
+        ? `${removedCount} device${removedCount === 1 ? "" : "s"} unenrolled.`
+        : "No enrolled devices found.",
+      "success"
+    );
+  } catch (error) {
+    setMessage(error.message || "Could not unenroll employee devices.");
   }
 
   render();
@@ -5842,11 +5814,6 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (event.target.matches("[data-resend-admin-invite-form]")) {
-    await handleResendAdminInviteSubmit(event);
-    return;
-  }
-
   if (event.target.matches("[data-employee-access-form]")) {
     await handleEmployeeAccessSubmit(event);
     return;
@@ -5854,6 +5821,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-reset-employee-password-form]")) {
     await handleResetEmployeePasswordSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-unenroll-employee-devices-form]")) {
+    await handleUnenrollEmployeeDevicesSubmit(event);
     return;
   }
 
@@ -5912,13 +5884,6 @@ app.addEventListener("change", (event) => {
   if (event.target.name !== "priority" || !event.target.form?.matches("[data-post-form]")) {
     return;
   }
-
-  const form = event.target.form;
-  const deliveryTarget = form?.elements.namedItem("deliveryTarget");
-
-  if (deliveryTarget instanceof HTMLSelectElement && event.target.value !== "Normal" && deliveryTarget.value === "feed") {
-    deliveryTarget.value = "both";
-  }
 });
 
 app.addEventListener("toggle", (event) => {
@@ -5945,11 +5910,30 @@ app.addEventListener("toggle", (event) => {
 window.addEventListener("hashchange", async () => {
   await hydrateRoute();
   render();
+  scheduleClientShellCheck("hashchange");
 });
 
 window.addEventListener("popstate", async () => {
   await hydrateRoute();
   render();
+  scheduleClientShellCheck("popstate");
+});
+
+window.addEventListener("error", (event) => {
+  sendClientTelemetry({
+    type: "runtime-error",
+    severity: "error",
+    detail: String(event.message || "Unhandled client runtime error.").slice(0, 240)
+  }, { onceKey: `runtime-error:${String(event.message || "unknown").slice(0, 120)}` });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason instanceof Error ? event.reason.message : String(event.reason || "Unhandled promise rejection");
+  sendClientTelemetry({
+    type: "unhandled-rejection",
+    severity: "error",
+    detail: reason.slice(0, 240)
+  }, { onceKey: `unhandled-rejection:${reason.slice(0, 120)}` });
 });
 
 if ("serviceWorker" in navigator) {
@@ -6002,9 +5986,15 @@ try {
   await hydrateRoute();
 } catch (error) {
   setMessage(error.message || "Could not load the app.");
+  sendClientTelemetry({
+    type: "bootstrap-error",
+    severity: "error",
+    detail: String(error?.message || "Could not load the app.").slice(0, 240)
+  }, { onceKey: "bootstrap-error" });
 } finally {
   state.loading = false;
   render();
+  scheduleClientShellCheck("initial-load");
   void checkForAppUpdate();
 }
 

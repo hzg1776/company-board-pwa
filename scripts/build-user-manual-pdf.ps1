@@ -1,5 +1,6 @@
 param(
-  [string]$BaseUrl = ""
+  [string]$BaseUrl = "",
+  [switch]$AuthenticatedScreenshots
 )
 $ErrorActionPreference = 'Stop'
 
@@ -9,22 +10,38 @@ $shotDir = Join-Path $outDir 'screenshots'
 $pdfPath = Join-Path $outDir 'Communications_And_Alert_Center_User_Manual.pdf'
 $htmlPath = Join-Path $outDir 'Communications_And_Alert_Center_User_Manual.html'
 $mdPath = Join-Path $root 'docs\USER_MANUAL.md'
-$resolvedBaseUrl = if ($BaseUrl) { $BaseUrl } elseif ($env:PUBLIC_BASE_URL) { $env:PUBLIC_BASE_URL } else { 'http://localhost:3000' }
+$resolvedBaseUrl = if ($BaseUrl) { $BaseUrl } elseif ($env:PUBLIC_BASE_URL) { $env:PUBLIC_BASE_URL } else { 'http://localhost:3116' }
 $resolvedBaseUrl = $resolvedBaseUrl.TrimEnd('/')
 
 New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
 
 $routes = @(
     @{ name = '01-launcher';     url = "$resolvedBaseUrl/palzivalerts";            label = 'Launcher page (/palzivalerts)' },
-    @{ name = '02-employee';     url = "$resolvedBaseUrl/palzivalerts/employee";   label = 'Employee login and feed view (/palzivalerts/employee)' },
-    @{ name = '03-hr';           url = "$resolvedBaseUrl/palzivalerts/hr";         label = 'HR login route (/palzivalerts/hr)' },
-    @{ name = '04-webmaster';    url = "$resolvedBaseUrl/palzivalerts/webmaster";  label = 'Systems login route (/palzivalerts/webmaster)' },
-    @{ name = '05-it';           url = "$resolvedBaseUrl/palzivalerts/it";         label = 'IT login route (/palzivalerts/it)' }
+    @{ name = '02-employee';     url = "$resolvedBaseUrl/palzivalerts/employee";   label = 'Employee signed-in feed (/palzivalerts/employee)' },
+    @{ name = '03-hr';           url = "$resolvedBaseUrl/palzivalerts/hr";         label = 'HR Control Center signed in (/palzivalerts/hr)' },
+    @{ name = '04-webmaster';    url = "$resolvedBaseUrl/palzivalerts/webmaster";  label = 'Systems Command Center signed in (/palzivalerts/webmaster)' },
+    @{ name = '05-it';           url = "$resolvedBaseUrl/palzivalerts/it";         label = 'IT Control Center signed in (/palzivalerts/it)' }
 )
 
-foreach ($r in $routes) {
-    $out = Join-Path $shotDir ("$($r.name).png")
-    npx playwright screenshot --device="iPhone 13" --wait-for-timeout=1200 $r.url $out
+if ($AuthenticatedScreenshots) {
+    $env:MANUAL_BASE_URL = $resolvedBaseUrl
+    $env:MANUAL_SCREENSHOT_DIR = $shotDir
+    node .\scripts\capture-manual-screenshots.mjs
+    foreach ($r in $routes) {
+        $out = Join-Path $shotDir ("$($r.name).png")
+        if ($r.name -eq '01-launcher') {
+            npx playwright screenshot --device="iPhone 13" --full-page --wait-for-timeout=1200 $r.url $out
+        } else {
+            $storageName = if ($r.name -eq '02-employee') { 'employee-storage.json' } elseif ($r.name -eq '03-hr') { 'hr-storage.json' } elseif ($r.name -eq '04-webmaster') { 'webmaster-storage.json' } else { 'it-storage.json' }
+            $storagePath = Join-Path $shotDir $storageName
+            npx playwright screenshot --device="iPhone 13" --full-page --wait-for-timeout=1200 --load-storage $storagePath $r.url $out
+        }
+    }
+} else {
+    foreach ($r in $routes) {
+        $out = Join-Path $shotDir ("$($r.name).png")
+        npx playwright screenshot --device="iPhone 13" --full-page --wait-for-timeout=1200 $r.url $out
+    }
 }
 
 $markdownHtml = ((& npx -y marked --gfm $mdPath) | Out-String).TrimEnd()

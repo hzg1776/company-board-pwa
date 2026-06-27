@@ -9,7 +9,8 @@ $targets = @(
     "/palzivalerts/",
     "/palzivalerts/employee",
     "/palzivalerts/hr",
-    "/palzivalerts/webmaster"
+    "/palzivalerts/webmaster",
+    "/palzivalerts/it"
 )
 
 $results = @()

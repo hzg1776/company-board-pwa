@@ -932,7 +932,7 @@ function validateAdminEmail(email) {
   const normalizedEmail = normalizeEmail(email);
 
   if (!normalizedEmail) {
-    throw new Error("Email is required.");
+    return "";
   }
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {

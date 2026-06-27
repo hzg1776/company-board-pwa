@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveDeviceSetupAction } from "../public/device-setup.js";
+import {
+  resolveDeviceSetupAction,
+  resolveDeviceSetupSecondaryAction
+} from "../public/device-setup.js";
 
 test("resolveDeviceSetupAction prefers an explicit submitter action", () => {
   assert.equal(
@@ -33,4 +36,10 @@ test("resolveDeviceSetupAction falls back to the current primary action", () => 
 
 test("resolveDeviceSetupAction defaults to profile when nothing else is available", () => {
   assert.equal(resolveDeviceSetupAction({}), "profile");
+});
+
+test("employee self-unenroll uses the disable-alerts path only when the current device is enrolled", () => {
+  assert.equal(resolveDeviceSetupSecondaryAction({ hasCurrentDevice: true }), "disable-alerts");
+  assert.equal(resolveDeviceSetupSecondaryAction({ hasCurrentDevice: false }), null);
+  assert.equal(resolveDeviceSetupSecondaryAction({}), null);
 });

@@ -492,6 +492,120 @@ test("server protects board reads and revokes disabled employees", async (t) => 
   assert.equal(removedPushRoute.status, 404);
 });
 
+test("HR can unenroll all devices for one employee", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-unenroll-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const employeeResult = await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  await writeFile(path.join(tempDir, "push.json"), `${JSON.stringify({
+    subscriptions: [
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/maria-phone-1",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key-1",
+          auth: "sample-auth-key-1"
+        },
+        deviceId: "maria-phone-1",
+        label: "Maria phone 1",
+        browser: "Chrome",
+        platform: "iPhone",
+        employeeId: employeeResult.employee.id,
+        employeeName: employeeResult.employee.name,
+        username: employeeResult.employee.username,
+        authorized: true
+      },
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/maria-phone-2",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key-2",
+          auth: "sample-auth-key-2"
+        },
+        deviceId: "maria-phone-2",
+        label: "Maria phone 2",
+        browser: "Safari",
+        platform: "iPhone",
+        employeeId: employeeResult.employee.id,
+        employeeName: employeeResult.employee.name,
+        username: employeeResult.employee.username,
+        authorized: true
+      },
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/unbound-device",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key-3",
+          auth: "sample-auth-key-3"
+        },
+        deviceId: "unbound-device",
+        label: "Shared kiosk",
+        browser: "Chrome",
+        platform: "Windows",
+        authorized: true
+      }
+    ]
+  }, null, 2)}\n`, "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const adminLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(adminLogin.status, 200);
+  const adminBody = await adminLogin.json();
+  const adminCookie = readSetCookie(adminLogin);
+
+  const unenrollResponse = await fetch(`${server.baseUrl}/api/employees/${employeeResult.employee.id}/devices/unenroll`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: adminCookie,
+      "X-CSRF-Token": adminBody.csrfToken
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(unenrollResponse.status, 200);
+  const unenrollBody = await unenrollResponse.json();
+  assert.equal(Number(unenrollBody.removedCount), 2);
+
+  const pushStatus = await fetch(`${server.baseUrl}/api/push/status`, {
+    headers: {
+      Cookie: adminCookie
+    }
+  });
+  assert.equal(pushStatus.status, 200);
+  const pushBody = await pushStatus.json();
+  assert.equal(Number(pushBody.subscriptions), 1);
+  assert.equal(Number(pushBody.authorizedSubscriptions), 0);
+  assert.equal(pushBody.devices.some((device) => String(device.label || "").includes("Maria")), false);
+});
+
 test("employees can acknowledge important posts and HR sees acknowledgement totals", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-ack-"));
   const securityFile = path.join(tempDir, "security.json");
@@ -1962,4 +2076,59 @@ test("server reloads index and service worker templates without a process restar
   assert.equal(secondSw.status, 200);
   const secondSwText = await secondSw.text();
   assert.match(secondSwText, /beta-sw/i);
+});
+
+test("service worker ships versioned shell assets for client cache busting", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-versioned-sw-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const response = await fetch(`${server.baseUrl}/sw.js`);
+  assert.equal(response.status, 200);
+  const text = await response.text();
+
+  assert.match(text, /\/device-setup\.js\?v=/i);
+  assert.match(text, /\/assets\/palziv-wordmark\.png\?v=/i);
+});
+
+test("server exposes shell diagnostics and recent client telemetry", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-diagnostics-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const clientEventResponse = await fetch(`${server.baseUrl}/api/client-events`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      type: "blank-screen",
+      severity: "error",
+      route: "launcher",
+      pathname: "/palzivalerts",
+      detail: "App container stayed empty after boot.",
+      assetVersion: "test-version"
+    })
+  });
+  assert.equal(clientEventResponse.status, 201);
+
+  const diagnosticsResponse = await fetch(`${server.baseUrl}/api/health/diagnostics`);
+  assert.equal(diagnosticsResponse.status, 200);
+  const diagnostics = await diagnosticsResponse.json();
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.app.assetVersion.length > 0, true);
+  assert.equal(Array.isArray(diagnostics.client.recentEvents), true);
+  assert.equal(diagnostics.client.recentEvents[0].type, "blank-screen");
+  assert.equal(diagnostics.client.recentEvents[0].assetVersion, "test-version");
 });
