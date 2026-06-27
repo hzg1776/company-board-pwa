@@ -916,7 +916,8 @@ a:focus-visible {
 
 .employee-weather-details div {
   display: grid;
-  gap: 4px;
+  gap: 8px;
+  justify-items: start;
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--line);
@@ -925,10 +926,24 @@ a:focus-visible {
 }
 
 .employee-weather-details dt {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-transform: none;
+  margin: 0;
+}
+
+.employee-weather-detail-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(31, 122, 232, 0.16);
+  border-radius: 12px;
+  background: rgba(31, 122, 232, 0.1);
+  color: var(--steel);
+}
+
+.employee-weather-detail-icon .icon {
+  width: 17px;
+  height: 17px;
 }
 
 .employee-weather-details dd {

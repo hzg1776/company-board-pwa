@@ -314,9 +314,12 @@ const clientTelemetrySent = new Set();
 
 const icons = {
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  "arrow-down": '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+  "arrow-up": '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
   bell: '<path d="M10 21h4"/><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   board: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/>',
   chart: '<path d="M4 19h16"/><path d="M6 16V10"/><path d="M11 16V6"/><path d="M16 16v-5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   cloud: '<path d="M17.5 19H8a6 6 0 1 1 5.5-8.42A4.5 4.5 0 1 1 17.5 19Z"/>',
   delete: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/>',
   filter: '<path d="M4 5h16"/><path d="M7 12h10"/><path d="M10 19h4"/>',
@@ -327,6 +330,8 @@ const icons = {
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18 5.3L21 8"/><path d="M21 3v5h-5"/>',
   send: '<path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/>',
+  sunrise: '<path d="M3 17h18"/><path d="M5 21h14"/><path d="M12 3v8"/><path d="m8 7 4-4 4 4"/><path d="M6.2 14a6 6 0 0 1 11.6 0"/>',
+  sunset: '<path d="M3 17h18"/><path d="M5 21h14"/><path d="M12 11V3"/><path d="m8 7 4 4 4-4"/><path d="M6.2 14a6 6 0 0 1 11.6 0"/>',
   check: '<path d="m20 6-11 11-5-5"/>',
   clipboard: '<rect x="8" y="3" width="8" height="4" rx="1"/><path d="M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="M9 12h6"/><path d="M9 16h6"/>',
   monitor: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 20h8"/><path d="M12 17v3"/>',
@@ -2652,6 +2657,19 @@ function renderEmployeeStatusStrip(notices, setup) {
   `;
 }
 
+function renderEmployeeWeatherDetail(iconName, label, value) {
+  return `
+    <div>
+      <dt>
+        <span class="employee-weather-detail-icon" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+          ${icon(iconName)}
+        </span>
+      </dt>
+      <dd>${escapeHtml(value)}</dd>
+    </div>
+  `;
+}
+
 function renderEmployeeWeatherCard() {
   const weather = state.weather || defaultWeather();
   const condition = String(weather.condition || "Weather not configured");
@@ -2686,38 +2704,14 @@ function renderEmployeeWeatherCard() {
         </div>
       </div>
       <dl class="employee-weather-details">
-        <div>
-          <dt>Status</dt>
-          <dd>${escapeHtml(level)}</dd>
-        </div>
-        <div>
-          <dt>High</dt>
-          <dd>${escapeHtml(highTemperature)}</dd>
-        </div>
-        <div>
-          <dt>Low</dt>
-          <dd>${escapeHtml(lowTemperature)}</dd>
-        </div>
-        <div>
-          <dt>Local time</dt>
-          <dd>${escapeHtml(localTimeLabel)}</dd>
-        </div>
-        <div>
-          <dt>Sunrise</dt>
-          <dd>${escapeHtml(sunrise)}</dd>
-        </div>
-        <div>
-          <dt>Sunset</dt>
-          <dd>${escapeHtml(sunset)}</dd>
-        </div>
-        <div>
-          <dt>Last refreshed</dt>
-          <dd>${escapeHtml(updatedLabel)}</dd>
-        </div>
-        <div>
-          <dt>Source</dt>
-          <dd>${escapeHtml(sourceLabel)}</dd>
-        </div>
+        ${renderEmployeeWeatherDetail("shield", "Status", level)}
+        ${renderEmployeeWeatherDetail("arrow-up", "High", highTemperature)}
+        ${renderEmployeeWeatherDetail("arrow-down", "Low", lowTemperature)}
+        ${renderEmployeeWeatherDetail("clock", "Local time", localTimeLabel)}
+        ${renderEmployeeWeatherDetail("sunrise", "Sunrise", sunrise)}
+        ${renderEmployeeWeatherDetail("sunset", "Sunset", sunset)}
+        ${renderEmployeeWeatherDetail("refresh", "Last refreshed", updatedLabel)}
+        ${renderEmployeeWeatherDetail("cloud", "Source", sourceLabel)}
       </dl>
     </section>
   `;

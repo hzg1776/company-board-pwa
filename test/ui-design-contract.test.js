@@ -122,18 +122,18 @@ test("employee weather renders as a full isolated detail card", async () => {
   const weatherCardBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-card");
   const weatherPrimaryBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-primary");
   const weatherDetailsBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-details");
+  const weatherDetailIconBody = getLastSelectorBody(css, ".employee-weather-detail-icon");
 
   assert.match(app, /function renderEmployeeWeatherCard/);
   assert.match(app, /class="employee-weather-card"/);
   assert.match(app, /class="employee-weather-temperature"/);
   assert.match(app, /class="employee-weather-details"/);
   assert.match(app, />Current weather</);
-  assert.match(app, />High</);
-  assert.match(app, />Low</);
-  assert.match(app, />Local time</);
-  assert.match(app, />Last refreshed</);
-  assert.match(app, />Sunrise</);
-  assert.match(app, />Sunset</);
+  assert.match(app, /class="employee-weather-detail-icon"/);
+  for (const label of ["Status", "High", "Low", "Local time", "Sunrise", "Sunset", "Last refreshed", "Source"]) {
+    assert.match(app, new RegExp(`renderEmployeeWeatherDetail\\("[^"]+", "${label}"`));
+    assert.doesNotMatch(app, new RegExp(`<dt>\\s*${label}\\s*</dt>`));
+  }
   assert.doesNotMatch(app, /const weatherLevel = String\(weather\.level/);
 
   assert.equal(getDeclarationValue(weatherCardBody, "display"), "grid");
@@ -141,6 +141,9 @@ test("employee weather renders as a full isolated detail card", async () => {
   assert.equal(getDeclarationValue(weatherCardBody, "background"), "var(--surface) !important");
   assert.equal(getDeclarationValue(weatherPrimaryBody, "display"), "flex");
   assert.equal(getDeclarationValue(weatherDetailsBody, "display"), "grid");
+  assert.equal(getDeclarationValue(weatherDetailIconBody, "display"), "inline-flex");
+  assert.equal(getDeclarationValue(weatherDetailIconBody, "width"), "34px");
+  assert.equal(getDeclarationValue(weatherDetailIconBody, "height"), "34px");
 });
 
 test("employee feed page centers a large brand header and gives cards more breathing room", async () => {
