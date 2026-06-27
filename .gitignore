@@ -6,6 +6,9 @@ logs/
 runtime/
 artifacts/
 tmp/
+.tmp-*
+.tmp-browser-test*/
+output/
 /.codex/
 security-scans/
 data/board.json

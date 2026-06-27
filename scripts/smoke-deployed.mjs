@@ -82,12 +82,14 @@ async function main() {
   const employeePage = await request('/palzivalerts/employee');
   const hrPage = await request('/palzivalerts/hr');
   const webmasterPage = await request('/palzivalerts/webmaster');
+  const itPage = await request('/palzivalerts/it');
   results.pages = {
     health: { status: health.status, ok: health.body?.ok ?? null },
     launcher: { status: launcher.status, html: launcher.contentType.includes('text/html') },
     employee: { status: employeePage.status, html: employeePage.contentType.includes('text/html') },
     hr: { status: hrPage.status, html: hrPage.contentType.includes('text/html') },
-    webmaster: { status: webmasterPage.status, html: webmasterPage.contentType.includes('text/html') }
+    webmaster: { status: webmasterPage.status, html: webmasterPage.contentType.includes('text/html') },
+    it: { status: itPage.status, html: itPage.contentType.includes('text/html') }
   };
 
   const hrSetup = await request('/api/hr/setup', {
@@ -166,7 +168,8 @@ async function main() {
     summary: {
       status: summarySpoof.status,
       origin: summarySpoof.body?.urls?.origin ?? null,
-      employee: summarySpoof.body?.urls?.employee ?? null
+      employee: summarySpoof.body?.urls?.employee ?? null,
+      it: summarySpoof.body?.urls?.it ?? null
     },
     spoofedLogin: {
       status: spoofedLogin.status,

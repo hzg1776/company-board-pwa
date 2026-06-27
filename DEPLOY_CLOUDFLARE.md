@@ -100,10 +100,12 @@ https://www.your-domain.example/palzivalerts
 https://www.your-domain.example/palzivalerts/employee
 https://www.your-domain.example/palzivalerts/hr
 https://www.your-domain.example/palzivalerts/webmaster
+https://www.your-domain.example/palzivalerts/it
 https://your-domain.example/palzivalerts
 https://your-domain.example/palzivalerts/employee
 https://your-domain.example/palzivalerts/hr
 https://your-domain.example/palzivalerts/webmaster
+https://your-domain.example/palzivalerts/it
 ```
 
 ## 8. Windows Startup Script

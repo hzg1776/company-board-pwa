@@ -433,6 +433,7 @@ test("server protects board reads and revokes disabled employees", async (t) => 
   const spoofedSummaryBody = await spoofedSummary.json();
   assert.equal(spoofedSummaryBody.urls.origin, server.baseUrl);
   assert.equal(spoofedSummaryBody.urls.employee, `${server.baseUrl}/palzivalerts/employee`);
+  assert.equal(spoofedSummaryBody.urls.it, `${server.baseUrl}/palzivalerts/it`);
 
   const disableEmployee = await fetch(`${server.baseUrl}/api/employees/${employeeResult.employee.id}/status`, {
     method: "POST",

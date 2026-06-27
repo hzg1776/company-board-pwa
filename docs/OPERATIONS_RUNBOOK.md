@@ -1,8 +1,8 @@
-# Company Board PWA Operations Runbook
+# Communications and Alert Center Operations Runbook
 
 ## Purpose
 
-This runbook is the day-to-day operating guide for the live pilot deployment of Company Board PWA.
+This runbook is the day-to-day operating guide for the live pilot deployment of Communications and Alert Center.
 
 ## Deployment Baseline
 
@@ -62,6 +62,7 @@ Expected:
 - `/palzivalerts/employee` returns `200`
 - `/palzivalerts/hr` returns `200`
 - `/palzivalerts/webmaster` returns `200`
+- `/palzivalerts/it` returns `200`
 
 Automatic tunnel recovery:
 

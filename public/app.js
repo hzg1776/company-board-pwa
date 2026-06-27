@@ -892,6 +892,7 @@ function renderTabBar(tabs, activeTab, group, label) {
             </button>
           `
         )
+- IT console: ${urls.it || `${origin}${appPath("it")}`}
         .join("")}
     </nav>
   `;

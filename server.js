@@ -664,7 +664,8 @@ function buildWebmasterSummary({ boardData, pushData, analyticsData, securityRun
       launcher: base,
       employee: `${base}/employee`,
       hr: `${base}/hr`,
-      webmaster: `${base}/webmaster`
+      webmaster: `${base}/webmaster`,
+      it: `${base}/it`
     }
   };
 }

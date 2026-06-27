@@ -421,11 +421,13 @@ async function runBroadFlowScenario(artifactRoot, basePort) {
     const employeePage = await request('/palzivalerts/employee');
     const hrPage = await request('/palzivalerts/hr');
     const webmasterPage = await request('/palzivalerts/webmaster');
+    const itPage = await request('/palzivalerts/it');
     results.pages = {
       launcher: { status: launcher.status, html: launcher.contentType.includes('text/html') },
       employee: { status: employeePage.status, html: employeePage.contentType.includes('text/html') },
       hr: { status: hrPage.status, html: hrPage.contentType.includes('text/html') },
-      webmaster: { status: webmasterPage.status, html: webmasterPage.contentType.includes('text/html') }
+      webmaster: { status: webmasterPage.status, html: webmasterPage.contentType.includes('text/html') },
+      it: { status: itPage.status, html: itPage.contentType.includes('text/html') }
     };
 
     const hrSetup = await request('/api/hr/setup', {

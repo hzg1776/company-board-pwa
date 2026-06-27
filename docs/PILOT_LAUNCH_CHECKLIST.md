@@ -15,6 +15,7 @@ Do not onboard a pilot customer unless every `Launch Day` item below is complete
    - `https://itotexpress.com/palzivalerts/` returns `200`
    - `https://itotexpress.com/palzivalerts/hr` returns `200`
    - `https://itotexpress.com/palzivalerts/webmaster` returns `200`
+   - `https://itotexpress.com/palzivalerts/it` returns `200`
 2. Confirm local origin health:
    - `http://127.0.0.1:3116/api/health` returns `200`
 3. Confirm the live app is listening on port `3116`.
