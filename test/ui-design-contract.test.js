@@ -116,6 +116,29 @@ test("employee status strip keeps each icon paired with its label", async () => 
   assert.equal(getDeclarationValue(statusIconBody, "height"), "16px");
 });
 
+test("employee weather renders as a full isolated detail card", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const weatherCardBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-card");
+  const weatherPrimaryBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-primary");
+  const weatherDetailsBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-details");
+
+  assert.match(app, /function renderEmployeeWeatherCard/);
+  assert.match(app, /class="employee-weather-card"/);
+  assert.match(app, /class="employee-weather-temperature"/);
+  assert.match(app, /class="employee-weather-details"/);
+  assert.match(app, />Current weather</);
+  assert.match(app, />Local time</);
+  assert.match(app, />Last refreshed</);
+  assert.doesNotMatch(app, /const weatherLevel = String\(weather\.level/);
+
+  assert.equal(getDeclarationValue(weatherCardBody, "display"), "grid");
+  assert.equal(getDeclarationValue(weatherCardBody, "width"), "min(860px, 100%)");
+  assert.equal(getDeclarationValue(weatherCardBody, "background"), "var(--surface) !important");
+  assert.equal(getDeclarationValue(weatherPrimaryBody, "display"), "flex");
+  assert.equal(getDeclarationValue(weatherDetailsBody, "display"), "grid");
+});
+
 test("employee feed page centers a large brand header and gives cards more breathing room", async () => {
   const app = await loadClientApp();
   const css = await loadStylesheet();

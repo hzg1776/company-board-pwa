@@ -388,6 +388,21 @@ function formatDate(value) {
   }).format(date);
 }
 
+function formatTime(value) {
+  if (!value) return "Not available";
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Not available";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short"
+  }).format(date);
+}
+
 function csvCell(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
@@ -2620,18 +2635,66 @@ function renderFeedItem(post) {
 
 function renderEmployeeStatusStrip(notices, setup) {
   const urgentCount = notices.filter((post) => post.priority === "Urgent").length;
-  const weather = state.weather || defaultWeather();
-  const weatherLevel = String(weather.level || "Clear");
   const alertState = setup.ready ? "Alerts on" : "Setup";
 
   return `
     <section class="employee-status-strip" aria-label="Employee portal status">
       <div class="employee-status-ribbon">
-        <span class="employee-status-pill">${icon("cloud")} ${escapeHtml(weatherLevel)}</span>
         <span class="employee-status-pill">${icon("bell")} ${escapeHtml(alertState)}</span>
         <span class="employee-status-pill">${icon("alert")} ${urgentCount} urgent</span>
         <span class="employee-status-pill">${icon("news")} ${notices.length} live</span>
       </div>
+    </section>
+  `;
+}
+
+function renderEmployeeWeatherCard() {
+  const weather = state.weather || defaultWeather();
+  const condition = String(weather.condition || "Weather not configured");
+  const temperature = String(weather.temperature || "--");
+  const level = String(weather.level || "Clear");
+  const location = String(weather.resolvedName || weather.location || "No location configured");
+  const impact = String(weather.impact || "Normal operations.");
+  const updatedLabel = weather.updatedAt
+    ? `${formatDate(weather.updatedAt)} · ${formatTime(weather.updatedAt)}`
+    : "Not refreshed";
+  const localTimeLabel = formatTime(nowIso());
+  const sourceLabel = weather.location || weather.resolvedName ? "Live source" : "Location needed";
+
+  return `
+    <section class="employee-weather-card" aria-label="Current weather">
+      <div class="employee-weather-primary">
+        <div class="employee-weather-icon">${icon("cloud")}</div>
+        <div class="employee-weather-main">
+          <p class="eyebrow">Current weather</p>
+          <div class="employee-weather-reading">
+            <span class="employee-weather-temperature">${escapeHtml(temperature)}</span>
+            <div>
+              <h2>${escapeHtml(condition)}</h2>
+              <p>${escapeHtml(location)}</p>
+            </div>
+          </div>
+          <p class="employee-weather-impact">${escapeHtml(impact)}</p>
+        </div>
+      </div>
+      <dl class="employee-weather-details">
+        <div>
+          <dt>Status</dt>
+          <dd>${escapeHtml(level)}</dd>
+        </div>
+        <div>
+          <dt>Local time</dt>
+          <dd>${escapeHtml(localTimeLabel)}</dd>
+        </div>
+        <div>
+          <dt>Last refreshed</dt>
+          <dd>${escapeHtml(updatedLabel)}</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>${escapeHtml(sourceLabel)}</dd>
+        </div>
+      </dl>
     </section>
   `;
 }
@@ -3328,6 +3391,7 @@ function renderEmployee() {
       ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
       ${renderEmployeeSubscriptionBanner(setup)}
+      ${renderEmployeeWeatherCard()}
       ${renderEmployeeStatusStrip(notices, setup)}
 
       <section class="feed-shell feed-shell-quiet feed-shell-bare" aria-label="Latest updates feed">
