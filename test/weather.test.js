@@ -32,6 +32,7 @@ test("createDefaultWeather returns a placeholder snapshot", () => {
   assert.equal(weather.lowTemperature, "--");
   assert.equal(weather.sunrise, "");
   assert.equal(weather.sunset, "");
+  assert.equal(weather.source, "");
   assert.equal(weather.level, "Clear");
   assert.equal(weather.updatedAt, "");
 });
@@ -46,6 +47,7 @@ test("normalizeStoredWeather preserves stored weather fields", () => {
     lowTemperature: "61 F",
     sunrise: "6:14 AM",
     sunset: "8:31 PM",
+    source: "Open-Meteo",
     impact: "Wet floors possible.",
     level: "Watch",
     updatedAt: "2026-06-12T12:00:00.000Z"
@@ -60,6 +62,7 @@ test("normalizeStoredWeather preserves stored weather fields", () => {
     lowTemperature: "61 F",
     sunrise: "6:14 AM",
     sunset: "8:31 PM",
+    source: "Open-Meteo",
     impact: "Wet floors possible.",
     level: "Watch",
     updatedAt: "2026-06-12T12:00:00.000Z"
@@ -146,6 +149,7 @@ test("resolveLiveWeather looks up geocoding and current weather", async () => {
   assert.equal(weather.lowTemperature, "74°F");
   assert.equal(weather.sunrise, "6:21 AM");
   assert.equal(weather.sunset, "8:34 PM");
+  assert.equal(weather.source, "Open-Meteo");
   assert.equal(weather.level, "Watch");
   assert.match(weather.impact, /Wet floors possible/);
   assert.match(weather.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -282,6 +286,7 @@ test("resolveLiveWeather falls back to wttr when Open-Meteo is rate limited", as
   assert.equal(weather.lowTemperature, "77°F");
   assert.equal(weather.sunrise, "6:33 AM");
   assert.equal(weather.sunset, "8:29 PM");
+  assert.equal(weather.source, "WTTR");
   assert.equal(weather.level, "Clear");
   assert.equal(weather.impact, "Normal operations.");
 });

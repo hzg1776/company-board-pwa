@@ -29,8 +29,9 @@
 
 Note:
 
-- the setup token is mainly for protected bootstrap and emergency reprovisioning controls
-- the recovery token or daily recovery seed controls operator-driven HR recovery
+- the setup token is only for protected bootstrap and first-run provisioning
+- the recovery token or daily recovery seed controls operator-driven HR recovery and must be separate from the setup token
+- privileged MFA is enabled by default; disabling it should be temporary, documented, and reversed after recovery
 - after stable production bootstrap, keep it secret and out of source control
 
 ## HR And Systems Password Rotation

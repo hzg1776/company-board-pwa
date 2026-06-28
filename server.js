@@ -41,9 +41,9 @@ const PUSH_DATA_FILE = resolveManagedDataFile("PUSH_DATA_FILE", "push.json");
 const ANALYTICS_DATA_FILE = resolveManagedDataFile("ANALYTICS_DATA_FILE", "analytics.json");
 const SECURITY_DATA_FILE = resolveManagedDataFile("SECURITY_DATA_FILE", "security.json");
 const ADMIN_SETUP_TOKEN = String(process.env.ADMIN_SETUP_TOKEN || "");
-const ADMIN_MFA_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.ADMIN_MFA_ENABLED || ""));
+const ADMIN_MFA_ENABLED = !/^(0|false|no|off)$/i.test(String(process.env.ADMIN_MFA_ENABLED || "true"));
 const LOCAL_BOOTSTRAP_TOKEN = readLocalBootstrapToken(LOCAL_BOOTSTRAP_TOKEN_FILE);
-const ADMIN_RECOVERY_TOKEN = String(process.env.ADMIN_RECOVERY_TOKEN || process.env.ADMIN_SETUP_TOKEN || "");
+const ADMIN_RECOVERY_TOKEN = String(process.env.ADMIN_RECOVERY_TOKEN || "");
 const ADMIN_DAILY_RECOVERY_SEED = String(process.env.ADMIN_DAILY_RECOVERY_SEED || "");
 const HR_RECOVERY_EMAIL = String(process.env.HR_RECOVERY_EMAIL || "");
 const RECOVERY_EMAIL_FROM = String(process.env.RECOVERY_EMAIL_FROM || process.env.EMAIL_FROM || "");
@@ -60,6 +60,27 @@ const WEATHER_AUTO_REFRESH_LOCATION = cleanText(process.env.WEATHER_AUTO_REFRESH
 const WEATHER_AUTO_REFRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.WEATHER_AUTO_REFRESH_MS || 60 * 60 * 1000));
 const MAX_BODY_BYTES = 1_000_000;
 const EMPLOYEE_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
+const ADMIN_SESSION_COOKIE_MAX_AGE = 60 * 60 * 12;
+const SECURITY_HEADERS = Object.freeze({
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "img-src 'self' data:",
+    "manifest-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "connect-src 'self'",
+    "worker-src 'self'"
+  ].join("; "),
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "Strict-Transport-Security": "max-age=15552000; includeSubDomains"
+});
 const DEFAULT_SITE_CONFIG = Object.freeze({
   name: "Communications and Alert Center",
   nameSuffix: "",
@@ -159,6 +180,7 @@ function readLocalBootstrapToken(filePath) {
 function sendJson(res, statusCode, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
+    ...SECURITY_HEADERS,
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     ...extraHeaders
@@ -408,6 +430,7 @@ function serializeCookie(name, value, options = {}) {
 
 function redirectTo(res, location) {
   res.writeHead(308, {
+    ...SECURITY_HEADERS,
     Location: location,
     "Cache-Control": "no-store"
   });
@@ -759,6 +782,7 @@ async function buildHealthDiagnostics() {
 
 async function sendIndexHtml(res) {
   res.writeHead(200, {
+    ...SECURITY_HEADERS,
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store"
   });
@@ -767,6 +791,7 @@ async function sendIndexHtml(res) {
 
 async function sendServiceWorker(res) {
   res.writeHead(200, {
+    ...SECURITY_HEADERS,
     "Content-Type": "text/javascript; charset=utf-8",
     "Cache-Control": "no-store"
   });
@@ -804,6 +829,7 @@ function sendManifest(res) {
   };
 
   res.writeHead(200, {
+    ...SECURITY_HEADERS,
     "Content-Type": "application/manifest+json; charset=utf-8",
     "Cache-Control": "no-store"
   });
@@ -1214,6 +1240,30 @@ async function requireItMutationAccess(req, res) {
   return access;
 }
 
+async function requireDiagnosticsAccess(req, res) {
+  const itAccess = await securityStore.checkItAccess(req);
+  if (itAccess.authorized) {
+    return {
+      role: "it",
+      ...itAccess
+    };
+  }
+
+  const webmasterAccess = await securityStore.checkWebmasterAccess(req);
+  if (webmasterAccess.authorized) {
+    return {
+      role: "webmaster",
+      ...webmasterAccess
+    };
+  }
+
+  sendJson(res, 401, {
+    authorized: false,
+    error: "Diagnostics require IT or Systems access."
+  });
+  return null;
+}
+
 async function disableEmployeePushAccess(employeeId) {
   const targetEmployeeId = cleanText(employeeId, 80);
 
@@ -1407,11 +1457,7 @@ function postVisibleToEmployees(post = {}) {
 }
 
 function postRequiresAcknowledgement(post = {}) {
-  return postVisibleToEmployees(post) && (
-    post.priority === "Important" ||
-    post.priority === "Urgent" ||
-    Boolean(post.notifyEmployees)
-  );
+  return false;
 }
 
 function postForAccess(post, { data, access, employees = [] } = {}) {
@@ -1419,14 +1465,9 @@ function postForAccess(post, { data, access, employees = [] } = {}) {
   const requiresAcknowledgement = postRequiresAcknowledgement(post);
 
   if (access?.role === "employee") {
-    const employeeId = access.employee?.id || "";
-    const acknowledgement = acknowledgements.find((entry) => entry.employeeId === employeeId) || null;
-
     return {
       ...post,
-      requiresAcknowledgement,
-      acknowledgedByCurrentEmployee: Boolean(acknowledgement),
-      acknowledgedAt: acknowledgement?.acknowledgedAt || ""
+      requiresAcknowledgement
     };
   }
 
@@ -1490,7 +1531,7 @@ async function handleApi(req, res, url) {
     const adminSessionCookieHeaders = (sessionId) => ([
       serializeCookie(cookieNames.hr, sessionId, {
         path: "/",
-        maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+        maxAge: ADMIN_SESSION_COOKIE_MAX_AGE,
         httpOnly: true,
         sameSite: "Lax",
         secure: isSecureRequest(req)
@@ -1498,14 +1539,14 @@ async function handleApi(req, res, url) {
     ]);
     const webmasterSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.webmaster, sessionId, {
       path: "/",
-      maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+      maxAge: ADMIN_SESSION_COOKIE_MAX_AGE,
       httpOnly: true,
       sameSite: "Lax",
       secure: isSecureRequest(req)
     });
     const itSessionCookieHeader = (sessionId) => serializeCookie(cookieNames.it, sessionId, {
       path: "/",
-      maxAge: EMPLOYEE_SESSION_COOKIE_MAX_AGE,
+      maxAge: ADMIN_SESSION_COOKIE_MAX_AGE,
       httpOnly: true,
       sameSite: "Lax",
       secure: isSecureRequest(req)
@@ -1538,11 +1579,13 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/health/diagnostics") {
+      if (!(await requireDiagnosticsAccess(req, res))) return;
       sendJson(res, 200, await buildHealthDiagnostics());
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/client-events") {
+      if (!requireSameOrigin(req, res)) return;
       const body = await readJsonBody(req);
 
       await analyticsStore.recordClientEvent({
@@ -2810,54 +2853,7 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && acknowledgementMatch) {
       if (!requireSameOrigin(req, res)) return;
 
-      const employeeAccess = await requireEmployeeAccess(req, res);
-      if (!employeeAccess) return;
-
-      const postId = decodeURIComponent(acknowledgementMatch[1]);
-      const employee = employeeAccess.employee || {};
-      const result = await boardStore.updateData((data) => {
-        const post = data.posts.find((entry) => entry.id === postId);
-
-        if (!post) {
-          throw createHttpError(404, "Post not found.");
-        }
-
-        if (!postRequiresAcknowledgement(post)) {
-          throw createHttpError(400, "This post does not require acknowledgement.");
-        }
-
-        data.acknowledgements = Array.isArray(data.acknowledgements) ? data.acknowledgements : [];
-        const existing = data.acknowledgements.find((entry) => (
-          entry.postId === postId &&
-          entry.employeeId === employee.id
-        ));
-
-        if (existing) {
-          return {
-            created: false,
-            acknowledgement: existing
-          };
-        }
-
-        const acknowledgement = {
-          postId,
-          employeeId: employee.id,
-          employeeName: employee.name,
-          username: employee.username,
-          acknowledgedAt: nowIso()
-        };
-
-        data.acknowledgements.push(acknowledgement);
-        return {
-          created: true,
-          acknowledgement
-        };
-      });
-
-      sendJson(res, result.created ? 201 : 200, {
-        ok: true,
-        acknowledgement: result.acknowledgement
-      });
+      sendError(res, 410, "Employee mark-as-read is disabled.");
       return;
     }
 
@@ -2975,6 +2971,7 @@ async function serveStatic(req, res, url) {
     const contentType = mimeTypes.get(extension) || "application/octet-stream";
 
     res.writeHead(200, {
+      ...SECURITY_HEADERS,
       "Content-Type": contentType,
       "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=3600"
     });

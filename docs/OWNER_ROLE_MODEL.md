@@ -43,7 +43,7 @@ The IT role is for governance, recovery, billing, company settings, and audit ov
   - Systems admins cannot remove their own Systems role when they are the last active Systems admin.
 - Revoke active sessions after role removal, account disablement, and password reset.
 - Log all role, password, invite, disablement, and emergency-access events.
-- Future production hardening should add MFA for IT and admin accounts.
+- MFA is enabled by default for privileged admin accounts unless the host explicitly disables it for a controlled emergency window.
 
 ## Permission Matrix
 
@@ -98,7 +98,7 @@ The IT role is for governance, recovery, billing, company settings, and audit ov
 
 Phase 1 should add the IT role, IT-facing APIs, tests, and a small governance dashboard.
 
-Phase 2 should add MFA, audit export, billing/company settings, and recovery-code management.
+Phase 2 should add audit export, billing/company settings, and deeper recovery-code management.
 
 ## Implementation Status
 
@@ -111,4 +111,4 @@ Completed:
 
 Next:
 - Add the `/palzivalerts/it` dashboard UI on top of the governance APIs.
-- Add IT profile, invite, password-reset, session-revoke, audit export, and MFA workflows.
+- Add IT profile, invite, password-reset, session-revoke, audit export, and MFA administration workflows.

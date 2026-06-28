@@ -34,6 +34,7 @@ Keep these security controls configured on the host when you rely on bootstrap o
 
 - `ADMIN_SETUP_TOKEN` for protected first-admin bootstrap
 - `ADMIN_RECOVERY_TOKEN` or `ADMIN_DAILY_RECOVERY_SEED` for operator-driven HR recovery
+- `ADMIN_MFA_ENABLED` defaults on; set it to `false` only for a controlled emergency maintenance window
 
 Recommended values:
 
@@ -46,6 +47,7 @@ Do not:
 - leave `PUBLIC_BASE_URL` unset
 - trust `loopback` unless the proxy really terminates locally on the same host
 - commit runtime security state to source control
+- reuse `ADMIN_SETUP_TOKEN` as a recovery secret
 
 ## Daily Operator Checks
 
@@ -102,6 +104,14 @@ Run:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot C:\ProgramData\Palziv\runtime
 ```
+
+## Runtime Data Hardening
+
+- Production runtime state belongs under `C:\ProgramData\Palziv\runtime\data`, not tracked source directories.
+- Runtime JSON writes go through `runtime-files.js`, which uses atomic temp-file replacement, rejects symlinked runtime paths, and applies restrictive POSIX file modes where supported.
+- Windows host ACLs still matter. Install or repair the startup task from an elevated PowerShell session so `scripts/runtime-state.ps1` can protect the runtime tree for `SYSTEM`, `BUILTIN\Administrators`, and the service account.
+- Treat `board.json`, `push.json`, `analytics.json`, `security.json`, backup zips, manifests, and `*.tmp` runtime files as sensitive operational data.
+- Do not manually point any runtime data file into `public`, a synced consumer folder, or a symlink/junction.
 
 ## Recovery Policy
 

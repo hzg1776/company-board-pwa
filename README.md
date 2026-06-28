@@ -79,6 +79,7 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 - `server.js`: Node server and API layer.
 - `security.js`: named admin, employee auth, invite, recovery, and audit logic.
 - `storage.js`: file-backed persistence.
+- `runtime-files.js`: hardened runtime JSON read/write helper with atomic writes, symlink rejection, and restrictive POSIX modes.
 - `data/board.seed.json`: tracked starter board content for first-run and reset flows.
 - `runtime/data/board.json`: repo-local mutable board state for local development.
 - `scripts/runtime-state.ps1`: shared runtime root, migration, and ACL helper for Windows deployment scripts.

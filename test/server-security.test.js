@@ -606,7 +606,7 @@ test("HR can unenroll all devices for one employee", async (t) => {
   assert.equal(pushBody.devices.some((device) => String(device.label || "").includes("Maria")), false);
 });
 
-test("employees can acknowledge important posts and HR sees acknowledgement totals", async (t) => {
+test("employees cannot mark posts read or create acknowledgement records", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-ack-"));
   const securityFile = path.join(tempDir, "security.json");
   const provisionStore = createSecurityStore({ dataFile: securityFile });
@@ -692,20 +692,9 @@ test("employees can acknowledge important posts and HR sees acknowledgement tota
     },
     body: JSON.stringify({})
   });
-  assert.equal(acknowledgementResponse.status, 201);
+  assert.equal(acknowledgementResponse.status, 410);
   const acknowledgementBody = await acknowledgementResponse.json();
-  assert.equal(acknowledgementBody.acknowledgement.employeeName, "Maria Lopez");
-
-  const duplicateResponse = await fetch(`${server.baseUrl}/api/posts/${encodeURIComponent(createdPostBody.post.id)}/acknowledgements`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Origin: server.baseUrl,
-      Cookie: employeeCookie
-    },
-    body: JSON.stringify({})
-  });
-  assert.equal(duplicateResponse.status, 200);
+  assert.match(acknowledgementBody.error, /disabled/i);
 
   const hrPostsResponse = await fetch(`${server.baseUrl}/api/posts`, {
     headers: {
@@ -715,13 +704,12 @@ test("employees can acknowledge important posts and HR sees acknowledgement tota
   assert.equal(hrPostsResponse.status, 200);
   const hrPostsBody = await hrPostsResponse.json();
   const post = hrPostsBody.posts.find((entry) => entry.id === createdPostBody.post.id);
-  assert.equal(post.acknowledgementSummary.acknowledged, 1);
+  assert.equal(post.requiresAcknowledgement, false);
+  assert.equal(post.acknowledgementSummary.acknowledged, 0);
   assert.equal(post.acknowledgementSummary.totalEmployees, 2);
-  assert.equal(post.acknowledgementSummary.pending, 1);
-  assert.equal(post.acknowledgements[0].employeeName, "Maria Lopez");
-  assert.equal(post.pendingAcknowledgements.length, 1);
-  assert.equal(post.pendingAcknowledgements[0].employeeName, "Alex Smith");
-  assert.equal(post.pendingAcknowledgements[0].username, "alex.smith");
+  assert.equal(post.acknowledgementSummary.pending, 2);
+  assert.deepEqual(post.acknowledgements, []);
+  assert.equal(post.pendingAcknowledgements.length, 2);
 });
 
 test("trusted proxy loopback honors forwarded client IPs for login throttling", async (t) => {
@@ -1968,7 +1956,7 @@ test("legacy owner cookie alias no longer authorizes IT access", async (t) => {
   assert.equal(legacyOwnerCookieRolloverHeader, "");
 });
 
-test("server leaves admin MFA off by default even when accounts have stored MFA secrets", async (t) => {
+test("server requires admin MFA by default when accounts have stored MFA secrets", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-mfa-disabled-"));
   const securityFile = path.join(tempDir, "security.json");
   const provisionStore = createSecurityStore({ dataFile: securityFile });
@@ -1987,6 +1975,53 @@ test("server leaves admin MFA off by default even when accounts have stored MFA 
 
   const port = await findFreePort();
   const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const login = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(login.status, 200);
+  const loginBody = await login.json();
+  assert.equal(Boolean(loginBody.authorized), false);
+  assert.equal(Boolean(loginBody.mfaRequired), true);
+  assert.equal(loginBody.mfaMode, "verify");
+  assert.equal(Boolean(loginBody.user?.mfa?.available), true);
+  assert.equal(Boolean(loginBody.user?.mfa?.enabled), true);
+});
+
+test("server can explicitly disable admin MFA for emergency local recovery", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-mfa-explicit-disabled-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const seededState = await provisionStore.readSecurityState();
+  const hrUser = seededState.adminUsers.find((adminUser) => adminUser.username === "hr.owner");
+  hrUser.mfaSecret = "JBSWY3DPEHPK3PXP";
+  hrUser.mfaEnabledAt = "2026-06-22T12:00:00.000Z";
+  hrUser.mfaGraceUntil = "";
+  await provisionStore.writeData(seededState);
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    ADMIN_MFA_ENABLED: "false"
+  });
 
   t.after(async () => {
     await stopServer(server);
@@ -2096,8 +2131,16 @@ test("service worker ships versioned shell assets for client cache busting", asy
   assert.match(text, /\/assets\/palziv-wordmark\.png\?v=/i);
 });
 
-test("server exposes shell diagnostics and recent client telemetry", async (t) => {
+test("server restricts diagnostics to privileged sessions and rejects cross-site client telemetry", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-diagnostics-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupItAccess({
+    username: "it",
+    password: "OwnerSecret1!",
+    userAgent: "test"
+  });
   const port = await findFreePort();
   const server = await startServer(tempDir, port);
 
@@ -2106,10 +2149,31 @@ test("server exposes shell diagnostics and recent client telemetry", async (t) =
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  const anonymousDiagnostics = await fetch(`${server.baseUrl}/api/health/diagnostics`);
+  assert.equal(anonymousDiagnostics.status, 401);
+
+  const crossSiteClientEventResponse = await fetch(`${server.baseUrl}/api/client-events`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: "https://evil.example"
+    },
+    body: JSON.stringify({
+      type: "blank-screen",
+      severity: "error",
+      route: "launcher",
+      pathname: "/palzivalerts",
+      detail: "Cross-site telemetry should not be stored.",
+      assetVersion: "evil-version"
+    })
+  });
+  assert.equal(crossSiteClientEventResponse.status, 403);
+
   const clientEventResponse = await fetch(`${server.baseUrl}/api/client-events`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
     },
     body: JSON.stringify({
       type: "blank-screen",
@@ -2122,7 +2186,25 @@ test("server exposes shell diagnostics and recent client telemetry", async (t) =
   });
   assert.equal(clientEventResponse.status, 201);
 
-  const diagnosticsResponse = await fetch(`${server.baseUrl}/api/health/diagnostics`);
+  const itLogin = await fetch(`${server.baseUrl}/api/it/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "it",
+      password: "OwnerSecret1!"
+    })
+  });
+  assert.equal(itLogin.status, 200);
+  const itCookie = readSetCookie(itLogin);
+
+  const diagnosticsResponse = await fetch(`${server.baseUrl}/api/health/diagnostics`, {
+    headers: {
+      Cookie: itCookie
+    }
+  });
   assert.equal(diagnosticsResponse.status, 200);
   const diagnostics = await diagnosticsResponse.json();
 
@@ -2131,4 +2213,59 @@ test("server exposes shell diagnostics and recent client telemetry", async (t) =
   assert.equal(Array.isArray(diagnostics.client.recentEvents), true);
   assert.equal(diagnostics.client.recentEvents[0].type, "blank-screen");
   assert.equal(diagnostics.client.recentEvents[0].assetVersion, "test-version");
+});
+
+test("server sends baseline security headers on app shell and static assets", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-security-headers-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const shell = await fetch(`${server.baseUrl}/palzivalerts/`);
+  assert.equal(shell.status, 200);
+  assert.match(shell.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
+  assert.equal(shell.headers.get("x-frame-options"), "DENY");
+  assert.equal(shell.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(shell.headers.get("referrer-policy"), "no-referrer");
+  assert.match(shell.headers.get("permissions-policy") || "", /geolocation=\(\)/);
+
+  const script = await fetch(`${server.baseUrl}/app.js`);
+  assert.equal(script.status, 200);
+  assert.equal(script.headers.get("x-content-type-options"), "nosniff");
+  assert.match(script.headers.get("content-security-policy") || "", /default-src 'self'/);
+});
+
+test("server does not allow setup token fallback for emergency HR recovery", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-recovery-token-split-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    ADMIN_SETUP_TOKEN: "setup-only-token",
+    ADMIN_RECOVERY_TOKEN: "",
+    ADMIN_DAILY_RECOVERY_SEED: ""
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const recovery = await fetch(`${server.baseUrl}/api/hr/recover`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      recoveryToken: "setup-only-token",
+      password: "RecoveredSecret1!"
+    })
+  });
+
+  assert.equal(recovery.status, 503);
+  const recoveryBody = await recovery.json();
+  assert.match(recoveryBody.error, /HR recovery is disabled/);
 });

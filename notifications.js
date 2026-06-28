@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
+import {
+  isUnsafeRuntimePathError,
+  readRuntimeTextFile,
+  writeRuntimeJsonFileAtomic
+} from "./runtime-files.js";
 import { normalizeRelativeAppPath } from "./url-safety.js";
 
 const require = createRequire(import.meta.url);
@@ -189,33 +192,24 @@ function normalizeNotificationPath(value, fallback = DEFAULT_URL) {
   return normalizeRelativeAppPath(value, fallback);
 }
 
-async function ensureDirectory(filePath) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function writeFileAtomic(filePath, data) {
-  await ensureDirectory(filePath);
-  const tempFile = `${filePath}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  await rename(tempFile, filePath);
-}
-
 async function readFileSnapshot(filePath) {
-  await ensureDirectory(filePath);
-
   try {
-    const raw = await readFile(filePath, "utf8");
+    const raw = await readRuntimeTextFile(filePath);
     const data = normalizeNotificationState(JSON.parse(raw));
     const normalizedRaw = `${JSON.stringify(data, null, 2)}\n`;
 
     if (normalizedRaw !== raw) {
-      await writeFileAtomic(filePath, data);
+      await writeRuntimeJsonFileAtomic(filePath, data);
     }
 
     return data;
-  } catch {
+  } catch (error) {
+    if (isUnsafeRuntimePathError(error)) {
+      throw error;
+    }
+
     const seed = createDefaultNotificationState();
-    await writeFileAtomic(filePath, seed);
+    await writeRuntimeJsonFileAtomic(filePath, seed);
     return seed;
   }
 }
@@ -306,7 +300,7 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
     const next = writeQueue.then(async () => {
       state = normalizeNotificationState(nextState);
       setVapidDetails(state, subject);
-      await writeFileAtomic(dataFile, state);
+      await writeRuntimeJsonFileAtomic(dataFile, state);
       return state;
     });
 
@@ -322,7 +316,7 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
       const result = await mutator(snapshot);
       state = normalizeNotificationState(snapshot);
       setVapidDetails(state, subject);
-      await writeFileAtomic(dataFile, state);
+      await writeRuntimeJsonFileAtomic(dataFile, state);
       return result;
     });
 

@@ -1,6 +1,8 @@
-import crypto from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
+import {
+  isUnsafeRuntimePathError,
+  readRuntimeTextFile,
+  writeRuntimeJsonFileAtomic
+} from "./runtime-files.js";
 
 const DEFAULT_LIMITS = Object.freeze({
   recentRequests: 120,
@@ -164,33 +166,24 @@ function normalizeAnalyticsSnapshot(data, limits = DEFAULT_LIMITS) {
   };
 }
 
-async function ensureDirectory(filePath) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function writeFileAtomic(filePath, data) {
-  await ensureDirectory(filePath);
-  const tempFile = `${filePath}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  await rename(tempFile, filePath);
-}
-
 async function readSnapshot(filePath, limits) {
-  await ensureDirectory(filePath);
-
   try {
-    const raw = await readFile(filePath, "utf8");
+    const raw = await readRuntimeTextFile(filePath);
     const parsed = normalizeAnalyticsSnapshot(JSON.parse(raw), limits);
     const normalizedRaw = `${JSON.stringify(parsed, null, 2)}\n`;
 
     if (normalizedRaw !== raw) {
-      await writeFileAtomic(filePath, parsed);
+      await writeRuntimeJsonFileAtomic(filePath, parsed);
     }
 
     return parsed;
-  } catch {
+  } catch (error) {
+    if (isUnsafeRuntimePathError(error)) {
+      throw error;
+    }
+
     const seed = defaultAnalyticsSnapshot();
-    await writeFileAtomic(filePath, seed);
+    await writeRuntimeJsonFileAtomic(filePath, seed);
     return seed;
   }
 }
@@ -237,7 +230,7 @@ export function createAnalyticsStore({ dataFile, recentRequestLimit, recentError
 
     const next = writeQueue.then(async () => {
       const normalized = normalizeAnalyticsSnapshot(data, limits);
-      await writeFileAtomic(dataFile, normalized);
+      await writeRuntimeJsonFileAtomic(dataFile, normalized);
       return normalized;
     });
 
@@ -251,7 +244,7 @@ export function createAnalyticsStore({ dataFile, recentRequestLimit, recentError
     const next = writeQueue.then(async () => {
       const data = await readSnapshot(dataFile, limits);
       const result = await mutator(data);
-      await writeFileAtomic(dataFile, data);
+      await writeRuntimeJsonFileAtomic(dataFile, data);
       return result;
     });
 
@@ -303,7 +296,7 @@ export function createAnalyticsStore({ dataFile, recentRequestLimit, recentError
         data.recentErrors = data.recentErrors.slice(0, limits.recentErrors);
       }
 
-      await writeFileAtomic(dataFile, data);
+      await writeRuntimeJsonFileAtomic(dataFile, data);
       return data;
     });
 
@@ -336,7 +329,7 @@ export function createAnalyticsStore({ dataFile, recentRequestLimit, recentError
         data.recentErrors = data.recentErrors.slice(0, limits.recentErrors);
       }
 
-      await writeFileAtomic(dataFile, data);
+      await writeRuntimeJsonFileAtomic(dataFile, data);
       return data;
     });
 

@@ -1770,6 +1770,7 @@ function defaultWeather() {
     lowTemperature: "--",
     sunrise: "",
     sunset: "",
+    source: "",
     impact: "Enter a location in HR to fetch live weather.",
     level: "Clear",
     updatedAt: ""
@@ -2613,8 +2614,6 @@ function renderFeedItem(post) {
   const feedBody = String(post.body || "");
   const feedPriority = String(post.priority || "Normal");
   const createdAt = String(post.createdAt || "");
-  const requiresAcknowledgement = Boolean(post.requiresAcknowledgement);
-  const acknowledged = Boolean(post.acknowledgedByCurrentEmployee);
 
   return `
     <article class="feed-item priority-${safePriority}">
@@ -2626,13 +2625,6 @@ function renderFeedItem(post) {
           </div>
           <div class="feed-head-side">
             <time class="feed-time" datetime="${escapeHtml(createdAt)}">${escapeHtml(feedTime)}</time>
-            ${
-              requiresAcknowledgement
-                ? acknowledged
-                  ? `<span class="feed-read-indicator is-read" aria-label="Read">${icon("check")}</span>`
-                  : `<button class="feed-read-indicator" type="button" data-acknowledge-post="${escapeHtml(post.id)}" aria-label="Mark update as read" title="Mark update as read">${icon("check")}</button>`
-                : ""
-            }
           </div>
         </div>
         <h2 class="feed-title">${escapeHtml(feedTitle)}</h2>
@@ -2657,16 +2649,42 @@ function renderEmployeeStatusStrip(notices, setup) {
   `;
 }
 
-function renderEmployeeWeatherDetail(iconName, label, value) {
+function formatWeatherFreshness(updatedAt) {
+  const updatedMs = Date.parse(String(updatedAt || ""));
+
+  if (!Number.isFinite(updatedMs)) {
+    return "Not refreshed";
+  }
+
+  const elapsedMs = Math.max(0, Date.now() - updatedMs);
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+
+  if (elapsedMs < minuteMs) {
+    return "Updated just now";
+  }
+
+  if (elapsedMs < hourMs) {
+    const minutes = Math.max(1, Math.round(elapsedMs / minuteMs));
+    return `Updated ${minutes} min ago`;
+  }
+
+  if (elapsedMs < dayMs) {
+    const hours = Math.max(1, Math.round(elapsedMs / hourMs));
+    return `Updated ${hours} hr ago`;
+  }
+
+  return `Updated ${formatDate(updatedAt)} at ${formatTime(updatedAt)}`;
+}
+
+function renderEmployeeWeatherMetric(iconName, label, value) {
   return `
-    <div>
-      <dt>
-        <span class="employee-weather-detail-icon" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
-          ${icon(iconName)}
-        </span>
-      </dt>
-      <dd>${escapeHtml(value)}</dd>
-    </div>
+    <span class="employee-weather-chip">
+      <span class="employee-weather-chip-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="employee-weather-chip-label">${escapeHtml(label)}</span>
+      <strong class="employee-weather-chip-value">${escapeHtml(value)}</strong>
+    </span>
   `;
 }
 
@@ -2676,16 +2694,15 @@ function renderEmployeeWeatherCard() {
   const temperature = String(weather.temperature || "--");
   const highTemperature = String(weather.highTemperature || "--");
   const lowTemperature = String(weather.lowTemperature || "--");
-  const level = String(weather.level || "Clear");
   const location = String(weather.resolvedName || weather.location || "No location configured");
   const impact = String(weather.impact || "Normal operations.");
   const sunrise = String(weather.sunrise || "Not available");
   const sunset = String(weather.sunset || "Not available");
-  const updatedLabel = weather.updatedAt
-    ? `${formatDate(weather.updatedAt)} · ${formatTime(weather.updatedAt)}`
-    : "Not refreshed";
-  const localTimeLabel = formatTime(nowIso());
-  const sourceLabel = weather.location || weather.resolvedName ? "Live source" : "Location needed";
+  const updatedLabel = formatWeatherFreshness(weather.updatedAt);
+  const sourceLabel = String(weather.source || (weather.location || weather.resolvedName ? "Live weather" : "Location needed"));
+  const freshnessLabel = sourceLabel === "Location needed"
+    ? sourceLabel
+    : `${updatedLabel} from ${sourceLabel}`;
 
   return `
     <section class="employee-weather-card" aria-label="Current weather">
@@ -2700,19 +2717,16 @@ function renderEmployeeWeatherCard() {
               <p>${escapeHtml(location)}</p>
             </div>
           </div>
-          <p class="employee-weather-impact">${escapeHtml(impact)}</p>
         </div>
+        <span class="employee-weather-freshness">${icon("refresh")} ${escapeHtml(freshnessLabel)}</span>
       </div>
-      <dl class="employee-weather-details">
-        ${renderEmployeeWeatherDetail("shield", "Status", level)}
-        ${renderEmployeeWeatherDetail("arrow-up", "High", highTemperature)}
-        ${renderEmployeeWeatherDetail("arrow-down", "Low", lowTemperature)}
-        ${renderEmployeeWeatherDetail("clock", "Local time", localTimeLabel)}
-        ${renderEmployeeWeatherDetail("sunrise", "Sunrise", sunrise)}
-        ${renderEmployeeWeatherDetail("sunset", "Sunset", sunset)}
-        ${renderEmployeeWeatherDetail("refresh", "Last refreshed", updatedLabel)}
-        ${renderEmployeeWeatherDetail("cloud", "Source", sourceLabel)}
-      </dl>
+      <div class="employee-weather-metrics" aria-label="Weather details">
+        ${renderEmployeeWeatherMetric("arrow-up", "High", highTemperature)}
+        ${renderEmployeeWeatherMetric("arrow-down", "Low", lowTemperature)}
+        ${renderEmployeeWeatherMetric("sunrise", "Sunrise", sunrise)}
+        ${renderEmployeeWeatherMetric("sunset", "Sunset", sunset)}
+      </div>
+      <p class="employee-weather-impact">${escapeHtml(impact)}</p>
     </section>
   `;
 }
@@ -4787,15 +4801,6 @@ async function deletePost(id) {
   state.posts = state.posts.filter((post) => post.id !== id);
 }
 
-async function acknowledgePost(id) {
-  const result = await requestJson(`/api/posts/${encodeURIComponent(id)}/acknowledgements`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
-  await loadBoard();
-  return result;
-}
-
 async function updateWeather(payload) {
   const result = await requestJson("/api/weather", {
     method: "PUT",
@@ -4810,18 +4815,6 @@ async function handleDeleteAction(id) {
     setMessage("Deleted.", "success");
   } catch (error) {
     setMessage(error.message || "Could not delete post.");
-  }
-
-  render();
-  clearMessageSoon();
-}
-
-async function handleAcknowledgeAction(id) {
-  try {
-    await acknowledgePost(id);
-    setMessage("Marked read.", "success");
-  } catch (error) {
-    setMessage(error.message || "Could not mark this update as read.");
   }
 
   render();
@@ -5573,7 +5566,6 @@ document.addEventListener("click", async (event) => {
   const deleteButton = target.closest("[data-delete-post]");
   const acknowledgementDetailButton = target.closest("[data-acknowledgement-detail]");
   const acknowledgementExportButton = target.closest("[data-export-acknowledgements]");
-  const acknowledgeButton = target.closest("[data-acknowledge-post]");
   const enableAlertsButton = target.closest("[data-enable-alerts]");
   const disableAlertsButton = target.closest("[data-disable-alerts]");
   const sendTestPushButton = target.closest("[data-send-test-push]");
@@ -5772,12 +5764,6 @@ document.addEventListener("click", async (event) => {
   if (deleteButton) {
     event.preventDefault();
     await handleDeleteAction(deleteButton.dataset.deletePost);
-    return;
-  }
-
-  if (acknowledgeButton) {
-    event.preventDefault();
-    await handleAcknowledgeAction(acknowledgeButton.dataset.acknowledgePost);
     return;
   }
 

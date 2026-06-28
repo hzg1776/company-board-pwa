@@ -72,6 +72,7 @@ function createDefaultWeather() {
     lowTemperature: "--",
     sunrise: "",
     sunset: "",
+    source: "",
     impact: "Enter a location in Admin to fetch live weather.",
     level: "Clear",
     updatedAt: ""
@@ -116,6 +117,7 @@ function normalizeStoredWeather(input) {
     lowTemperature: cleanText(input.lowTemperature, 24) || "--",
     sunrise: cleanText(input.sunrise, 40),
     sunset: cleanText(input.sunset, 40),
+    source: cleanText(input.source, 40),
     impact: cleanLongText(input.impact, 300) || "Enter a location in Admin to fetch live weather.",
     level,
     updatedAt: cleanText(input.updatedAt, 40)
@@ -345,6 +347,7 @@ async function resolveOpenMeteoWeather(location, fetchImpl) {
     lowTemperature: formatTemperature(daily.temperature_2m_min?.[0]),
     sunrise: formatClockTime(daily.sunrise?.[0]),
     sunset: formatClockTime(daily.sunset?.[0]),
+    source: "Open-Meteo",
     impact: buildImpactFromDetails(details, current.windspeed),
     level: details.level,
     updatedAt: nowIso()
@@ -383,6 +386,7 @@ async function resolveWttrWeather(location, fetchImpl) {
     lowTemperature: formatTemperature(day.mintempF),
     sunrise: formatClockTime(astronomy.sunrise),
     sunset: formatClockTime(astronomy.sunset),
+    source: "WTTR",
     impact: buildImpactFromDetails(details, current.windspeedMiles),
     level: details.level,
     updatedAt: nowIso()

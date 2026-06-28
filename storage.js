@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  isUnsafeRuntimePathError,
+  readRuntimeTextFile,
+  writeRuntimeJsonFileAtomic
+} from "./runtime-files.js";
 import { createDefaultWeather, normalizeStoredWeather } from "./weather.js";
 
 const allowedTypes = new Set(["News", "Weather", "Shift", "Safety", "HR"]);
@@ -174,33 +177,24 @@ export function normalizeDataShape(data) {
   return normalized;
 }
 
-async function ensureDirectory(filePath) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function writeFileAtomic(filePath, data) {
-  await ensureDirectory(filePath);
-  const tempFile = `${filePath}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  await rename(tempFile, filePath);
-}
-
 async function readFileSnapshot(dataFile, seedFile) {
-  await ensureDirectory(dataFile);
-
   try {
-    const raw = await readFile(dataFile, "utf8");
+    const raw = await readRuntimeTextFile(dataFile);
     const data = normalizeDataShape(JSON.parse(raw));
     const normalizedRaw = `${JSON.stringify(data, null, 2)}\n`;
 
     if (normalizedRaw !== raw) {
-      await writeFileAtomic(dataFile, data);
+      await writeRuntimeJsonFileAtomic(dataFile, data);
     }
 
     return data;
-  } catch {
+  } catch (error) {
+    if (isUnsafeRuntimePathError(error)) {
+      throw error;
+    }
+
     const seed = createSeedData({ seedFile });
-    await writeFileAtomic(dataFile, seed);
+    await writeRuntimeJsonFileAtomic(dataFile, seed);
     return seed;
   }
 }
@@ -228,7 +222,7 @@ export function createBoardStore({ dataFile, seedFile } = {}) {
 
     const next = writeQueue.then(async () => {
       const normalized = normalizeDataShape(data);
-      await writeFileAtomic(dataFile, normalized);
+      await writeRuntimeJsonFileAtomic(dataFile, normalized);
       return normalized;
     });
 
@@ -242,7 +236,7 @@ export function createBoardStore({ dataFile, seedFile } = {}) {
     const next = writeQueue.then(async () => {
       const data = await readFileSnapshot(dataFile, seedFile);
       const result = await mutator(data);
-      await writeFileAtomic(dataFile, data);
+      await writeRuntimeJsonFileAtomic(dataFile, data);
       return result;
     });
 

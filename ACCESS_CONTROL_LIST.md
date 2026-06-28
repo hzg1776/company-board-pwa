@@ -33,6 +33,7 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 ### HR admin
 
 - Authenticates with the management password
+- Uses MFA by default when the server is not explicitly configured to disable it
 - Can create, modify, and delete protected company content
 - Can create employees, reset employee passwords, disable employees, and revoke employee sessions
 - Can access HR-only protected APIs
@@ -43,6 +44,7 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 ### Systems
 
 - Authenticates with a separate Systems password
+- Uses MFA by default when the server is not explicitly configured to disable it
 - Uses a separate session and cookie boundary from HR
 - Can access protected Systems summaries and operational views
 - Can use Systems-scoped mutation endpoints that require the Systems CSRF token
@@ -98,6 +100,7 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
   - source IP
   - failure detail
 - HR can review recent persisted authentication events from the in-app security screen
+- Diagnostics and recent client telemetry require IT or Systems access
 
 ## Proxy and Origin Trust
 
@@ -107,7 +110,7 @@ This app uses explicit role boundaries. Anything not listed as allowed should be
 
 ## Current Risk Notes
 
-- HR and Systems are now separated in sessions, but privilege boundaries still depend on password-only auth
-- Least privilege is improved, but future work should add stronger auth for privileged roles if the app becomes customer-facing
+- HR and Systems are separated in sessions, and privileged admin MFA is enabled by default
+- Runtime JSON writes reject symlinked paths and use a shared atomic writer, but Windows host ACLs and backup handling still need disciplined operator control if the app becomes customer-facing
 - Proxy trust still requires correct deployment configuration to be safe
 

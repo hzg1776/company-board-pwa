@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
+import {
+  isUnsafeRuntimePathError,
+  readRuntimeTextFile,
+  writeRuntimeJsonFileAtomic
+} from "./runtime-files.js";
 
 const EMPLOYEE_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
@@ -707,17 +710,6 @@ function normalizeSecurityState(input = {}) {
     recovery,
     securityEvents
   };
-}
-
-async function ensureDirectory(filePath) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function writeFileAtomic(filePath, data) {
-  await ensureDirectory(filePath);
-  const tempFile = `${filePath}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  await rename(tempFile, filePath);
 }
 
 function parseCookies(value) {
@@ -1736,21 +1728,23 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       return memoryState;
     }
 
-    await ensureDirectory(dataFile);
-
     try {
-      const raw = await readFile(dataFile, "utf8");
+      const raw = await readRuntimeTextFile(dataFile);
       const normalized = normalizeSecurityState(JSON.parse(raw));
       const normalizedRaw = `${JSON.stringify(normalized, null, 2)}\n`;
 
       if (normalizedRaw !== raw) {
-        await writeFileAtomic(dataFile, normalized);
+        await writeRuntimeJsonFileAtomic(dataFile, normalized);
       }
 
       return normalized;
-    } catch {
+    } catch (error) {
+      if (isUnsafeRuntimePathError(error)) {
+        throw error;
+      }
+
       const seed = normalizeSecurityState();
-      await writeFileAtomic(dataFile, seed);
+      await writeRuntimeJsonFileAtomic(dataFile, seed);
       return seed;
     }
   }
@@ -1763,7 +1757,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       return normalized;
     }
 
-    await writeFileAtomic(dataFile, normalized);
+    await writeRuntimeJsonFileAtomic(dataFile, normalized);
     return normalized;
   }
 

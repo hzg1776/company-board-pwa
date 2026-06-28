@@ -42,6 +42,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\restore-data.ps1 -BackupZip C
 - do not restore over live data without taking a fresh backup first
 - do not restore from an unknown or manually edited zip
 - do not restart blindly without checking `PUBLIC_BASE_URL` and proxy configuration
+- do not restore into a symlinked or junctioned runtime data directory
+- do not leave backup zips, manifests, or temporary runtime JSON files in public or synced folders
 
 ## Validation After Restore
 
