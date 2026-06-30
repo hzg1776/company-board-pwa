@@ -7295,8 +7295,9 @@ body {
   min-height: 0 !important;
   height: auto !important;
   block-size: auto !important;
+  align-self: start !important;
   justify-items: stretch !important;
-  padding: 12px 18px !important;
+  padding: 8px 14px !important;
 }
 
 .employee-shell .employee-brand-banner-head,
@@ -7309,7 +7310,7 @@ body {
   grid-template-columns: max-content minmax(0, 1fr) !important;
   align-items: center;
   justify-items: stretch;
-  gap: 10px !important;
+  gap: 8px !important;
   width: 100% !important;
   justify-self: stretch;
   text-align: left;
@@ -7324,21 +7325,21 @@ body {
 }
 
 .employee-shell .employee-brand-banner-logo {
-  width: 88px !important;
-  height: 88px !important;
+  width: 72px !important;
+  height: 72px !important;
 }
 
 .employee-shell .employee-brand-banner-kicker {
-  font-size: 1.1rem !important;
+  font-size: 0.98rem !important;
   font-weight: 700 !important;
-  line-height: 1.2 !important;
+  line-height: 1.15 !important;
 }
 
 .employee-shell .employee-brand-utility {
   display: grid;
   justify-items: end;
   justify-self: end;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
   max-width: 100%;
 }
@@ -7347,7 +7348,7 @@ body {
   border: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
-  gap: 4px !important;
+  gap: 2px !important;
   justify-self: end;
   margin: 0 !important;
   max-width: 100% !important;
@@ -7356,44 +7357,44 @@ body {
 
 .employee-shell .employee-brand-banner .employee-weather-line {
   align-items: center;
-  gap: 4px 8px !important;
+  gap: 2px 6px !important;
   justify-content: flex-end;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-line-primary,
 .employee-shell .employee-brand-banner .employee-weather-line-secondary {
-  font-size: 0.82rem !important;
-  line-height: 1.15 !important;
+  font-size: 16px !important;
+  line-height: 1.1 !important;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-current {
   align-items: center;
-  gap: 5px !important;
+  gap: 4px !important;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-temperature {
-  font-size: 1rem !important;
+  font-size: 16px !important;
   font-weight: 700 !important;
-  line-height: 1.1 !important;
+  line-height: 1 !important;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-condition,
 .employee-shell .employee-brand-banner .employee-weather-range,
 .employee-shell .employee-brand-banner .employee-weather-location,
 .employee-shell .employee-brand-banner .employee-weather-updated {
-  font-size: 0.82rem !important;
-  line-height: 1.15 !important;
+  font-size: 16px !important;
+  line-height: 1.1 !important;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-range {
-  gap: 8px !important;
-  padding-left: 8px !important;
+  gap: 6px !important;
+  padding-left: 6px !important;
 }
 
 .employee-shell .employee-brand-banner .employee-status-strip {
-  width: auto !important;
+  width: 100% !important;
   max-width: 100% !important;
-  justify-self: end;
+  justify-self: stretch;
   margin: 0 !important;
   border: 0 !important;
   background: transparent !important;
@@ -7402,26 +7403,26 @@ body {
 
 .employee-shell .employee-brand-banner .employee-status-ribbon {
   align-items: center;
-  gap: 4px 12px !important;
-  justify-content: flex-end;
+  gap: 2px 8px !important;
+  justify-content: center;
   padding: 0 !important;
-  font-size: 0.82rem !important;
-  line-height: 1.15 !important;
+  font-size: 0.74rem !important;
+  line-height: 1.1 !important;
 }
 
 .employee-shell .employee-brand-banner .employee-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px !important;
-  font-size: 0.82rem !important;
-  line-height: 1.15 !important;
+  gap: 4px !important;
+  font-size: 0.74rem !important;
+  line-height: 1.1 !important;
 }
 
 .employee-shell .employee-brand-banner .employee-status-pill .icon,
 .employee-shell .employee-brand-banner .employee-weather-updated-symbol .icon {
-  flex: 0 0 14px !important;
-  width: 14px !important;
-  height: 14px !important;
+  flex: 0 0 12px !important;
+  width: 12px !important;
+  height: 12px !important;
 }
 
 .employee-shell .feed-list,
@@ -7492,6 +7493,7 @@ body {
 
   .employee-shell .employee-brand-identity {
     justify-content: center;
+    justify-self: center;
   }
 
   .employee-shell .employee-brand-utility {
