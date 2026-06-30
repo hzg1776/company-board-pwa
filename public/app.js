@@ -2513,26 +2513,8 @@ function renderInstallGuideToggle() {
 function renderEmployeeSubscriptionBanner(setup) {
   if (setup.ready) return "";
 
-  const incompleteSteps = setup.checklist.filter((item) => !item.complete);
-  const firstIncomplete = incompleteSteps[0];
-  const headline = firstIncomplete?.title === "Install on phone"
-    ? "Finish phone install to receive alerts."
-    : "Finish alert setup for this phone.";
-
   return `
-    <section class="employee-subscription-banner warning" aria-label="Not subscribed">
-      <div class="employee-subscription-banner-head">
-        <div class="employee-subscription-banner-copy">
-          <p class="eyebrow">${icon("alert")} Not subscribed</p>
-          <h2>${escapeHtml(headline)}</h2>
-        </div>
-        <div class="employee-subscription-banner-actions">
-          ${setup.installRequired && !setup.installed ? renderInstallGuideToggle() : ""}
-        </div>
-      </div>
-      <div class="employee-subscription-banner-checklist">
-        ${incompleteSteps.map((item) => renderDeviceChecklistItem(item, true)).join("")}
-      </div>
+    <section class="employee-subscription-banner warning" aria-label="Subscribe to alerts">
       ${renderEmployeeSetupWizard()}
     </section>
   `;
@@ -2548,8 +2530,8 @@ function renderEmployeeSetupWizard() {
   const formMarkup = `
     <form class="device-setup-form" data-device-setup-form>
       <div class="device-setup-actions">
-        <button class="button" type="submit" data-device-action="${escapeHtml(setup.primaryAction.id)}" ${busy ? "disabled aria-disabled=\"true\"" : ""}>
-          ${icon(setup.primaryAction.icon)} ${escapeHtml(setup.primaryAction.label)}
+        <button class="button employee-subscribe-button" type="submit" data-device-action="${escapeHtml(setup.primaryAction.id)}" aria-label="${escapeHtml(setup.primaryAction.label)}" ${busy ? "disabled aria-disabled=\"true\"" : ""}>
+          ${icon(setup.primaryAction.icon)}
         </button>
         ${secondaryAction === "disable-alerts" ? `
           <button class="ghost-button" type="button" data-disable-alerts ${busy ? "disabled aria-disabled=\"true\"" : ""}>
@@ -5932,5 +5914,3 @@ try {
   scheduleClientShellCheck("initial-load");
   void checkForAppUpdate();
 }
-
-

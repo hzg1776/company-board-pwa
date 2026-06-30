@@ -7517,3 +7517,46 @@ body {
     min-width: 0;
   }
 }
+
+.employee-shell .employee-subscription-banner {
+  width: fit-content !important;
+  max-width: calc(100% - 24px) !important;
+  gap: 0;
+  margin-top: 2px;
+  margin-bottom: 8px;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.employee-shell .employee-subscription-banner .employee-setup-panel.employee-setup-embedded-minimal {
+  width: auto;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.employee-shell .employee-subscription-banner .device-setup-form {
+  display: block;
+}
+
+.employee-shell .employee-subscription-banner .device-setup-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.employee-shell .employee-subscribe-button {
+  width: 56px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 16px;
+}
+
+.employee-shell .employee-subscribe-button .icon {
+  width: 20px;
+  height: 20px;
+}

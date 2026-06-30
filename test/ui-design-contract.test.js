@@ -622,6 +622,7 @@ test("employee feed page uses a static feed/header width with weather in the hea
     "\\.employee-subscription-banner,\\s*\\.employee-status-strip,\\s*\\.feed-shell,\\s*\\.feed-list,\\s*\\.employee-signout-floor"
   );
   const employeeSubscriptionBody = getLastRuleBody(css, "\\.employee-shell\\s+\\.employee-subscription-banner");
+  const employeeSubscribeButtonBody = getLastSelectorBody(css, ".employee-shell .employee-subscribe-button");
   const feedListBody = getLastRuleBody(contentFitDesktopCss, "\\.employee-shell \\.feed-list,\\s*\\.employee-shell \\.feed-list-quiet");
   const feedItemBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .feed-item");
   const mobileFeedItemBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .feed-item");
@@ -629,6 +630,8 @@ test("employee feed page uses a static feed/header width with weather in the hea
   const feedTypeBody = getLastRuleBody(contentFitDesktopCss, "\\.employee-shell \\.feed-type,\\s*\\.employee-shell \\.priority-pill");
   const feedTitleBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .feed-title");
   const feedBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .feed-body");
+  const subscriptionRenderer = app.match(/function renderEmployeeSubscriptionBanner\(setup\) \{[\s\S]*?\n\}\n\nfunction renderEmployeeSetupWizard/)?.[0] || "";
+  const setupWizardRenderer = app.match(/function renderEmployeeSetupWizard\(\) \{[\s\S]*?\n\}\n\nfunction renderNotificationDeviceRoster/)?.[0] || "";
 
   assert.match(app, /class="employee-brand-banner"/);
   assert.match(app, /class="employee-brand-identity"/);
@@ -728,8 +731,29 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(mobileBrandWeatherLineBody, "justify-content"), "center");
   assert.equal(getDeclarationValue(mobileBrandStatusRibbonBody, "justify-content"), "center");
   assert.equal(getDeclarationValue(feedColumnBody, "width"), "min(760px, calc(100% - 32px))");
-  assert.equal(getDeclarationValue(employeeSubscriptionBody, "padding"), "12px 14px");
-  assert.equal(getDeclarationValue(employeeSubscriptionBody, "gap"), "8px");
+  assert.ok(subscriptionRenderer);
+  assert.ok(setupWizardRenderer);
+  assert.match(subscriptionRenderer, /<section class="employee-subscription-banner warning" aria-label="Subscribe to alerts">/);
+  assert.match(subscriptionRenderer, /\$\{renderEmployeeSetupWizard\(\)\}/);
+  assert.match(setupWizardRenderer, /class="button employee-subscribe-button"/);
+  assert.match(setupWizardRenderer, /aria-label="\$\{escapeHtml\(setup\.primaryAction\.label\)\}"/);
+  assert.doesNotMatch(setupWizardRenderer, /title="\$\{escapeHtml\(setup\.primaryAction\.label\)\}"/);
+  assert.doesNotMatch(subscriptionRenderer, /employee-subscription-banner-head/);
+  assert.doesNotMatch(subscriptionRenderer, /employee-subscription-banner-copy/);
+  assert.doesNotMatch(subscriptionRenderer, /employee-subscription-banner-checklist/);
+  assert.doesNotMatch(subscriptionRenderer, /Not subscribed/);
+  assert.doesNotMatch(subscriptionRenderer, /Finish alert setup for this phone/);
+  assert.doesNotMatch(subscriptionRenderer, /Finish phone install to receive alerts/);
+  assert.doesNotMatch(subscriptionRenderer, /renderDeviceChecklistItem\(item, true\)/);
+  assert.doesNotMatch(setupWizardRenderer, /\$\{escapeHtml\(setup\.primaryAction\.label\)\}\s*<\/button>/);
+  assert.equal(getDeclarationValue(employeeSubscriptionBody, "padding"), "0");
+  assert.equal(getDeclarationValue(employeeSubscriptionBody, "gap"), "0");
+  assert.equal(getDeclarationValue(employeeSubscriptionBody, "background"), "transparent !important");
+  assert.equal(getDeclarationValue(employeeSubscriptionBody, "border"), "0 !important");
+  assert.equal(getDeclarationValue(employeeSubscriptionBody, "box-shadow"), "none !important");
+  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "width"), "56px");
+  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "height"), "48px");
+  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "padding"), "0");
   assert.equal(getDeclarationValue(feedListBody, "justify-items"), "stretch");
   assert.equal(getDeclarationValue(feedItemBody, "width"), "100% !important");
   assert.equal(getDeclarationValue(feedItemBody, "min-width"), "0");
