@@ -527,6 +527,51 @@ test(
       "Boolean(document.querySelector('[data-device-setup-form]')) && !document.querySelector('[data-device-setup-form] input[name=\"accessPin\"]')"
     );
 
+    const employeeWeatherCard = await evaluateExpression(session, `
+      (() => {
+        const card = document.querySelector('.employee-weather-card');
+        const lines = Array.from(card?.querySelectorAll('.employee-weather-line') || []);
+        const updated = card?.querySelector('.employee-weather-updated');
+
+        return {
+          text: card?.innerText || '',
+          lineCount: lines.length,
+          hasTwoLineClass: Boolean(card?.classList.contains('employee-weather-card-two-line')),
+          hasCurrentGroup: Boolean(card?.querySelector('.employee-weather-current')),
+          hasTemperature: Boolean(card?.querySelector('.employee-weather-temperature')),
+          hasCondition: Boolean(card?.querySelector('.employee-weather-condition')),
+          hasRange: Boolean(card?.querySelector('.employee-weather-range')),
+          rangeItemCount: card?.querySelectorAll('.employee-weather-range-item').length || 0,
+          hasLocation: Boolean(card?.querySelector('.employee-weather-location')),
+          hasUpdated: Boolean(card?.querySelector('.employee-weather-updated')),
+          updatedText: updated?.innerText || '',
+          updatedAriaLabel: updated?.getAttribute('aria-label') || '',
+          updatedHasClockIcon: Boolean(updated?.querySelector('.employee-weather-updated-symbol .icon')),
+          hasDetails: Boolean(card?.querySelector('.employee-weather-metrics, .employee-weather-chip, .employee-weather-impact, .employee-weather-freshness'))
+        };
+      })()
+    `);
+
+    assert.equal(employeeWeatherCard.hasTwoLineClass, true);
+    assert.equal(employeeWeatherCard.lineCount, 2);
+    assert.equal(employeeWeatherCard.hasCurrentGroup, true);
+    assert.equal(employeeWeatherCard.hasTemperature, true);
+    assert.equal(employeeWeatherCard.hasCondition, true);
+    assert.equal(employeeWeatherCard.hasRange, true);
+    assert.equal(employeeWeatherCard.rangeItemCount, 2);
+    assert.equal(employeeWeatherCard.hasLocation, true);
+    assert.equal(employeeWeatherCard.hasUpdated, true);
+    assert.equal(employeeWeatherCard.updatedHasClockIcon, true);
+    assert.match(String(employeeWeatherCard.updatedAriaLabel), /^Updated |^Not refreshed$/);
+    assert.ok(!String(employeeWeatherCard.updatedText).includes("Updated"));
+    assert.equal(employeeWeatherCard.hasDetails, false);
+    assert.ok(String(employeeWeatherCard.text).includes("H"));
+    assert.ok(String(employeeWeatherCard.text).includes("L"));
+    assert.ok(!String(employeeWeatherCard.text).includes("from "));
+    assert.ok(!String(employeeWeatherCard.text).includes("High"));
+    assert.ok(!String(employeeWeatherCard.text).includes("Low"));
+    assert.ok(!String(employeeWeatherCard.text).includes("Sunrise"));
+
     const permissionState = await evaluateExpression(session, "Notification.permission");
     assert.equal(permissionState, "granted");
 
@@ -595,6 +640,7 @@ test(
     await connection.ready;
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
+    const hrAnnouncementTitle = `E2E HR Feed Control ${Date.now()}`;
 
     await navigate(session, `${appOrigin}/palzivalerts/hr`);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
@@ -626,6 +672,96 @@ test(
     assert.equal(hrScreen.hasAuthForm, false);
     assert.ok(String(hrScreen.text).includes("HR Control Center"));
 
+    const hrFeedScreen = await evaluateExpression(session, `
+      (() => {
+        const tabs = Array.from(document.querySelectorAll('[data-tab-group="hr"][data-tab]'))
+          .map((button) => button.dataset.tab);
+
+        return {
+          tabs,
+          hasFeedControlCenter: Boolean(document.querySelector('[aria-label="HR feed control center"]')),
+          hasPostForm: Boolean(document.querySelector('[data-post-form]')),
+          hasDeletePostAction: Boolean(document.querySelector('[data-delete-post]')),
+          text: document.body.innerText
+        };
+      })()
+    `);
+
+    assert.deepEqual(hrFeedScreen.tabs, ["feed", "share", "settings"]);
+    assert.equal(hrFeedScreen.hasFeedControlCenter, true);
+    assert.equal(hrFeedScreen.hasPostForm, true);
+    assert.equal(hrFeedScreen.hasDeletePostAction, true);
+    assert.ok(String(hrFeedScreen.text).includes("Feed control"));
+    assert.ok(String(hrFeedScreen.text).includes("Publish update"));
+
+    await evaluateExpression(session, `
+      (() => {
+        const form = document.querySelector('[data-post-form]');
+
+        if (!form) {
+          throw new Error('HR post form is missing.');
+        }
+
+        const setField = (name, value) => {
+          const field = form.querySelector('[name="' + name + '"]');
+
+          if (!field) {
+            throw new Error('Missing post form field: ' + name);
+          }
+
+          field.value = value;
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          field.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
+        setField('title', ${JSON.stringify(hrAnnouncementTitle)});
+        setField('body', 'Published from the HR feed control E2E test.');
+        setField('type', 'HR');
+        setField('priority', 'Important');
+        setField('audience', 'All Employees');
+        setField('alertRetention', '24h');
+        form.requestSubmit();
+        return true;
+      })()
+    `);
+    await waitForCondition(
+      session,
+      `document.body.innerText.includes(${JSON.stringify(hrAnnouncementTitle)}) && Boolean(document.querySelector('[data-delete-post]'))`
+    );
+
+    const publishedAnnouncement = await evaluateExpression(session, `
+      (() => {
+        const announcement = Array.from(document.querySelectorAll('[data-managed-post-id]'))
+          .find((entry) => entry.textContent.includes(${JSON.stringify(hrAnnouncementTitle)}));
+
+        return {
+          hasAnnouncement: Boolean(announcement),
+          hasTakeDown: Boolean(announcement?.querySelector('[data-delete-post]')),
+          text: announcement?.innerText || ''
+        };
+      })()
+    `);
+
+    assert.equal(publishedAnnouncement.hasAnnouncement, true);
+    assert.equal(publishedAnnouncement.hasTakeDown, true);
+    assert.ok(String(publishedAnnouncement.text).includes("Take down"));
+
+    await evaluateExpression(session, `
+      (() => {
+        const announcement = Array.from(document.querySelectorAll('[data-managed-post-id]'))
+          .find((entry) => entry.textContent.includes(${JSON.stringify(hrAnnouncementTitle)}));
+        const takeDownButton = announcement?.querySelector('[data-delete-post]');
+
+        if (!takeDownButton) {
+          throw new Error('Take down button is missing for the HR test announcement.');
+        }
+
+        takeDownButton.click();
+        return true;
+      })()
+    `);
+    await waitForCondition(session, `!document.body.innerText.includes(${JSON.stringify(hrAnnouncementTitle)})`);
+
     const hrStatus = await evaluateExpression(session, `
       (async () => {
         const response = await fetch('/api/hr/check');
@@ -634,6 +770,70 @@ test(
     `);
 
     assert.equal(Boolean(hrStatus.authorized), true);
+
+    await evaluateExpression(session, `
+      (() => {
+        const settingsButton = Array.from(document.querySelectorAll('[data-tab-group="hr"][data-tab]'))
+          .find((button) => button.dataset.tab === 'settings');
+
+        if (!settingsButton) {
+          throw new Error('HR settings tab button was not found.');
+        }
+
+        settingsButton.click();
+        return true;
+      })()
+    `);
+    await waitForCondition(session, "Boolean(document.querySelector('.settings-weather-card .settings-weather-status'))");
+
+    const hrSettingsScreen = await evaluateExpression(session, `
+      (() => {
+        const visibleElements = Array.from(document.body.querySelectorAll('*'))
+          .filter((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          });
+        const whiteTextElements = visibleElements
+          .filter((element) => getComputedStyle(element).color === 'rgb(255, 255, 255)')
+          .map((element) => element.textContent.trim())
+          .filter(Boolean);
+
+        return {
+          text: document.body.innerText,
+          whiteTextElements: whiteTextElements.slice(0, 5),
+          settingsColor: getComputedStyle(document.querySelector('[data-tab-group="hr"][data-tab="settings"]')).color,
+          hasSettingsWeatherCard: Boolean(document.querySelector('.settings-weather-card')),
+          settingsWeatherText: document.querySelector('.settings-weather-card')?.innerText || "",
+          settingsWeatherLineCount: document.querySelectorAll('.settings-weather-card .settings-weather-line').length,
+          settingsWeatherRangeItemCount: document.querySelectorAll('.settings-weather-card .settings-weather-range-item').length,
+          settingsWeatherUpdatedHasSymbol: Boolean(document.querySelector('.settings-weather-card .settings-weather-updated-symbol .icon')),
+          hasSettingsWeatherForm: Boolean(document.querySelector('.settings-weather-form')),
+          hasLegacyWeatherForm: Boolean(document.querySelector('.settings-weather-card .auth-form')),
+          weatherCardHeight: document.querySelector('.settings-weather-card')?.getBoundingClientRect().height || 0
+        };
+      })()
+    `);
+
+    assert.ok(!String(hrSettingsScreen.text).includes("HR account settings"));
+    assert.ok(!String(hrSettingsScreen.text).includes("Settings Only"));
+    assert.ok(!String(hrSettingsScreen.text).includes("Session rule"));
+    assert.ok(!String(hrSettingsScreen.text).includes("Last password"));
+    assert.deepEqual(hrSettingsScreen.whiteTextElements, []);
+    assert.equal(hrSettingsScreen.settingsColor, "rgb(0, 0, 0)");
+    assert.equal(hrSettingsScreen.hasSettingsWeatherCard, true);
+    assert.equal(hrSettingsScreen.settingsWeatherLineCount, 2);
+    assert.equal(hrSettingsScreen.settingsWeatherRangeItemCount, 2);
+    assert.equal(hrSettingsScreen.settingsWeatherUpdatedHasSymbol, true);
+    assert.ok(!String(hrSettingsScreen.settingsWeatherText).includes("Live weather source"));
+    assert.ok(String(hrSettingsScreen.settingsWeatherText).includes("H"));
+    assert.ok(String(hrSettingsScreen.settingsWeatherText).includes("L"));
+    assert.equal(hrSettingsScreen.hasSettingsWeatherForm, true);
+    assert.equal(hrSettingsScreen.hasLegacyWeatherForm, false);
+    assert.ok(
+      hrSettingsScreen.weatherCardHeight > 0 && hrSettingsScreen.weatherCardHeight < 170,
+      `Expected compact weather card height below 170px, got ${hrSettingsScreen.weatherCardHeight}px.`
+    );
 
     await navigate(session, `${appOrigin}/palzivalerts/webmaster`);
     await waitForCondition(session, "Boolean(document.querySelector('[data-admin-auth-form]'))");
@@ -767,6 +967,10 @@ test(
 
     const settingsText = await evaluateExpression(session, "document.body.innerText");
     assert.ok(String(settingsText).includes("System Ops Admin Accounts"));
+    assert.ok(!String(settingsText).includes("System Ops account settings"));
+    assert.ok(!String(settingsText).includes("Settings Only"));
+    assert.ok(!String(settingsText).includes("Session rule"));
+    assert.ok(!String(settingsText).includes("Last password"));
   }
 );
 

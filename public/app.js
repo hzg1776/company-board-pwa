@@ -152,17 +152,14 @@ function saveDeviceProfile(profile) {
 }
 
 document.title = APP_DISPLAY_TITLE;
-const historyFilters = ["All", "Active", "Urgent", "Weather", "News", "Shift", "Safety", "HR"];
-let activeAdminTab = "publish";
+let activeAdminTab = "feed";
 let activeWebmasterTab = "overview";
 let activeItTab = "accounts";
 let activeHistoryFilter = "All";
 let activePushRosterFilter = "active";
-let expandedAcknowledgementPostId = "";
 const adminTabs = [
-  { id: "publish", label: "Publish", icon: "megaphone" },
+  { id: "feed", label: "Feed", icon: "news" },
   { id: "share", label: "Users", icon: "users" },
-  { id: "history", label: "History", icon: "board" },
   { id: "settings", label: "Settings", icon: "lock" }
 ];
 const webmasterTabs = [
@@ -864,7 +861,7 @@ function buildCodexBrief(snapshot = buildWebmasterSnapshot()) {
   }
 
   if (!board.latestPost) {
-    issues.push("The board has no published updates. Verify whether this is intentional.");
+    issues.push("The board has no employee updates. Verify whether this is intentional.");
   }
 
   if (!browser.secureContext) {
@@ -1026,8 +1023,8 @@ function renderHrSummaryStatCard({ value, label, tab, filter = "" }) {
     tab === "share"
       ? "Open Employee Accounts."
       : filter === "Urgent"
-        ? "Open Urgent Alert History."
-        : "Open Active Update History.";
+        ? "Open Urgent Employee Feed."
+        : "Open Employee Feed.";
 
   return `
     <button
@@ -1775,6 +1772,109 @@ function defaultWeather() {
     level: "Clear",
     updatedAt: ""
   };
+}
+
+const COMPACT_WEATHER_LOCATION_PARTS = Object.freeze({
+  "alabama": "AL",
+  "alaska": "AK",
+  "arizona": "AZ",
+  "arkansas": "AR",
+  "california": "CA",
+  "colorado": "CO",
+  "connecticut": "CT",
+  "delaware": "DE",
+  "district of columbia": "DC",
+  "florida": "FL",
+  "georgia": "GA",
+  "hawaii": "HI",
+  "idaho": "ID",
+  "illinois": "IL",
+  "indiana": "IN",
+  "iowa": "IA",
+  "kansas": "KS",
+  "kentucky": "KY",
+  "louisiana": "LA",
+  "maine": "ME",
+  "maryland": "MD",
+  "massachusetts": "MA",
+  "michigan": "MI",
+  "minnesota": "MN",
+  "mississippi": "MS",
+  "missouri": "MO",
+  "montana": "MT",
+  "nebraska": "NE",
+  "nevada": "NV",
+  "new hampshire": "NH",
+  "new jersey": "NJ",
+  "new mexico": "NM",
+  "new york": "NY",
+  "north carolina": "NC",
+  "north dakota": "ND",
+  "ohio": "OH",
+  "oklahoma": "OK",
+  "oregon": "OR",
+  "pennsylvania": "PA",
+  "rhode island": "RI",
+  "south carolina": "SC",
+  "south dakota": "SD",
+  "tennessee": "TN",
+  "texas": "TX",
+  "utah": "UT",
+  "vermont": "VT",
+  "virginia": "VA",
+  "washington": "WA",
+  "west virginia": "WV",
+  "wisconsin": "WI",
+  "wyoming": "WY",
+  "united states": "US",
+  "united states of america": "USA",
+  "us": "US",
+  "usa": "USA",
+  "united kingdom": "UK",
+  "uk": "UK"
+});
+
+function formatCompactWeatherLocation(location) {
+  const text = String(location || "").trim();
+
+  if (!text) {
+    return "No location configured";
+  }
+
+  const compactParts = text
+    .split(",")
+    .map((part, index) => {
+      const cleanPart = part.trim();
+
+      if (!cleanPart || index === 0) {
+        return cleanPart;
+      }
+
+      const normalized = cleanPart
+        .replace(/\./g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      const mapped = COMPACT_WEATHER_LOCATION_PARTS[normalized];
+
+      if (mapped) {
+        return mapped;
+      }
+
+      const words = cleanPart
+        .replace(/[()]/g, "")
+        .split(/[\s-]+/)
+        .filter((word) => word && !/^(and|of|the)$/i.test(word));
+
+      if (words.length > 1) {
+        return words.map((word) => word[0].toUpperCase()).join("");
+      }
+
+      return /^[a-z]{2,4}$/i.test(cleanPart) ? cleanPart.toUpperCase() : cleanPart;
+    })
+    .filter(Boolean);
+
+  return compactParts.join(", ") || text;
 }
 
 function renderAdminSignoutFooter() {
@@ -2539,28 +2639,7 @@ function visiblePosts() {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-function historyPosts() {
-  return [...state.posts]
-    .filter((post) => {
-      if (activeHistoryFilter === "All") return true;
-      if (activeHistoryFilter === "Active") return !isExpired(post);
-      if (activeHistoryFilter === "Urgent") return post.priority === "Urgent";
-      return post.type === activeHistoryFilter;
-    })
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-}
-
-function formatAlertRetentionLabel(value) {
-  return {
-    "24h": "24 Hours",
-    "48h": "48 Hours",
-    "168h": "7 Days",
-    "720h": "30 Days",
-    manual: "Manual Only"
-  }[String(value || "720h")] || "30 Days";
-}
-
-function renderNotice(post, includeControls = false) {
+function renderNotice(post) {
   const safePriority = priorityClass(post.priority);
   const acknowledgementSummary = post.acknowledgementSummary || null;
   const acknowledged = Number(acknowledgementSummary?.acknowledged || 0);
@@ -2592,16 +2671,6 @@ function renderNotice(post, includeControls = false) {
           }
         </div>
       ` : ""}
-      ${
-        includeControls
-          ? `<form class="post-controls" data-delete-post-form>
-              <input type="hidden" name="id" value="${escapeHtml(post.id)}">
-              <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Delete post">
-                ${icon("delete")} Delete
-              </button>
-            </form>`
-          : ""
-      }
     </article>
   `;
 }
@@ -2634,6 +2703,45 @@ function renderFeedItem(post) {
   `;
 }
 
+function renderManagedFeedItem(post) {
+  const safePriority = priorityClass(post.priority);
+  const feedType = String(post.type || "Update");
+  const feedTime = formatDate(post.createdAt);
+  const feedTitle = String(post.title || "Update");
+  const feedBody = String(post.body || "");
+  const feedPriority = String(post.priority || "Normal");
+  const createdAt = String(post.createdAt || "");
+  const audience = String(post.audience || "All employees");
+
+  return `
+    <article class="feed-item managed-feed-item priority-${safePriority}" data-managed-post-id="${escapeHtml(post.id)}">
+      <div class="feed-main">
+        <div class="feed-head">
+          <div class="feed-head-meta">
+            <span class="feed-type">${escapeHtml(feedType)}</span>
+            ${feedPriority !== "Normal" ? `<span class="priority-pill ${safePriority}">${escapeHtml(feedPriority)}</span>` : ""}
+          </div>
+          <div class="feed-head-side">
+            <time class="feed-time" datetime="${escapeHtml(createdAt)}">${escapeHtml(feedTime)}</time>
+          </div>
+        </div>
+        <h2 class="feed-title">${escapeHtml(feedTitle)}</h2>
+        <p class="feed-body">${escapeHtml(feedBody)}</p>
+        <div class="notice-footer">
+          <span>${escapeHtml(audience)}</span>
+          <span>${post.expiresAt ? `Expires ${escapeHtml(formatDate(post.expiresAt))}` : "No expiration set"}</span>
+        </div>
+      </div>
+      <form class="post-controls" data-delete-post-form>
+        <input type="hidden" name="id" value="${escapeHtml(post.id)}">
+        <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Take down announcement">
+          ${icon("delete")} Take down
+        </button>
+      </form>
+    </article>
+  `;
+}
+
 function renderEmployeeStatusStrip(notices, setup) {
   const urgentCount = notices.filter((post) => post.priority === "Urgent").length;
   const alertState = setup.ready ? "Alerts on" : "Setup";
@@ -2653,7 +2761,7 @@ function formatWeatherFreshness(updatedAt) {
   const updatedMs = Date.parse(String(updatedAt || ""));
 
   if (!Number.isFinite(updatedMs)) {
-    return "Not refreshed";
+    return "not refreshed";
   }
 
   const elapsedMs = Math.max(0, Date.now() - updatedMs);
@@ -2662,30 +2770,20 @@ function formatWeatherFreshness(updatedAt) {
   const dayMs = 24 * hourMs;
 
   if (elapsedMs < minuteMs) {
-    return "Updated just now";
+    return "just now";
   }
 
   if (elapsedMs < hourMs) {
     const minutes = Math.max(1, Math.round(elapsedMs / minuteMs));
-    return `Updated ${minutes} min ago`;
+    return `${minutes} min ago`;
   }
 
   if (elapsedMs < dayMs) {
     const hours = Math.max(1, Math.round(elapsedMs / hourMs));
-    return `Updated ${hours} hr ago`;
+    return `${hours} hr ago`;
   }
 
-  return `Updated ${formatDate(updatedAt)} at ${formatTime(updatedAt)}`;
-}
-
-function renderEmployeeWeatherMetric(iconName, label, value) {
-  return `
-    <span class="employee-weather-chip">
-      <span class="employee-weather-chip-icon" aria-hidden="true">${icon(iconName)}</span>
-      <span class="employee-weather-chip-label">${escapeHtml(label)}</span>
-      <strong class="employee-weather-chip-value">${escapeHtml(value)}</strong>
-    </span>
-  `;
+  return `${formatDate(updatedAt)} at ${formatTime(updatedAt)}`;
 }
 
 function renderEmployeeWeatherCard() {
@@ -2694,39 +2792,30 @@ function renderEmployeeWeatherCard() {
   const temperature = String(weather.temperature || "--");
   const highTemperature = String(weather.highTemperature || "--");
   const lowTemperature = String(weather.lowTemperature || "--");
-  const location = String(weather.resolvedName || weather.location || "No location configured");
-  const impact = String(weather.impact || "Normal operations.");
-  const sunrise = String(weather.sunrise || "Not available");
-  const sunset = String(weather.sunset || "Not available");
+  const location = formatCompactWeatherLocation(weather.resolvedName || weather.location);
+  const hasWeatherUpdate = Number.isFinite(Date.parse(String(weather.updatedAt || "")));
   const updatedLabel = formatWeatherFreshness(weather.updatedAt);
-  const sourceLabel = String(weather.source || (weather.location || weather.resolvedName ? "Live weather" : "Location needed"));
-  const freshnessLabel = sourceLabel === "Location needed"
-    ? sourceLabel
-    : `${updatedLabel} from ${sourceLabel}`;
+  const updatedAriaLabel = hasWeatherUpdate ? `Updated ${updatedLabel}` : "Not refreshed";
 
   return `
-    <section class="employee-weather-card" aria-label="Current weather">
-      <div class="employee-weather-primary">
-        <div class="employee-weather-icon">${icon("cloud")}</div>
-        <div class="employee-weather-main">
-          <p class="eyebrow">Current weather</p>
-          <div class="employee-weather-reading">
-            <span class="employee-weather-temperature">${escapeHtml(temperature)}</span>
-            <div>
-              <h2>${escapeHtml(condition)}</h2>
-              <p>${escapeHtml(location)}</p>
-            </div>
-          </div>
-        </div>
-        <span class="employee-weather-freshness">${icon("refresh")} ${escapeHtml(freshnessLabel)}</span>
+    <section class="employee-weather-card employee-weather-card-two-line" aria-label="Current weather">
+      <div class="employee-weather-line employee-weather-line-primary">
+        <span class="employee-weather-current">
+          <strong class="employee-weather-temperature">${escapeHtml(temperature)}</strong>
+          <span class="employee-weather-condition">${escapeHtml(condition)}</span>
+        </span>
+        <span class="employee-weather-range">
+          <span class="employee-weather-range-item"><span class="employee-weather-range-label">H</span> ${escapeHtml(highTemperature)}</span>
+          <span class="employee-weather-range-item"><span class="employee-weather-range-label">L</span> ${escapeHtml(lowTemperature)}</span>
+        </span>
       </div>
-      <div class="employee-weather-metrics" aria-label="Weather details">
-        ${renderEmployeeWeatherMetric("arrow-up", "High", highTemperature)}
-        ${renderEmployeeWeatherMetric("arrow-down", "Low", lowTemperature)}
-        ${renderEmployeeWeatherMetric("sunrise", "Sunrise", sunrise)}
-        ${renderEmployeeWeatherMetric("sunset", "Sunset", sunset)}
+      <div class="employee-weather-line employee-weather-line-secondary">
+        <span class="employee-weather-location">${escapeHtml(location)}</span>
+        <span class="employee-weather-updated" aria-label="${escapeHtml(updatedAriaLabel)}">
+          <span class="employee-weather-updated-symbol" aria-hidden="true">${icon("clock")}</span>
+          <span>${escapeHtml(updatedLabel)}</span>
+        </span>
       </div>
-      <p class="employee-weather-impact">${escapeHtml(impact)}</p>
     </section>
   `;
 }
@@ -3413,9 +3502,15 @@ function renderEmployee() {
     <main class="page-shell employee-shell">
         <section class="employee-brand-banner" aria-label="${escapeHtml(APP_TITLE)} brand banner">
           <div class="employee-brand-banner-head">
-            <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
-            <div class="employee-brand-banner-copy">
-              <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
+            <div class="employee-brand-identity">
+              <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
+              <div class="employee-brand-banner-copy">
+                <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
+              </div>
+            </div>
+            <div class="employee-brand-utility">
+              ${renderEmployeeWeatherCard()}
+              ${renderEmployeeStatusStrip(notices, setup)}
             </div>
           </div>
         </section>
@@ -3423,8 +3518,6 @@ function renderEmployee() {
       ${renderAppUpdateBanner()}
       ${state.message ? `<div class="employee-banner ${escapeHtml(state.messageType)}">${escapeHtml(state.message)}</div>` : ""}
       ${renderEmployeeSubscriptionBanner(setup)}
-      ${renderEmployeeWeatherCard()}
-      ${renderEmployeeStatusStrip(notices, setup)}
 
       <section class="feed-shell feed-shell-quiet feed-shell-bare" aria-label="Latest updates feed">
         <div class="feed-list feed-list-quiet">
@@ -3489,266 +3582,111 @@ function renderLauncher() {
   `;
 }
 
-function renderAdminPublishPanel() {
+function hrFeedPosts() {
+  const notices = visiblePosts();
+
+  if (activeHistoryFilter === "Urgent") {
+    return notices.filter((post) => post.priority === "Urgent");
+  }
+
+  return notices;
+}
+
+function renderHrFeedPanel() {
+  const notices = hrFeedPosts();
+
   return `
     <section class="panel-stack">
       <div class="panel-title panel-title-wide">
         <div>
-          <p class="eyebrow">${icon("megaphone")} Publish</p>
-          <h2>New Update</h2>
+          <p class="eyebrow">${icon("news")} Employee feed</p>
+          <h2>Feed control</h2>
         </div>
+        <span class="sync-pill">${notices.length} live</span>
       </div>
-      <section class="tool-panel composer-panel panel-card">
-        <form data-post-form>
-          <div class="composer-grid">
-            <label class="field field-span-2">
-              <span>Title</span>
-              <input name="title" maxlength="90" required placeholder="Short Headline">
-            </label>
-            <label class="field field-span-2">
-              <span>Message</span>
-              <textarea name="body" maxlength="700" required placeholder="What Employees Need To Know"></textarea>
-            </label>
-            <label class="field">
-              <span>Category</span>
-              <select name="type">
-                <option>News</option>
-                <option>Weather</option>
-                <option>Shift</option>
-                <option>Safety</option>
-                <option value="HR">HR</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Priority</span>
-              <select name="priority">
-                <option>Normal</option>
-                <option>Important</option>
-                <option>Urgent</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Audience</span>
-              <select name="audience">
-                <option>All Employees</option>
-                <option>Operations</option>
-                <option>Office Staff</option>
-                <option>Warehouse</option>
-                <option>Leadership</option>
-                <option value="HR">HR</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Retention</span>
-              <select name="alertRetention">
-                <option value="24h">24 Hours</option>
-                <option value="168h">7 Days</option>
-                <option value="720h" selected>30 Days</option>
-                <option value="manual">Manual Only</option>
-              </select>
-            </label>
+
+      <section class="admin-workspace hr-feed-workspace" aria-label="HR feed control center">
+        <section class="tool-panel composer-panel panel-card" aria-label="Publish update">
+          <div class="panel-title panel-title-wide">
+            <div>
+              <p class="eyebrow">${icon("megaphone")} Publish update</p>
+              <h3>New announcement</h3>
+            </div>
           </div>
-          <div class="form-actions">
-            <button class="button" type="submit">${icon("send")} Publish</button>
+          <form data-post-form>
+            <div class="composer-grid">
+              <label class="field field-span-2">
+                <span>Title</span>
+                <input name="title" maxlength="90" required>
+              </label>
+              <label class="field field-span-2">
+                <span>Message</span>
+                <textarea name="body" maxlength="700" required></textarea>
+              </label>
+              <label class="field">
+                <span>Category</span>
+                <select name="type">
+                  <option>News</option>
+                  <option>Weather</option>
+                  <option>Shift</option>
+                  <option>Safety</option>
+                  <option value="HR">HR</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Priority</span>
+                <select name="priority">
+                  <option>Normal</option>
+                  <option>Important</option>
+                  <option>Urgent</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Audience</span>
+                <select name="audience">
+                  <option>All Employees</option>
+                  <option>Operations</option>
+                  <option>Office Staff</option>
+                  <option>Warehouse</option>
+                  <option>Leadership</option>
+                  <option value="HR">HR</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Retention</span>
+                <select name="alertRetention">
+                  <option value="24h">24 Hours</option>
+                  <option value="168h">7 Days</option>
+                  <option value="720h" selected>30 Days</option>
+                  <option value="manual">Manual Only</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="button" type="submit">${icon("send")} Publish update</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="feed-shell feed-shell-quiet feed-shell-bare hr-feed-preview" aria-label="Live managed employee feed">
+          <div class="panel-title panel-title-wide">
+            <div>
+              <p class="eyebrow">${icon("board")} Stream</p>
+              <h3>Live employee updates</h3>
+            </div>
+            ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
           </div>
-        </form>
+          <div class="feed-list feed-list-quiet">
+            ${
+              notices.length
+                ? notices.map((post) => renderManagedFeedItem(post)).join("")
+                : `<div class="empty-state">No updates are live right now.</div>`
+            }
+          </div>
+        </section>
       </section>
     </section>
   `;
-}
-
-function renderAdminHistoryPanel() {
-  const notices = historyPosts();
-
-  return `
-    <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("board")} Update history</p>
-          <h2>Published updates</h2>
-        </div>
-        <div class="panel-toolbar">
-          ${renderFilterSelect({
-            name: "history-filter",
-            label: "History filter",
-            value: activeHistoryFilter,
-            options: historyFilters
-          })}
-        </div>
-      </div>
-      ${renderHistoryTable(notices)}
-    </section>
-  `;
-}
-
-function renderHistoryTable(posts) {
-  if (!posts.length) {
-    return '<div class="empty-state">No Updates Yet.</div>';
-  }
-
-  return `
-    <div class="admin-table-wrap">
-      <table class="admin-table admin-table-history">
-        <thead>
-          <tr>
-            <th>Published</th>
-            <th>Title</th>
-            <th>Category</th>
-            <th>Priority</th>
-            <th>Audience</th>
-            <th>Retention</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${posts.map((post) => renderHistoryTableRows(post)).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderHistoryTableRows(post) {
-  const details = expandedAcknowledgementPostId === post.id
-    ? renderAcknowledgementDetailRow(post)
-    : "";
-  return `${renderHistoryTableRow(post)}${details}`;
-}
-
-function renderHistoryTableRow(post) {
-  const safePriority = priorityClass(post.priority);
-  const summary = post.acknowledgementSummary || { acknowledged: 0, totalEmployees: 0, pending: 0 };
-  const canReviewAcknowledgements = Boolean(post.requiresAcknowledgement);
-
-  return `
-    <tr>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(formatDate(post.createdAt))}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(post.title)}</div>
-      </td>
-      <td>
-        <span class="admin-table-chip">${escapeHtml(post.type)}</span>
-      </td>
-      <td>
-        <span class="priority-pill ${safePriority}">${escapeHtml(post.priority)}</span>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(post.audience || "All Employees")}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(formatAlertRetentionLabel(post.alertRetention))}</div>
-      </td>
-      <td>
-        <div class="admin-table-actions">
-          ${canReviewAcknowledgements ? `
-            <button class="ghost-button" type="button" data-acknowledgement-detail="${escapeHtml(post.id)}" title="View acknowledgement detail">
-              ${icon("users")} ${expandedAcknowledgementPostId === post.id ? "Hide" : "Review"}
-            </button>
-            <button class="ghost-button" type="button" data-export-acknowledgements="${escapeHtml(post.id)}" title="Export acknowledgements CSV">
-              ${icon("clipboard")} Export
-            </button>
-            <div class="admin-table-secondary">${escapeHtml(summary.acknowledged)} read / ${escapeHtml(summary.pending)} pending</div>
-          ` : ""}
-          <form data-delete-post-form>
-            <input type="hidden" name="id" value="${escapeHtml(post.id)}">
-            <button class="ghost-button" type="submit" data-delete-post="${escapeHtml(post.id)}" title="Delete Post">
-              ${icon("delete")} Delete
-            </button>
-          </form>
-        </div>
-      </td>
-    </tr>
-  `;
-}
-
-function renderAcknowledgementDetailRow(post) {
-  const acknowledgements = Array.isArray(post.acknowledgements) ? post.acknowledgements : [];
-  const pending = Array.isArray(post.pendingAcknowledgements) ? post.pendingAcknowledgements : [];
-
-  return `
-    <tr class="acknowledgement-detail-row">
-      <td colspan="8">
-        <div class="acknowledgement-detail-panel">
-          <div class="acknowledgement-detail-heading">
-            <div>
-              <div class="admin-table-primary">${escapeHtml(post.title)}</div>
-              <div class="admin-table-secondary">Acknowledgement detail</div>
-            </div>
-            <button class="ghost-button" type="button" data-export-acknowledgements="${escapeHtml(post.id)}">
-              ${icon("clipboard")} Export CSV
-            </button>
-          </div>
-          <div class="acknowledgement-detail-grid">
-            ${renderAcknowledgementList("Read", acknowledgements, true)}
-            ${renderAcknowledgementList("Pending", pending, false)}
-          </div>
-        </div>
-      </td>
-    </tr>
-  `;
-}
-
-function renderAcknowledgementList(label, employees, includeDate) {
-  const rows = employees.length
-    ? employees.map((employee) => `
-        <li class="acknowledgement-detail-item">
-          <span>
-            <strong>${escapeHtml(employee.employeeName || employee.name || "Employee")}</strong>
-            <small>${escapeHtml(employee.username || "")}</small>
-          </span>
-          ${includeDate ? `<time>${escapeHtml(formatDate(employee.acknowledgedAt))}</time>` : '<em>Not read</em>'}
-        </li>
-      `).join("")
-    : '<li class="acknowledgement-detail-empty">None</li>';
-
-  return `
-    <section class="acknowledgement-detail-list">
-      <h4>${escapeHtml(label)}</h4>
-      <ul>${rows}</ul>
-    </section>
-  `;
-}
-
-function acknowledgementCsv(post) {
-  const acknowledgements = Array.isArray(post.acknowledgements) ? post.acknowledgements : [];
-  const pending = Array.isArray(post.pendingAcknowledgements) ? post.pendingAcknowledgements : [];
-  const rows = [
-    ["Post title", "Category", "Priority", "Employee name", "Username", "Status", "Acknowledged at"],
-    ...acknowledgements.map((employee) => [
-      post.title,
-      post.type,
-      post.priority,
-      employee.employeeName || employee.name || "",
-      employee.username || "",
-      "Read",
-      employee.acknowledgedAt || ""
-    ]),
-    ...pending.map((employee) => [
-      post.title,
-      post.type,
-      post.priority,
-      employee.employeeName || employee.name || "",
-      employee.username || "",
-      "Pending",
-      ""
-    ])
-  ];
-
-  return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
-}
-
-function downloadAcknowledgementCsv(post) {
-  const blob = new Blob([acknowledgementCsv(post)], { type: "text/csv;charset=utf-8" });
-  const link = document.createElement("a");
-  const url = URL.createObjectURL(blob);
-  link.href = url;
-  link.download = `${safeFilename(post.title)}-acknowledgements.csv`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }
 
 function renderSecurityEventCard(event) {
@@ -3815,36 +3753,6 @@ function renderAdminSecurityPanel() {
   `;
 }
 
-function renderRoleSettingsHero(route) {
-  const role = route === "webmaster" ? "Systems" : "HR";
-  const passwordStatus = state.passwordChangeStatus?.[route] || null;
-
-  return `
-    <section class="panel-card settings-hero-card">
-      <div class="settings-hero-grid">
-        <div class="settings-hero-copy">
-          <p class="eyebrow">${icon("lock")} Settings</p>
-          <h2>${escapeHtml(role)} account settings</h2>
-        </div>
-        <div class="settings-chip-grid" aria-label="${escapeHtml(role)} settings summary">
-          <div class="settings-chip">
-            <span>Surface</span>
-            <strong>Settings Only</strong>
-          </div>
-          <div class="settings-chip">
-            <span>Session rule</span>
-            <strong>Contained</strong>
-          </div>
-          <div class="settings-chip">
-            <span>Last password change</span>
-            <strong>${escapeHtml(passwordStatus ? formatDate(passwordStatus.changedAt) : "Not changed in this session")}</strong>
-          </div>
-        </div>
-      </div>
-    </section>
-  `;
-}
-
 function renderPrivilegedPasswordPanel(route) {
   const role = route === "webmaster" ? "Systems" : "HR";
   const collapsible = route === "hr";
@@ -3892,29 +3800,41 @@ function renderPrivilegedPasswordPanel(route) {
 function renderWeatherSettingsPanel() {
   const weather = state.weather || defaultWeather();
   const locationValue = weather.location || weather.resolvedName || "";
-  const updatedLabel = weather.updatedAt ? formatDate(weather.updatedAt) : "Not refreshed";
+  const hasWeatherUpdate = Number.isFinite(Date.parse(String(weather.updatedAt || "")));
+  const updatedLabel = formatWeatherFreshness(weather.updatedAt);
+  const updatedAriaLabel = hasWeatherUpdate ? `Updated ${updatedLabel}` : "Not refreshed";
+  const conditionLabel = weather.condition || "Weather not configured";
+  const temperatureLabel = weather.temperature || "--";
+  const highTemperature = weather.highTemperature || "--";
+  const lowTemperature = weather.lowTemperature || "--";
+  const locationLabel = formatCompactWeatherLocation(weather.resolvedName || weather.location);
 
   return `
-    <section class="panel-card weather-card">
-      <div class="panel-title panel-title-wide">
-        <div class="weather-copy">
-          <p class="eyebrow">${icon("cloud")} Weather</p>
-          <h3>Live weather source</h3>
-          <p>${escapeHtml(weather.condition || "Weather not configured")} · ${escapeHtml(weather.temperature || "--")} · ${escapeHtml(weather.impact || "Normal operations.")}</p>
-          <div class="weather-location">${escapeHtml(weather.resolvedName || weather.location || "No location configured")}</div>
-          <div class="weather-updated">${escapeHtml(updatedLabel)}</div>
+    <section class="panel-card weather-card settings-weather-card">
+      <div class="settings-weather-status" aria-label="Weather status">
+        <div class="settings-weather-line settings-weather-line-primary">
+          <span class="settings-weather-current">
+            <strong class="settings-weather-temperature">${escapeHtml(temperatureLabel)}</strong>
+            <span class="settings-weather-condition">${escapeHtml(conditionLabel)}</span>
+          </span>
+          <span class="settings-weather-range">
+            <span class="settings-weather-range-item"><span class="settings-weather-range-label">H</span> ${escapeHtml(highTemperature)}</span>
+            <span class="settings-weather-range-item"><span class="settings-weather-range-label">L</span> ${escapeHtml(lowTemperature)}</span>
+          </span>
+        </div>
+        <div class="settings-weather-line settings-weather-line-secondary">
+          <span>${escapeHtml(locationLabel)}</span>
+          <span class="settings-weather-updated" aria-label="${escapeHtml(updatedAriaLabel)}">
+            <span class="settings-weather-updated-symbol" aria-hidden="true">${icon("clock")}</span>
+            ${escapeHtml(updatedLabel)}
+          </span>
         </div>
       </div>
-      <form class="auth-form" data-weather-form>
-        <div class="composer-grid">
-          <label class="field field-span-2">
-            <span>Location</span>
-            <input name="location" maxlength="120" required value="${escapeHtml(locationValue)}" placeholder="City, State or ZIP">
-          </label>
-        </div>
-        <div class="auth-form-actions">
-          <button class="ghost-button" type="submit">${icon("refresh")} Refresh Weather</button>
-        </div>
+      <form class="settings-weather-form" data-weather-form>
+        <label class="field settings-weather-location-field">
+          <input name="location" maxlength="120" required value="${escapeHtml(locationValue)}" placeholder="City, State or ZIP" aria-label="Weather location">
+        </label>
+        <button class="ghost-button" type="submit">${icon("refresh")} Refresh</button>
       </form>
     </section>
   `;
@@ -3951,7 +3871,6 @@ function renderWebmasterHrResetPanel() {
 function renderAdminSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
-      ${renderRoleSettingsHero("hr")}
       ${renderWeatherSettingsPanel()}
       ${state.access.hr.user?.mfa?.available ? renderAdminMfaPanel("hr") : ""}
       ${renderPrivilegedPasswordPanel("hr")}
@@ -3962,8 +3881,6 @@ function renderAdminSettingsPanel() {
 function renderWebmasterSettingsPanel() {
   return `
     <section class="panel-stack settings-shell">
-      ${renderRoleSettingsHero("webmaster")}
-
       ${renderPrivilegedPasswordPanel("webmaster")}
       ${state.access.webmaster.user?.mfa?.available ? renderAdminMfaPanel("webmaster") : ""}
       ${renderAdminAccountsPanel("webmaster")}
@@ -4002,7 +3919,7 @@ function renderWebmasterOverviewPanel() {
       ${renderWebmasterExpandableCard({
         id: "overview-site-snapshot",
         eyebrow: "Site snapshot",
-        title: "Routes, access, and last publish",
+        title: "Routes, access, and latest update",
         description: "Open the live portal routes, latest update, push enrollment, and health timing in one place.",
         badge: "Live",
         iconName: "chart",
@@ -4312,7 +4229,7 @@ function renderWebmasterContentPanel() {
         id: "content-recent",
         eyebrow: "Latest posts",
         title: "Most recent activity",
-        description: "Expand to inspect the newest published updates in the same order employees see them.",
+        description: "Expand to inspect the newest employee updates in the same order employees see them.",
         badge: "Recent",
         iconName: "news",
         summaryMetrics: [
@@ -4322,7 +4239,7 @@ function renderWebmasterContentPanel() {
         ],
         body: `
           <div class="post-list compact">
-            ${board.recentPosts?.length ? board.recentPosts.map((post) => renderNotice(post, false)).join("") : '<div class="empty-state compact">No updates yet.</div>'}
+            ${board.recentPosts?.length ? board.recentPosts.map((post) => renderNotice(post)).join("") : '<div class="empty-state compact">No updates yet.</div>'}
           </div>
         `
       })}
@@ -4594,8 +4511,8 @@ function renderAdmin() {
 
       ${renderAppUpdateBanner()}
       <section class="hero-strip" aria-label="HR summary">
-        ${renderHrSummaryStatCard({ value: String(activeCount), label: "Active Updates", tab: "history", filter: "Active" })}
-        ${renderHrSummaryStatCard({ value: String(urgentCount), label: "Urgent Updates", tab: "history", filter: "Urgent" })}
+        ${renderHrSummaryStatCard({ value: String(activeCount), label: "Active Updates", tab: "feed", filter: "Active" })}
+        ${renderHrSummaryStatCard({ value: String(urgentCount), label: "Urgent Updates", tab: "feed", filter: "Urgent" })}
         ${renderHrSummaryStatCard({ value: String(activeEmployeeCount), label: "Active Employees", tab: "share" })}
       </section>
 
@@ -4605,15 +4522,13 @@ function renderAdmin() {
 
       <section class="panel-surface">
         ${
-          activeAdminTab === "publish"
-            ? renderAdminPublishPanel()
+          activeAdminTab === "feed"
+            ? renderHrFeedPanel()
             : activeAdminTab === "share"
               ? renderAdminAccessPanel()
-            : activeAdminTab === "history"
-              ? renderAdminHistoryPanel()
             : activeAdminTab === "settings"
               ? renderAdminSettingsPanel()
-              : renderAdminAccessPanel()
+              : renderHrFeedPanel()
         }
       </section>
       ${renderAdminSignoutFooter()}
@@ -4627,8 +4542,8 @@ function setMessage(message, type = "") {
 }
 
 function openHrSummaryTarget(tab, filter = "") {
-  activeAdminTab = tab || "publish";
-  activeHistoryFilter = activeAdminTab === "history" ? (filter || "All") : "All";
+  activeAdminTab = tab || "feed";
+  activeHistoryFilter = activeAdminTab === "feed" ? (filter || "All") : "All";
   render();
 }
 
@@ -4649,14 +4564,14 @@ async function routeTo(route) {
   resetAdminInviteState();
 
   if (route === "launcher") {
-    activeAdminTab = "publish";
+    activeAdminTab = "feed";
     activeHistoryFilter = "All";
     activeWebmasterTab = "overview";
     activeItTab = "accounts";
   }
 
   if (route === "hr") {
-    activeAdminTab = "publish";
+    activeAdminTab = "feed";
     activeHistoryFilter = "All";
   } else if (route === "it") {
     activeItTab = "accounts";
@@ -4812,9 +4727,9 @@ async function updateWeather(payload) {
 async function handleDeleteAction(id) {
   try {
     await deletePost(id);
-    setMessage("Deleted.", "success");
+    setMessage("Announcement taken down.", "success");
   } catch (error) {
-    setMessage(error.message || "Could not delete post.");
+    setMessage(error.message || "Could not take down announcement.");
   }
 
   render();
@@ -5563,9 +5478,6 @@ document.addEventListener("click", async (event) => {
   const tabButton = target.closest("[data-tab]");
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
-  const deleteButton = target.closest("[data-delete-post]");
-  const acknowledgementDetailButton = target.closest("[data-acknowledgement-detail]");
-  const acknowledgementExportButton = target.closest("[data-export-acknowledgements]");
   const enableAlertsButton = target.closest("[data-enable-alerts]");
   const disableAlertsButton = target.closest("[data-disable-alerts]");
   const sendTestPushButton = target.closest("[data-send-test-push]");
@@ -5608,38 +5520,13 @@ document.addEventListener("click", async (event) => {
   if (tabButton) {
     event.preventDefault();
     if (tabButton.dataset.tabGroup === "hr") {
-      activeAdminTab = tabButton.dataset.tab || "publish";
+      activeAdminTab = tabButton.dataset.tab || "feed";
     } else if (tabButton.dataset.tabGroup === "it") {
       activeItTab = tabButton.dataset.tab || "accounts";
     } else if (tabButton.dataset.tabGroup === "webmaster") {
       activeWebmasterTab = tabButton.dataset.tab || "overview";
     }
     render();
-    return;
-  }
-
-  if (acknowledgementDetailButton) {
-    event.preventDefault();
-    const postId = acknowledgementDetailButton.dataset.acknowledgementDetail || "";
-    expandedAcknowledgementPostId = expandedAcknowledgementPostId === postId ? "" : postId;
-    render();
-    return;
-  }
-
-  if (acknowledgementExportButton) {
-    event.preventDefault();
-    const postId = acknowledgementExportButton.dataset.exportAcknowledgements || "";
-    const post = state.posts.find((entry) => entry.id === postId);
-    if (!post) {
-      setMessage("That update is no longer available.", "error");
-      render();
-      clearMessageSoon();
-      return;
-    }
-    downloadAcknowledgementCsv(post);
-    setMessage("Acknowledgement CSV exported.", "success");
-    render();
-    clearMessageSoon();
     return;
   }
 
@@ -5758,12 +5645,6 @@ document.addEventListener("click", async (event) => {
     setMessage(copied ? "Copied analytics JSON." : "Could not copy the JSON.");
     render();
     clearMessageSoon();
-    return;
-  }
-
-  if (deleteButton) {
-    event.preventDefault();
-    await handleDeleteAction(deleteButton.dataset.deletePost);
     return;
   }
 
@@ -5940,20 +5821,6 @@ app.addEventListener("submit", async (event) => {
   }
 });
 
-app.addEventListener("change", (event) => {
-  if (!(event.target instanceof HTMLSelectElement)) return;
-
-  if (event.target.matches("[data-history-filter-select]")) {
-    activeHistoryFilter = event.target.value;
-    render();
-    return;
-  }
-
-  if (event.target.name !== "priority" || !event.target.form?.matches("[data-post-form]")) {
-    return;
-  }
-});
-
 app.addEventListener("toggle", (event) => {
   if (!(event.target instanceof HTMLDetailsElement)) return;
 
@@ -6065,8 +5932,5 @@ try {
   scheduleClientShellCheck("initial-load");
   void checkForAppUpdate();
 }
-
-
-
 
 
