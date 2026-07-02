@@ -89,13 +89,34 @@ test("auth login surfaces define readable text colors on light cards", async () 
   assert.equal(hasSelectorDeclaration(css, ".admin-auth-brand-copy h1", "color", "var\\(--ink\\)"), true);
 });
 
-test("auth login shells scroll from the top instead of centering oversized cards off-screen", async () => {
+test("entry login shells center on desktop and stay top-safe on mobile", async () => {
   const css = await loadStylesheet();
-  const authShellBody = getLastRuleBody(css, "\\.auth-shell,\\s*\\.admin-auth-shell");
+  const finalEntryLayerStart = css.indexOf("/* Final entry shell cleanup");
+  const finalEntryMobileStart = css.indexOf("@media (max-width: 720px)", finalEntryLayerStart);
+  const desktopCss = css.slice(0, finalEntryMobileStart);
+  const mobileCss = css.slice(finalEntryMobileStart);
+  const authShellBody = getLastRuleBody(desktopCss, "\\.auth-shell,\\s*\\.admin-auth-shell,\\s*\\.page-shell\\.launcher-shell");
+  const mobileAuthShellBody = getLastRuleBody(
+    mobileCss,
+    "\\.auth-shell,\\s*\\.admin-auth-shell,\\s*\\.page-shell\\.launcher-shell"
+  );
+  const mobileEntrySurfaceBody = getLastRuleBody(
+    mobileCss,
+    "\\.entry-surface\\.auth-gate-card,\\s*\\.entry-surface\\.admin-auth-card,\\s*\\.launcher-panel\\.entry-surface"
+  );
 
-  assert.equal(getDeclarationValue(authShellBody, "align-items"), "start");
-  assert.equal(getDeclarationValue(authShellBody, "justify-items"), "center");
-  assert.equal(getDeclarationValue(authShellBody, "overflow-y"), "auto");
+  assert.equal(getDeclarationValue(authShellBody, "display"), "grid !important");
+  assert.equal(getDeclarationValue(authShellBody, "align-items"), "center !important");
+  assert.equal(getDeclarationValue(authShellBody, "align-content"), "center !important");
+  assert.equal(getDeclarationValue(authShellBody, "justify-content"), "center !important");
+  assert.equal(getDeclarationValue(authShellBody, "justify-items"), "center !important");
+  assert.equal(getDeclarationValue(authShellBody, "min-height"), "100dvh !important");
+  assert.equal(getDeclarationValue(authShellBody, "padding"), "clamp(28px, 6vh, 56px) 18px !important");
+  assert.equal(getDeclarationValue(mobileAuthShellBody, "align-items"), "start !important");
+  assert.equal(getDeclarationValue(mobileAuthShellBody, "align-content"), "start !important");
+  assert.equal(getDeclarationValue(mobileAuthShellBody, "justify-content"), "center !important");
+  assert.equal(getDeclarationValue(mobileEntrySurfaceBody, "width"), "calc(100vw - 24px) !important");
+  assert.equal(getDeclarationValue(mobileEntrySurfaceBody, "max-width"), "calc(100vw - 24px) !important");
   assert.notEqual(getDeclarationValue(authShellBody, "place-items"), "center");
 });
 
@@ -123,7 +144,7 @@ test("employee status strip keeps each icon paired with its label", async () => 
   const css = await loadStylesheet();
   const statusStripBody = getLastSelectorBody(css, ".employee-shell .employee-status-strip");
   const statusRibbonBody = getLastSelectorBody(css, ".employee-shell .employee-status-ribbon");
-  const statusItemBody = getLastSelectorBody(css, ".employee-status-ribbon .employee-status-pill");
+  const statusItemBody = getLastSelectorBody(css, ".employee-shell .employee-status-ribbon .employee-status-pill");
   const statusIconBody = getLastSelectorBody(css, ".employee-status-ribbon .icon");
 
   assert.match(app, /class="employee-status-ribbon"/);
@@ -196,7 +217,7 @@ test("global operational layout prevents clipping and mobile overflow", async ()
 
   assert.equal(
     getDeclarationValue(rootBody, "--ui-font-family"),
-    'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+    "Arial, sans-serif"
   );
   assert.equal(getDeclarationValue(rootBody, "--ui-card-padding"), "10px");
   assert.equal(getDeclarationValue(rootBody, "--ui-control-min-height"), "36px");
@@ -216,7 +237,7 @@ test("global operational layout prevents clipping and mobile overflow", async ()
   assert.equal(getDeclarationValue(mobileTabBarBody, "display"), "grid");
   assert.equal(getDeclarationValue(mobileTabBarBody, "overflow"), "visible");
   assert.equal(getDeclarationValue(mobileTabBarBody, "margin-bottom"), "10px");
-  assert.equal(getDeclarationValue(mobilePageActionsBody, "grid-template-columns"), "repeat(3, minmax(0, 1fr))");
+  assert.equal(getDeclarationValue(mobilePageActionsBody, "grid-template-columns"), "repeat(auto-fit, minmax(0, 1fr)) !important");
   assert.equal(getDeclarationValue(mobileHeroStripBody, "grid-template-columns"), "repeat(2, minmax(0, 1fr))");
   assert.equal(getDeclarationValue(mobileHeroStripBody, "gap"), "6px");
   assert.equal(hasSelectorDeclaration(css, ".stat-card", "min-height", "58px"), true);
@@ -227,19 +248,14 @@ test("stylesheet rounds visible operational corners", async () => {
   const css = await loadStylesheet();
   const rootBody = getLastSelectorBody(css, ":root");
 
-  assert.equal(getDeclarationValue(rootBody, "--radius-control"), "16px");
-  assert.equal(getDeclarationValue(rootBody, "--radius-card"), "22px");
-  assert.equal(getDeclarationValue(rootBody, "--radius-panel"), "28px");
-  assert.equal(getDeclarationValue(rootBody, "--radius-soft"), "18px");
+  assert.equal(getDeclarationValue(rootBody, "--radius-control"), "18px");
+  assert.equal(getDeclarationValue(rootBody, "--radius-card"), "24px");
+  assert.equal(getDeclarationValue(rootBody, "--radius-panel"), "32px");
+  assert.equal(getDeclarationValue(rootBody, "--radius-soft"), "20px");
   assert.match(css, /Final rounded-corner normalization/);
   assert.match(css, /\.panel-card,\s*\.launch-card,\s*\.notice-card,/s);
-  const cssWithoutHrFeedLabelReset = css.replace(
-    /\.hr-shell \.managed-feed-item \.feed-type,[\s\S]*?\.hr-shell \.managed-feed-item \.feed-time/,
-    ".hr-shell .managed-feed-item .feed-time"
-  );
 
-  assert.match(css, /\.hr-shell \.managed-feed-item \.feed-type,[\s\S]*?border-radius:\s*0 !important;/);
-  assert.doesNotMatch(cssWithoutHrFeedLabelReset, /border-radius:\s*(?:0|2px)\s*!important/i);
+  assert.doesNotMatch(css, /border-radius:\s*(?:0|2px)\s*!important/i);
 });
 
 test("admin page header action buttons keep text visible in narrow layouts", async () => {
@@ -264,6 +280,105 @@ test("admin page header action buttons keep text visible in narrow layouts", asy
   assert.equal(getDeclarationValue(actionButtonBody, "text-align"), "center");
   assert.equal(getDeclarationValue(actionButtonBody, "min-width"), "0");
   assert.equal(getDeclarationValue(actionIconBody, "flex"), "0 0 17px");
+});
+
+test("admin page headers keep logo text under the logo mark", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const brandBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head > .brand");
+  const lockupBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head .brand-lockup");
+  const brandTextBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head .brand-lockup p");
+  const logoDiscBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head .brand-logo-disc");
+  const logoBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head .brand-lockup-logo");
+
+  assert.match(app, /brandBlock\("HR Control Center"\)/);
+  assert.match(app, /brandBlock\("Systems Command Center"\)/);
+  assert.match(app, /brandBlock\("IT Control Center"\)/);
+  assert.equal(getDeclarationValue(brandBody, "justify-content"), "center !important");
+  assert.equal(getDeclarationValue(lockupBody, "display"), "grid !important");
+  assert.equal(getDeclarationValue(lockupBody, "justify-items"), "center !important");
+  assert.equal(getDeclarationValue(lockupBody, "text-align"), "center !important");
+  assert.equal(getDeclarationValue(brandTextBody, "color"), "#0b4c75 !important");
+  assert.equal(getDeclarationValue(brandTextBody, "font-weight"), "950 !important");
+  assert.equal(getDeclarationValue(brandTextBody, "text-transform"), "none !important");
+  assert.equal(getDeclarationValue(brandTextBody, "white-space"), "normal !important");
+  assert.equal(getDeclarationValue(logoDiscBody, "width"), "58px !important");
+  assert.equal(getDeclarationValue(logoDiscBody, "height"), "58px !important");
+  assert.equal(getDeclarationValue(logoBody, "width"), "42px !important");
+  assert.equal(getDeclarationValue(logoBody, "height"), "42px !important");
+});
+
+test("all logo surfaces stack visible text under the logo mark", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const finalEntryLayerStart = css.indexOf("/* Final entry shell cleanup");
+  const finalEntryMobileStart = css.indexOf("@media (max-width: 720px)", finalEntryLayerStart);
+  const desktopCss = css.slice(0, finalEntryMobileStart);
+  const allLogoBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface > \\.entry-brand,\\s*\\.launcher-panel\\.entry-surface \\.launcher-brand,\\s*\\.admin-auth-card\\.entry-surface \\.admin-auth-brand,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-brand-identity"
+  );
+  const belowLogoTitleBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface \\.auth-frame-title,\\s*\\.launcher-panel\\.entry-surface \\.launcher-title-block"
+  );
+  const authTitleInnerBody = getLastSelectorBody(css, ".auth-gate-card.entry-surface .auth-frame-title > div");
+  const logoCopyBody = getLastRuleBody(
+    css,
+    "\\.admin-auth-card\\.entry-surface \\.admin-auth-brand-copy,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-brand-banner-copy"
+  );
+  const logoTextBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface \\.auth-frame-title h2,\\s*\\.admin-auth-card\\.entry-surface \\.admin-auth-brand-copy h1,\\s*\\.launcher-panel\\.entry-surface \\.launcher-title-block h2,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-brand-banner-kicker,\\s*\\.page-shell:is\\(\\.hr-shell, \\.webmaster-shell, \\.it-shell\\) \\.page-head \\.brand-lockup p"
+  );
+  const authAdminDiscBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface \\.brand-logo-disc,\\s*\\.admin-auth-card\\.entry-surface \\.admin-auth-brand-disc"
+  );
+  const authAdminLogoBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface \\.brand-lockup-logo,\\s*\\.admin-auth-card\\.entry-surface \\.admin-auth-brand-logo"
+  );
+  const rawLogoBody = getLastRuleBody(
+    css,
+    "\\.launcher-panel\\.entry-surface \\.launcher-brand \\.launcher-brand-logo,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-brand-banner-logo"
+  );
+  const launcherPanelBody = getLastSelectorBody(desktopCss, ".launcher-panel.entry-surface");
+
+  assert.match(app, /brandBlock\("", "entry-brand"\)/);
+  assert.match(app, /class="admin-auth-brand entry-brand"/);
+  assert.match(app, /class="launcher-brand entry-brand"/);
+  assert.match(app, /class="employee-brand-identity"/);
+
+  assert.equal(getDeclarationValue(allLogoBody, "display"), "grid !important");
+  assert.equal(getDeclarationValue(allLogoBody, "justify-items"), "center !important");
+  assert.equal(getDeclarationValue(allLogoBody, "gap"), "8px !important");
+  assert.equal(getDeclarationValue(allLogoBody, "text-align"), "center !important");
+  assert.equal(getDeclarationValue(launcherPanelBody, "gap"), "14px !important");
+  assert.equal(getDeclarationValue(belowLogoTitleBody, "justify-self"), "center !important");
+  assert.equal(getDeclarationValue(belowLogoTitleBody, "max-width"), "min(20rem, 100%) !important");
+  assert.equal(getDeclarationValue(belowLogoTitleBody, "margin"), "4px 0 6px !important");
+  assert.equal(getDeclarationValue(belowLogoTitleBody, "text-align"), "center !important");
+  assert.equal(getDeclarationValue(authTitleInnerBody, "gap"), "5px !important");
+  assert.equal(getDeclarationValue(logoCopyBody, "display"), "grid !important");
+  assert.equal(getDeclarationValue(logoCopyBody, "justify-items"), "center !important");
+  assert.equal(getDeclarationValue(logoCopyBody, "gap"), "5px !important");
+  assert.equal(getDeclarationValue(logoCopyBody, "max-width"), "min(15rem, 100%) !important");
+  assert.equal(getDeclarationValue(logoCopyBody, "text-align"), "center !important");
+  assert.equal(getDeclarationValue(logoTextBody, "color"), "#0b4c75 !important");
+  assert.equal(getDeclarationValue(logoTextBody, "max-width"), "min(18rem, 100%)");
+  assert.equal(getDeclarationValue(logoTextBody, "font-size"), "clamp(0.86rem, 1.2vw, 1.06rem) !important");
+  assert.equal(getDeclarationValue(logoTextBody, "font-weight"), "950 !important");
+  assert.equal(getDeclarationValue(logoTextBody, "line-height"), "1.16 !important");
+  assert.equal(getDeclarationValue(logoTextBody, "text-transform"), "none !important");
+  assert.equal(getDeclarationValue(logoTextBody, "white-space"), "normal !important");
+
+  assert.equal(getDeclarationValue(authAdminDiscBody, "width"), "58px !important");
+  assert.equal(getDeclarationValue(authAdminDiscBody, "height"), "58px !important");
+  assert.equal(getDeclarationValue(authAdminLogoBody, "width"), "42px !important");
+  assert.equal(getDeclarationValue(authAdminLogoBody, "height"), "42px !important");
+  assert.equal(getDeclarationValue(rawLogoBody, "width"), "58px !important");
+  assert.equal(getDeclarationValue(rawLogoBody, "height"), "58px !important");
 });
 
 test("systems summary stat cards keep metrics readable on light cards", async () => {
@@ -291,7 +406,7 @@ test("admin role and status chips keep labels readable on light tables", async (
   assert.equal(getLastSelectorDeclarationValue(css, ".admin-table-chip", "color"), "var(--steel)");
   assert.equal(getLastSelectorDeclarationValue(css, ".admin-table-chip.is-info", "color"), "var(--steel)");
   assert.equal(getLastSelectorDeclarationValue(css, ".admin-table-chip.is-positive", "color"), "#256346");
-  assert.equal(getLastSelectorDeclarationValue(css, ".admin-table-chip.is-muted", "color"), "#5c6770");
+  assert.equal(getLastSelectorDeclarationValue(css, ".admin-table-chip.is-muted", "color"), "var(--tone-muted-text) !important");
 });
 
 test("stylesheet forces app text to black globally", async () => {
@@ -336,11 +451,12 @@ test("management settings weather card uses a compact control layout", async () 
   assert.match(app, /class="settings-weather-line settings-weather-line-primary"/);
   assert.match(app, /class="settings-weather-line settings-weather-line-secondary"/);
   assert.match(app, /class="settings-weather-current"/);
-  assert.match(app, /class="settings-weather-temperature"/);
+  assert.match(app, /const temperatureToneClass = getWeatherTemperatureToneClass\(temperatureLabel\)/);
+  assert.match(app, /class="settings-weather-temperature \$\{temperatureToneClass\}"/);
   assert.match(app, /class="settings-weather-condition"/);
   assert.match(app, /class="settings-weather-range"/);
-  assert.match(app, /class="settings-weather-range-item"><span class="settings-weather-range-label">H<\/span>/);
-  assert.match(app, /class="settings-weather-range-item"><span class="settings-weather-range-label">L<\/span>/);
+  assert.match(app, /class="settings-weather-range-item settings-weather-range-high" aria-label="High temperature"><span class="settings-weather-range-label" aria-hidden="true">[^<]+<\/span>/);
+  assert.match(app, /class="settings-weather-range-item settings-weather-range-low" aria-label="Low temperature"><span class="settings-weather-range-label" aria-hidden="true">[^<]+<\/span>/);
   assert.match(app, /formatCompactWeatherLocation\(weather\.resolvedName \|\| weather\.location/);
   assert.match(app, /class="settings-weather-updated" aria-label="\$\{escapeHtml\(updatedAriaLabel\)\}"/);
   assert.match(app, /class="settings-weather-updated-symbol" aria-hidden="true">\$\{icon\("clock"\)\}<\/span>/);
@@ -387,6 +503,7 @@ test("launcher login buttons use compact navigation sizing", async () => {
   const launcherShellBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.page-shell\\.launcher-shell");
   const launcherStageBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.page-shell\\.launcher-shell\\s+\\.launcher-stage");
   const launcherPanelBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.launcher-panel");
+  const launcherShellAliasBody = getLastSelectorBody(css, ".launcher-shell.page-shell");
   const launcherLogoBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.launcher-brand-logo");
   const launcherTitleBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.launcher-title-block h2");
   const launcherGridBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.launcher-grid\\.launcher-grid-logins");
@@ -397,7 +514,9 @@ test("launcher login buttons use compact navigation sizing", async () => {
     assert.match(app, new RegExp(`"${label}"`));
   }
 
-  assert.equal(getDeclarationValue(launcherShellBody, "padding"), "8px 0 18px");
+  assert.equal(getDeclarationValue(launcherShellBody, "padding"), "clamp(28px, 6vh, 56px) 18px !important");
+  assert.equal(getDeclarationValue(launcherShellAliasBody, "width"), "min(760px, 100%) !important");
+  assert.equal(getDeclarationValue(launcherShellAliasBody, "overflow-x"), "hidden !important");
   assert.equal(getDeclarationValue(launcherStageBody, "width"), "min(540px, 100%)");
   assert.equal(getDeclarationValue(launcherStageBody, "gap"), "6px");
   assert.equal(getDeclarationValue(launcherLogoBody, "width"), "clamp(60px, 7vw, 76px)");
@@ -406,7 +525,7 @@ test("launcher login buttons use compact navigation sizing", async () => {
   assert.equal(getDeclarationValue(launcherTitleBody, "letter-spacing"), "0");
   assert.equal(getDeclarationValue(launcherPanelBody, "gap"), "6px");
   assert.equal(getDeclarationValue(launcherPanelBody, "padding"), "10px");
-  assert.equal(getDeclarationValue(launcherPanelBody, "border-radius"), "8px");
+  assert.equal(getDeclarationValue(launcherPanelBody, "border-radius"), "var(--radius-control)");
   assert.equal(getDeclarationValue(launcherGridBody, "gap"), "6px");
   assert.equal(getDeclarationValue(launcherGridBody, "grid-template-columns"), "repeat(2, minmax(0, 1fr))");
   assert.equal(getDeclarationValue(launchCardBody, "display"), "flex");
@@ -414,9 +533,177 @@ test("launcher login buttons use compact navigation sizing", async () => {
   assert.equal(getDeclarationValue(launchCardBody, "justify-content"), "center");
   assert.equal(getDeclarationValue(launchCardBody, "min-height"), "44px");
   assert.equal(getDeclarationValue(launchCardBody, "padding"), "6px 10px");
-  assert.equal(getDeclarationValue(launchCardBody, "border-radius"), "8px");
+  assert.equal(getDeclarationValue(launchCardBody, "border-radius"), "var(--radius-control)");
   assert.equal(getDeclarationValue(launchCardBody, "box-shadow"), "none");
   assert.equal(getDeclarationValue(launchCardLabelBody, "font-size"), "0.84rem");
+});
+
+test("entry surfaces keep relocated logo, labels, casing, and touch targets", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const finalEntryLayerStart = css.indexOf("/* Final entry shell cleanup");
+  const finalEntryMobileStart = css.indexOf("@media (max-width: 720px)", finalEntryLayerStart);
+  const desktopCss = css.slice(0, finalEntryMobileStart);
+  const entryCardBody = getLastRuleBody(
+    css,
+    "\\.entry-surface\\.auth-gate-card,\\s*\\.entry-surface\\.admin-auth-card"
+  );
+  const launcherEntryBody = getLastSelectorBody(desktopCss, ".launcher-panel.entry-surface");
+  const launcherEntryLogoBody = getLastSelectorBody(css, ".launcher-panel.entry-surface .launcher-brand-logo");
+  const entryCasingBody = getLastRuleBody(
+    css,
+    "\\.entry-surface \\.launch-card-label,\\s*\\.entry-surface \\.auth-frame-title h2,\\s*\\.entry-surface \\.admin-auth-brand-copy h1,\\s*\\.entry-surface \\.launcher-title-block h2,\\s*\\.entry-surface \\.auth-frame-eyebrow,\\s*\\.entry-surface \\.admin-auth-brand-copy \\.eyebrow,\\s*\\.entry-surface \\.field > span,\\s*\\.entry-surface \\.button,\\s*\\.entry-surface \\.ghost-button,\\s*\\.entry-surface \\.auth-inline-action,\\s*\\.entry-surface \\.employee-banner"
+  );
+  const entryTitleBody = getLastRuleBody(
+    css,
+    "\\.entry-surface \\.auth-frame-title h2,\\s*\\.entry-surface \\.admin-auth-brand-copy h1,\\s*\\.entry-surface \\.launcher-title-block h2"
+  );
+  const entryControlTextBody = getLastRuleBody(
+    css,
+    "\\.entry-surface \\.auth-frame-eyebrow,\\s*\\.entry-surface \\.admin-auth-brand-copy \\.eyebrow,\\s*\\.entry-surface \\.field > span,\\s*\\.entry-surface \\.button,\\s*\\.entry-surface \\.ghost-button,\\s*\\.entry-surface \\.auth-inline-action,\\s*\\.entry-surface input"
+  );
+  const entryFooterActionBody = getLastRuleBody(
+    css,
+    "\\.entry-surface \\.auth-inline-action,\\s*\\.entry-surface \\.admin-auth-footer \\.auth-inline-action"
+  );
+  const entryLabelBody = getLastSelectorBody(css, ".entry-surface .field > span");
+  const employeeLaunchBody = getLastSelectorBody(css, ".launcher-panel.entry-surface .launch-card[data-route=\"employee\"]");
+  const hrLaunchBody = getLastSelectorBody(css, ".launcher-panel.entry-surface .launch-card[data-route=\"hr\"]");
+  const webmasterLaunchBody = getLastSelectorBody(css, ".launcher-panel.entry-surface .launch-card[data-route=\"webmaster\"]");
+  const itLaunchBody = getLastSelectorBody(css, ".launcher-panel.entry-surface .launch-card[data-route=\"it\"]");
+
+  assert.match(app, /const cardClasses = \["auth-gate-card", "panel-card", "entry-surface", className\]/);
+  assert.match(app, /brandBlock\("", "entry-brand"\)/);
+  assert.match(app, /class="admin-auth-card panel-card entry-surface"/);
+  assert.match(app, /class="admin-auth-brand entry-brand"/);
+  assert.match(app, /<input name="username" maxlength="80" required autocomplete="username" aria-label="Username">/);
+  assert.match(app, /aria-label="\$\{escapeHtml\(canSetup \? "Create username" : "Username"\)\}"/);
+  assert.match(app, /<div class="launcher-panel entry-surface">[\s\S]*?<div class="launcher-brand entry-brand"/);
+  assert.doesNotMatch(app, /<section class="launcher-stage">\s*<div class="launcher-brand" aria-label/);
+
+  assert.equal(getDeclarationValue(entryCardBody, "width"), "min(520px, calc(100vw - 36px)) !important");
+  assert.equal(getDeclarationValue(entryCardBody, "max-width"), "520px !important");
+  assert.equal(getDeclarationValue(entryCardBody, "gap"), "14px !important");
+  assert.equal(getDeclarationValue(entryCardBody, "padding"), "20px !important");
+  assert.equal(getDeclarationValue(entryCardBody, "border-radius"), "var(--radius-soft) !important");
+  assert.equal(getDeclarationValue(launcherEntryBody, "justify-items"), "center");
+  assert.equal(getDeclarationValue(launcherEntryBody, "width"), "min(660px, calc(100vw - 36px)) !important");
+  assert.equal(getDeclarationValue(launcherEntryBody, "max-width"), "660px !important");
+  assert.equal(getDeclarationValue(launcherEntryBody, "gap"), "14px !important");
+  assert.equal(getDeclarationValue(launcherEntryBody, "padding"), "20px !important");
+  assert.equal(getDeclarationValue(launcherEntryBody, "border-radius"), "var(--radius-control) !important");
+  assert.equal(getDeclarationValue(launcherEntryLogoBody, "width"), "clamp(48px, 6vw, 64px)");
+  assert.equal(getDeclarationValue(launcherEntryLogoBody, "height"), "clamp(48px, 6vw, 64px)");
+  assert.equal(getDeclarationValue(entryCasingBody, "letter-spacing"), "0 !important");
+  assert.equal(getDeclarationValue(entryCasingBody, "text-transform"), "none !important");
+  assert.equal(getDeclarationValue(entryTitleBody, "font-size"), "clamp(1.2rem, 2vw, 1.45rem) !important");
+  assert.equal(getDeclarationValue(entryControlTextBody, "font-size"), "1rem !important");
+  assert.equal(getDeclarationValue(entryLabelBody, "display"), "block");
+  assert.equal(getDeclarationValue(entryLabelBody, "font-weight"), "700 !important");
+  assert.equal(getDeclarationValue(entryFooterActionBody, "min-height"), "44px !important");
+  assert.equal(getDeclarationValue(employeeLaunchBody, "color"), "var(--tone-info-text) !important");
+  assert.equal(getDeclarationValue(hrLaunchBody, "color"), "var(--tone-success-text) !important");
+  assert.equal(getDeclarationValue(webmasterLaunchBody, "color"), "var(--tone-warning-text) !important");
+  assert.equal(getDeclarationValue(itLaunchBody, "color"), "var(--tone-status-text) !important");
+});
+
+test("semantic color polish uses shared tone tokens for weather and pills", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const toneBody = getLastRuleBody(css, "(?:^|\\r?\\n)body");
+  const hotBody = getLastSelectorBody(css, ".weather-temperature-hot");
+  const coldBody = getLastSelectorBody(css, ".weather-temperature-cold");
+  const highLowBody = getLastRuleBody(
+    css,
+    "\\.employee-weather-range-item:first-child,\\s*\\.settings-weather-range-item:first-child"
+  );
+  const pillSizeBody = getLastRuleBody(
+    css,
+    "\\.notice-type,\\s*\\.feed-type,\\s*\\.priority-pill,\\s*\\.sync-pill,\\s*\\.settings-chip,\\s*\\.count-pill,\\s*\\.status-chip,\\s*\\.admin-table-chip,\\s*\\.request-status,\\s*\\.employee-status-ribbon \\.employee-status-pill"
+  );
+  const successPillBody = getLastRuleBody(
+    css,
+    "\\.request-status\\.success,\\s*\\.admin-table-chip\\.is-positive,\\s*\\.employee-status-ribbon \\.employee-status-pill:first-child"
+  );
+  const urgentPillBody = getLastRuleBody(
+    css,
+    "\\.priority-pill\\.urgent,\\s*\\.request-status\\.danger"
+  );
+
+  assert.match(app, /const weatherTemperatureTones = Object\.freeze\(\[/);
+  assert.match(app, /function getWeatherTemperatureToneClass\(value\)/);
+  assert.match(app, /return "weather-temperature-neutral"/);
+  assert.match(toneBody, /--tone-info-bg:\s*#dbeafe/);
+  assert.match(toneBody, /--tone-success-text:\s*#166534/);
+  assert.match(toneBody, /--tone-danger-text:\s*#b42318/);
+  assert.match(toneBody, /--weather-hot:\s*#dc2626/);
+  assert.equal(getDeclarationValue(hotBody, "color"), "var(--weather-hot) !important");
+  assert.equal(getDeclarationValue(coldBody, "color"), "var(--weather-cold) !important");
+  assert.equal(getDeclarationValue(highLowBody, "color"), "var(--tone-danger-text)");
+  assert.equal(getDeclarationValue(pillSizeBody, "font-size"), "0.9rem !important");
+  assert.equal(getDeclarationValue(pillSizeBody, "font-weight"), "850 !important");
+  assert.equal(getDeclarationValue(successPillBody, "background"), "var(--tone-success-bg) !important");
+  assert.equal(getDeclarationValue(urgentPillBody, "background"), "var(--tone-danger-bg) !important");
+});
+
+test("all operational pages share final readable controls, pills, and card geometry", async () => {
+  const css = await loadStylesheet();
+  const allPageLayerStart = css.indexOf("/* All-page consistency pass. */");
+  const allPageLayer = css.slice(allPageLayerStart);
+  const activeTabBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .tab-button.active");
+  const mobileShellBody = getLastRuleBody(
+    css,
+    "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\)"
+  );
+  const mobilePillBody = getLastRuleBody(
+    css,
+    "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?\\.notice-type,[\\s\\S]*?\\.employee-status-ribbon \\.employee-status-pill[\\s\\S]*?\\)"
+  );
+
+  assert.match(css, /\/\* All-page consistency pass\. \*\//);
+  assert.notEqual(allPageLayerStart, -1);
+  assert.match(allPageLayer, /\.empty-state\s*\)\s*\{[\s\S]*?border-radius:\s*var\(--radius-control\) !important;/);
+  assert.match(allPageLayer, /\.settings-collapse-toggle\s*\)\s*\{[\s\S]*?min-height:\s*44px !important;[\s\S]*?text-transform:\s*none !important;/);
+  assert.match(allPageLayer, /\.employee-status-ribbon \.employee-status-pill\s*\)\s*\{[\s\S]*?display:\s*inline-flex !important;[\s\S]*?min-height:\s*30px !important;[\s\S]*?border-radius:\s*var\(--radius-control\) !important;[\s\S]*?font-size:\s*0\.9rem !important;/);
+  assert.match(allPageLayer, /\.notice-card[\s\S]*?\) :is\(\.feed-type, \.priority-pill, \.notice-type\)\s*\{[\s\S]*?border-radius:\s*var\(--radius-control\) !important;[\s\S]*?text-transform:\s*none !important;/);
+  assert.match(allPageLayer, /\.employee-status-ribbon \.employee-status-pill:nth-child\(3\)\s*\)\s*\{[\s\S]*?background:\s*var\(--tone-status-bg\) !important;/);
+  assert.match(allPageLayer, /\.employee-status-ribbon \.employee-status-pill:nth-child\(2\)\s*\)\s*\{[\s\S]*?background:\s*var\(--tone-warning-bg\) !important;/);
+  assert.match(allPageLayer, /\.request-status\.danger\s*\)\s*\{[\s\S]*?background:\s*var\(--tone-danger-bg\) !important;/);
+  assert.equal(getDeclarationValue(activeTabBody, "background"), "var(--tone-info-bg) !important");
+  assert.equal(getDeclarationValue(mobileShellBody, "width"), "min(100%, calc(100vw - 16px)) !important");
+  assert.equal(getDeclarationValue(mobilePillBody, "font-size"), "0.86rem !important");
+});
+
+test("webmaster overview aligns the shell, cards, and snapshot badge", async () => {
+  const css = await loadStylesheet();
+  const allPageLayerStart = css.indexOf("/* All-page consistency pass. */");
+  const allPageLayerMediaStart = css.indexOf("@media (max-width: 720px)", allPageLayerStart);
+  const desktopCss = css.slice(allPageLayerStart, allPageLayerMediaStart);
+  const webmasterShellBody = getLastSelectorBody(css, ".page-shell.webmaster-shell");
+  const webmasterContentBody = getLastRuleBody(
+    desktopCss,
+    "\\.page-shell\\.webmaster-shell \\.page-head,\\s*\\.page-shell\\.webmaster-shell \\.hero-strip,\\s*\\.page-shell\\.webmaster-shell \\.tab-bar,\\s*\\.page-shell\\.webmaster-shell \\.panel-stack"
+  );
+  const webmasterPanelTitleBody = getLastSelectorBody(desktopCss, ".page-shell.webmaster-shell .panel-title-wide");
+  const webmasterPanelPillBody = getLastSelectorBody(desktopCss, ".page-shell.webmaster-shell .panel-title-wide .sync-pill");
+  const mobilePanelTitleBody = getLastRuleBody(
+    css,
+    "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell\\.webmaster-shell \\.panel-title-wide"
+  );
+  const mobileActionsBody = getLastRuleBody(
+    css,
+    "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell\\.webmaster-shell \\.page-head \\.page-actions"
+  );
+
+  assert.equal(getDeclarationValue(webmasterShellBody, "width"), "min(1440px, calc(100vw - 96px)) !important");
+  assert.equal(getDeclarationValue(webmasterContentBody, "width"), "min(100%, 1204px)");
+  assert.equal(getDeclarationValue(webmasterContentBody, "margin-inline"), "auto");
+  assert.equal(getDeclarationValue(webmasterPanelTitleBody, "grid-template-columns"), "minmax(0, 1fr) auto");
+  assert.equal(getDeclarationValue(webmasterPanelTitleBody, "width"), "min(100%, 1204px)");
+  assert.equal(getDeclarationValue(webmasterPanelPillBody, "justify-self"), "end");
+  assert.equal(getDeclarationValue(mobilePanelTitleBody, "grid-template-columns"), "1fr");
+  assert.equal(getDeclarationValue(mobileActionsBody, "display"), "grid");
+  assert.equal(getDeclarationValue(mobileActionsBody, "grid-template-columns"), "repeat(2, minmax(0, 1fr)) !important");
 });
 
 test("employee feed does not expose mark-as-read controls", async () => {
@@ -433,7 +720,17 @@ test("employee feed does not expose mark-as-read controls", async () => {
 test("HR console keeps publishing and feed control in one workspace", async () => {
   const app = await loadClientApp();
   const css = await loadStylesheet();
+  const hrFeedWorkspaceBody = getLastSelectorBody(css, ".hr-shell .hr-feed-workspace");
+  const hrFeedWorkspaceChildrenBody = getLastRuleBody(
+    css,
+    "\\.hr-shell \\.hr-feed-workspace > \\.composer-panel,\\s*\\.hr-shell \\.hr-feed-workspace > \\.hr-feed-preview"
+  );
   const hrFeedPreviewBody = getLastSelectorBody(css, ".hr-shell .hr-feed-preview");
+  const hrFeedPreviewListBody = getLastRuleBody(
+    css,
+    "\\.hr-shell \\.hr-feed-preview \\.feed-list,\\s*\\.hr-shell \\.hr-feed-preview \\.feed-list-quiet"
+  );
+  const alignedManagedFeedItemBody = getLastSelectorBody(css, ".hr-shell .hr-feed-preview .managed-feed-item");
   const managedFeedItemBody = getLastSelectorBody(css, ".hr-shell .managed-feed-item");
   const managedFeedHeadBody = getLastSelectorBody(css, ".hr-shell .managed-feed-item .feed-head");
   const managedFeedHeadSideBody = getLastSelectorBody(css, ".hr-shell .managed-feed-item .feed-head-side");
@@ -442,11 +739,14 @@ test("HR console keeps publishing and feed control in one workspace", async () =
     "\\.hr-shell \\.managed-feed-item \\.feed-type,\\s*\\.hr-shell \\.managed-feed-item \\.priority-pill"
   );
   const managedFeedTitleBody = getLastSelectorBody(css, ".hr-shell .managed-feed-item .feed-title");
+  const hrFeedPanelSource = app.match(/function renderHrFeedPanel\(\) \{[\s\S]*?\n\}\n\nfunction renderSecurityEventCard/)?.[0] || "";
 
   assert.match(app, /let activeAdminTab = "feed"/);
   assert.match(app, /const adminTabs = \[\s*\{ id: "feed", label: "Feed", icon: "news" \}/);
   assert.match(app, /function renderHrFeedPanel/);
   assert.match(app, /renderHrFeedPanel\(\)/);
+  assert.doesNotMatch(hrFeedPanelSource, /<h2>Feed control<\/h2>/);
+  assert.doesNotMatch(hrFeedPanelSource, /\$\{notices\.length\} live/);
   assert.match(app, /aria-label="HR feed control center"/);
   assert.match(app, /<form data-post-form>/);
   assert.match(app, /notices\.map\(\(post\) => renderManagedFeedItem\(post\)\)/);
@@ -458,13 +758,25 @@ test("HR console keeps publishing and feed control in one workspace", async () =
   assert.doesNotMatch(app, /activeAdminTab === "publish"/);
   assert.doesNotMatch(app, /\{ id: "publish", label: "Publish"/);
   assert.doesNotMatch(app, /renderAdminPublishPanel\(\)[\s\S]*: activeAdminTab === "share"/);
+  assert.equal(getDeclarationValue(hrFeedWorkspaceBody, "grid-template-columns"), "minmax(0, 1fr) !important");
+  assert.equal(getDeclarationValue(hrFeedWorkspaceBody, "gap"), "12px !important");
+  assert.equal(getDeclarationValue(hrFeedWorkspaceChildrenBody, "width"), "100% !important");
+  assert.equal(getDeclarationValue(hrFeedWorkspaceChildrenBody, "max-width"), "100% !important");
+  assert.equal(getDeclarationValue(hrFeedWorkspaceChildrenBody, "justify-self"), "stretch");
   assert.equal(getDeclarationValue(hrFeedPreviewBody, "align-self"), "start !important");
+  assert.equal(getDeclarationValue(hrFeedPreviewBody, "padding"), "0 !important");
+  assert.equal(getDeclarationValue(hrFeedPreviewBody, "border"), "0 !important");
+  assert.equal(getDeclarationValue(hrFeedPreviewListBody, "width"), "100% !important");
+  assert.equal(getDeclarationValue(hrFeedPreviewListBody, "max-width"), "100% !important");
+  assert.equal(getDeclarationValue(hrFeedPreviewListBody, "margin"), "0 !important");
+  assert.equal(getDeclarationValue(alignedManagedFeedItemBody, "width"), "100% !important");
+  assert.equal(getDeclarationValue(alignedManagedFeedItemBody, "max-width"), "100% !important");
   assert.equal(getDeclarationValue(managedFeedItemBody, "display"), "grid !important");
   assert.equal(getDeclarationValue(managedFeedItemBody, "align-items"), "start !important");
   assert.equal(getDeclarationValue(managedFeedHeadBody, "align-items"), "start !important");
   assert.equal(getDeclarationValue(managedFeedHeadSideBody, "align-items"), "start !important");
-  assert.equal(getDeclarationValue(managedFeedPillBody, "border-radius"), "0 !important");
-  assert.equal(getDeclarationValue(managedFeedPillBody, "text-transform"), "uppercase !important");
+  assert.equal(getDeclarationValue(managedFeedPillBody, "border-radius"), "var(--radius-control) !important");
+  assert.equal(getDeclarationValue(managedFeedPillBody, "text-transform"), "none !important");
   assert.equal(getDeclarationValue(managedFeedTitleBody, "margin"), "0 !important");
 });
 
@@ -490,11 +802,12 @@ test("employee weather renders as a compact source-backed card", async () => {
   assert.match(app, /class="employee-weather-line employee-weather-line-primary"/);
   assert.match(app, /class="employee-weather-line employee-weather-line-secondary"/);
   assert.match(app, /class="employee-weather-current"/);
-  assert.match(app, /class="employee-weather-temperature"/);
+  assert.match(app, /const temperatureToneClass = getWeatherTemperatureToneClass\(temperature\)/);
+  assert.match(app, /class="employee-weather-temperature \$\{temperatureToneClass\}"/);
   assert.match(app, /class="employee-weather-condition"/);
   assert.match(app, /class="employee-weather-range"/);
-  assert.match(app, /class="employee-weather-range-item"><span class="employee-weather-range-label">H<\/span>/);
-  assert.match(app, /class="employee-weather-range-item"><span class="employee-weather-range-label">L<\/span>/);
+  assert.match(app, /class="employee-weather-range-item employee-weather-range-high" aria-label="High temperature"><span class="employee-weather-range-label" aria-hidden="true">[^<]+<\/span>/);
+  assert.match(app, /class="employee-weather-range-item employee-weather-range-low" aria-label="Low temperature"><span class="employee-weather-range-label" aria-hidden="true">[^<]+<\/span>/);
   assert.match(app, /escapeHtml\(highTemperature\)/);
   assert.match(app, /escapeHtml\(lowTemperature\)/);
   assert.match(app, /function formatCompactWeatherLocation/);
@@ -545,11 +858,11 @@ test("employee weather renders as a compact source-backed card", async () => {
   assert.equal(getDeclarationValue(weatherRangeBody, "display"), "inline-flex");
   assert.equal(getDeclarationValue(weatherRangeBody, "align-items"), "baseline");
   assert.equal(getDeclarationValue(weatherRangeBody, "gap"), "10px");
-  assert.equal(getDeclarationValue(weatherRangeBody, "padding-left"), "12px");
-  assert.equal(getDeclarationValue(weatherRangeBody, "border-left"), "1px solid var(--line)");
+  assert.equal(getDeclarationValue(weatherRangeBody, "padding-left"), "");
+  assert.equal(getDeclarationValue(weatherRangeBody, "border-left"), "");
   assert.equal(getDeclarationValue(weatherRangeBody, "white-space"), "nowrap");
   assert.equal(getDeclarationValue(weatherRangeItemBody, "display"), "inline-flex");
-  assert.equal(getDeclarationValue(weatherRangeLabelBody, "font-size"), "0.72rem");
+  assert.equal(getDeclarationValue(weatherRangeLabelBody, "font-size"), "0.9rem");
   assert.equal(getDeclarationValue(weatherUpdatedBody, "display"), "inline-flex");
   assert.equal(getDeclarationValue(weatherUpdatedSymbolIconBody, "width"), "0.82rem");
   assert.equal(getDeclarationValue(weatherUpdatedSymbolIconBody, "flex"), "0 0 0.82rem");
@@ -753,9 +1066,9 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(employeeSubscriptionBody, "background"), "transparent !important");
   assert.equal(getDeclarationValue(employeeSubscriptionBody, "border"), "0 !important");
   assert.equal(getDeclarationValue(employeeSubscriptionBody, "box-shadow"), "none !important");
-  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "width"), "56px");
+  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "width"), "auto");
   assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "height"), "48px");
-  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "padding"), "0");
+  assert.equal(getDeclarationValue(employeeSubscribeButtonBody, "padding"), "0 14px");
   assert.equal(getDeclarationValue(feedListBody, "justify-items"), "stretch");
   assert.equal(getDeclarationValue(feedItemBody, "width"), "100% !important");
   assert.equal(getDeclarationValue(feedItemBody, "min-width"), "0");

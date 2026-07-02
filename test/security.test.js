@@ -167,6 +167,68 @@ test("createSecurityStore provisions admin and revokes disabled employee access"
   }
 });
 
+test("existing employee can be added to HR and use their username for HR login", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-hr-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const employeeResult = await store.createEmployeeAccount({
+      name: "Alex Rivera",
+      username: "alex.rivera",
+      password: "EmployeePass1!"
+    });
+
+    const addResult = await store.addEmployeeToHrGroup(
+      {
+        headers: {
+          cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+        }
+      },
+      employeeResult.employee.id
+    );
+    assert.equal(addResult.adminUser.username, "alex.rivera");
+    assert.deepEqual(addResult.adminUser.roles, ["hr"]);
+
+    const employees = await store.listEmployees();
+    const promotedEmployee = employees.find((employee) => employee.username === "alex.rivera");
+    assert.equal(promotedEmployee?.hrAdmin, true);
+
+    const hrLogin = await store.authenticateAdmin({
+      username: "alex.rivera",
+      password: "EmployeePass1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(hrLogin.authorized), true);
+
+    await store.resetEmployeePassword(employeeResult.employee.id, "EmployeePass2!");
+    await assert.rejects(
+      store.authenticateAdmin({
+        username: "alex.rivera",
+        password: "EmployeePass1!",
+        userAgent: "test"
+      }),
+      /Invalid username or password\./
+    );
+
+    const updatedHrLogin = await store.authenticateAdmin({
+      username: "alex.rivera",
+      password: "EmployeePass2!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(updatedHrLogin.authorized), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("legacy webmaster records normalize to the default webmaster username", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-webmaster-legacy-"));
   const dataFile = path.join(tempDir, "security.json");

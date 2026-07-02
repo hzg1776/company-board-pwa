@@ -2583,6 +2583,16 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const employeeHrGroupMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/hr-group$/);
+    if (req.method === "POST" && employeeHrGroupMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeeHrGroupMatch[1]);
+      const result = await securityStore.addEmployeeToHrGroup(req, employeeId);
+      sendJson(res, 200, result);
+      return;
+    }
+
     const employeeSessionsMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/sessions\/revoke$/);
     if (req.method === "POST" && employeeSessionsMatch) {
       if (!(await requireHrMutationAccess(req, res))) return;

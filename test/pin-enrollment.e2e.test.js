@@ -542,6 +542,11 @@ test(
           hasCondition: Boolean(card?.querySelector('.employee-weather-condition')),
           hasRange: Boolean(card?.querySelector('.employee-weather-range')),
           rangeItemCount: card?.querySelectorAll('.employee-weather-range-item').length || 0,
+          rangeItems: Array.from(card?.querySelectorAll('.employee-weather-range-item') || []).map((item) => ({
+            className: item.className,
+            ariaLabel: item.getAttribute('aria-label') || '',
+            text: item.innerText || ''
+          })),
           hasLocation: Boolean(card?.querySelector('.employee-weather-location')),
           hasUpdated: Boolean(card?.querySelector('.employee-weather-updated')),
           updatedText: updated?.innerText || '',
@@ -565,8 +570,8 @@ test(
     assert.match(String(employeeWeatherCard.updatedAriaLabel), /^Updated |^Not refreshed$/);
     assert.ok(!String(employeeWeatherCard.updatedText).includes("Updated"));
     assert.equal(employeeWeatherCard.hasDetails, false);
-    assert.ok(String(employeeWeatherCard.text).includes("H"));
-    assert.ok(String(employeeWeatherCard.text).includes("L"));
+    assert.ok(employeeWeatherCard.rangeItems.some((item) => item.className.includes("employee-weather-range-high") && item.ariaLabel === "High temperature"));
+    assert.ok(employeeWeatherCard.rangeItems.some((item) => item.className.includes("employee-weather-range-low") && item.ariaLabel === "Low temperature"));
     assert.ok(!String(employeeWeatherCard.text).includes("from "));
     assert.ok(!String(employeeWeatherCard.text).includes("High"));
     assert.ok(!String(employeeWeatherCard.text).includes("Low"));
@@ -691,7 +696,7 @@ test(
     assert.equal(hrFeedScreen.hasFeedControlCenter, true);
     assert.equal(hrFeedScreen.hasPostForm, true);
     assert.equal(hrFeedScreen.hasDeletePostAction, true);
-    assert.ok(String(hrFeedScreen.text).includes("Feed control"));
+    assert.ok(String(hrFeedScreen.text).includes("New announcement"));
     assert.ok(String(hrFeedScreen.text).includes("Publish update"));
 
     await evaluateExpression(session, `
@@ -807,6 +812,11 @@ test(
           settingsWeatherText: document.querySelector('.settings-weather-card')?.innerText || "",
           settingsWeatherLineCount: document.querySelectorAll('.settings-weather-card .settings-weather-line').length,
           settingsWeatherRangeItemCount: document.querySelectorAll('.settings-weather-card .settings-weather-range-item').length,
+          settingsWeatherRangeItems: Array.from(document.querySelectorAll('.settings-weather-card .settings-weather-range-item')).map((item) => ({
+            className: item.className,
+            ariaLabel: item.getAttribute('aria-label') || '',
+            text: item.innerText || ''
+          })),
           settingsWeatherUpdatedHasSymbol: Boolean(document.querySelector('.settings-weather-card .settings-weather-updated-symbol .icon')),
           hasSettingsWeatherForm: Boolean(document.querySelector('.settings-weather-form')),
           hasLegacyWeatherForm: Boolean(document.querySelector('.settings-weather-card .auth-form')),
@@ -820,14 +830,14 @@ test(
     assert.ok(!String(hrSettingsScreen.text).includes("Session rule"));
     assert.ok(!String(hrSettingsScreen.text).includes("Last password"));
     assert.deepEqual(hrSettingsScreen.whiteTextElements, []);
-    assert.equal(hrSettingsScreen.settingsColor, "rgb(0, 0, 0)");
+    assert.equal(hrSettingsScreen.settingsColor, "rgb(29, 78, 216)");
     assert.equal(hrSettingsScreen.hasSettingsWeatherCard, true);
     assert.equal(hrSettingsScreen.settingsWeatherLineCount, 2);
     assert.equal(hrSettingsScreen.settingsWeatherRangeItemCount, 2);
     assert.equal(hrSettingsScreen.settingsWeatherUpdatedHasSymbol, true);
     assert.ok(!String(hrSettingsScreen.settingsWeatherText).includes("Live weather source"));
-    assert.ok(String(hrSettingsScreen.settingsWeatherText).includes("H"));
-    assert.ok(String(hrSettingsScreen.settingsWeatherText).includes("L"));
+    assert.ok(hrSettingsScreen.settingsWeatherRangeItems.some((item) => item.className.includes("settings-weather-range-high") && item.ariaLabel === "High temperature"));
+    assert.ok(hrSettingsScreen.settingsWeatherRangeItems.some((item) => item.className.includes("settings-weather-range-low") && item.ariaLabel === "Low temperature"));
     assert.equal(hrSettingsScreen.hasSettingsWeatherForm, true);
     assert.equal(hrSettingsScreen.hasLegacyWeatherForm, false);
     assert.ok(

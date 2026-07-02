@@ -916,9 +916,10 @@ Copying this into Codex should give it enough context to trace the site health a
 `;
 }
 
-  function brandBlock(title = "") {
+  function brandBlock(title = "", className = "") {
+    const brandClasses = ["brand", className].filter(Boolean).join(" ");
     return `
-      <div class="brand">
+      <div class="${brandClasses}">
         <div class="brand-lockup">
           <div class="brand-logo-disc">
             <img class="brand-lockup-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
@@ -937,13 +938,13 @@ function renderAuthFrame({
   className = "",
   contentClassName = ""
 }) {
-  const cardClasses = ["auth-gate-card", "panel-card", className].filter(Boolean).join(" ");
+  const cardClasses = ["auth-gate-card", "panel-card", "entry-surface", className].filter(Boolean).join(" ");
   const contentClasses = ["auth-frame-content", contentClassName].filter(Boolean).join(" ");
 
   return `
     <main class="auth-shell">
       <section class="${cardClasses}">
-        ${brandBlock("")}
+        ${brandBlock("", "entry-brand")}
         <div class="panel-title auth-frame-title">
           <div>
             ${eyebrow ? `<p class="eyebrow auth-frame-eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
@@ -964,9 +965,9 @@ function renderAdminAuthFrame({ route, title, error = "", content, footer = "" }
 
   return `
     <main class="admin-auth-shell">
-      <section class="admin-auth-card panel-card" data-admin-auth-surface="${escapeHtml(route)}">
+      <section class="admin-auth-card panel-card entry-surface" data-admin-auth-surface="${escapeHtml(route)}">
         <header class="admin-auth-header">
-          <div class="admin-auth-brand">
+          <div class="admin-auth-brand entry-brand">
             <div class="admin-auth-brand-disc">
               <img class="admin-auth-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             </div>
@@ -1774,6 +1775,25 @@ function defaultWeather() {
   };
 }
 
+const weatherTemperatureTones = Object.freeze([
+  { minimum: 80, className: "weather-temperature-hot" },
+  { minimum: 70, className: "weather-temperature-warm" },
+  { minimum: 56, className: "weather-temperature-mild" },
+  { minimum: 33, className: "weather-temperature-cool" },
+  { minimum: -Infinity, className: "weather-temperature-cold" }
+]);
+
+function getWeatherTemperatureToneClass(value) {
+  const match = String(value || "").match(/-?\d+(?:\.\d+)?/);
+  const temperature = match ? Number.parseFloat(match[0]) : Number.NaN;
+
+  if (!Number.isFinite(temperature)) {
+    return "weather-temperature-neutral";
+  }
+
+  return weatherTemperatureTones.find((tone) => temperature >= tone.minimum)?.className || "weather-temperature-neutral";
+}
+
 const COMPACT_WEATHER_LOCATION_PARTS = Object.freeze({
   "alabama": "AL",
   "alaska": "AK",
@@ -2531,7 +2551,7 @@ function renderEmployeeSetupWizard() {
     <form class="device-setup-form" data-device-setup-form>
       <div class="device-setup-actions">
         <button class="button employee-subscribe-button" type="submit" data-device-action="${escapeHtml(setup.primaryAction.id)}" aria-label="${escapeHtml(setup.primaryAction.label)}" ${busy ? "disabled aria-disabled=\"true\"" : ""}>
-          ${icon(setup.primaryAction.icon)}
+          ${icon(setup.primaryAction.icon)} Sign up for alerts
         </button>
         ${secondaryAction === "disable-alerts" ? `
           <button class="ghost-button" type="button" data-disable-alerts ${busy ? "disabled aria-disabled=\"true\"" : ""}>
@@ -2726,7 +2746,7 @@ function renderManagedFeedItem(post) {
 
 function renderEmployeeStatusStrip(notices, setup) {
   const urgentCount = notices.filter((post) => post.priority === "Urgent").length;
-  const alertState = setup.ready ? "Alerts on" : "Setup";
+  const alertState = setup.ready ? "Alerts on" : "Sign up for alerts";
 
   return `
     <section class="employee-status-strip" aria-label="Employee portal status">
@@ -2772,6 +2792,7 @@ function renderEmployeeWeatherCard() {
   const weather = state.weather || defaultWeather();
   const condition = String(weather.condition || "Weather not configured");
   const temperature = String(weather.temperature || "--");
+  const temperatureToneClass = getWeatherTemperatureToneClass(temperature);
   const highTemperature = String(weather.highTemperature || "--");
   const lowTemperature = String(weather.lowTemperature || "--");
   const location = formatCompactWeatherLocation(weather.resolvedName || weather.location);
@@ -2783,12 +2804,12 @@ function renderEmployeeWeatherCard() {
     <section class="employee-weather-card employee-weather-card-two-line" aria-label="Current weather">
       <div class="employee-weather-line employee-weather-line-primary">
         <span class="employee-weather-current">
-          <strong class="employee-weather-temperature">${escapeHtml(temperature)}</strong>
+          <strong class="employee-weather-temperature ${temperatureToneClass}">${escapeHtml(temperature)}</strong>
           <span class="employee-weather-condition">${escapeHtml(condition)}</span>
         </span>
         <span class="employee-weather-range">
-          <span class="employee-weather-range-item"><span class="employee-weather-range-label">H</span> ${escapeHtml(highTemperature)}</span>
-          <span class="employee-weather-range-item"><span class="employee-weather-range-label">L</span> ${escapeHtml(lowTemperature)}</span>
+          <span class="employee-weather-range-item employee-weather-range-high" aria-label="High temperature"><span class="employee-weather-range-label" aria-hidden="true">▲</span> ${escapeHtml(highTemperature)}</span>
+          <span class="employee-weather-range-item employee-weather-range-low" aria-label="Low temperature"><span class="employee-weather-range-label" aria-hidden="true">▼</span> ${escapeHtml(lowTemperature)}</span>
         </span>
       </div>
       <div class="employee-weather-line employee-weather-line-secondary">
@@ -2852,7 +2873,7 @@ function renderEmployeeAuthGate() {
       <form class="auth-form" data-employee-login-form>
         <label class="field">
           <span>Username</span>
-          <input name="username" maxlength="80" required autocomplete="username">
+          <input name="username" maxlength="80" required autocomplete="username" aria-label="Username">
         </label>
         <label class="field">
           <span>Password</span>
@@ -3054,7 +3075,7 @@ function renderAdminAuthGate(route) {
           ` : ""}
           <label class="field">
             <span>${escapeHtml(canSetup ? "Create username" : "Username")}</span>
-            <input name="username" maxlength="80" required autocomplete="username">
+            <input name="username" maxlength="80" required autocomplete="username" aria-label="${escapeHtml(canSetup ? "Create username" : "Username")}">
           </label>
           <label class="field">
             <span>${escapeHtml(canSetup ? "Create password" : "Password")}</span>
@@ -3109,6 +3130,7 @@ function renderEmployeeDirectoryRow(employee) {
       </td>
       <td>
         <span class="admin-table-chip ${employee.active ? "is-positive" : "is-muted"}">${escapeHtml(employee.active ? "Active" : "Disabled")}</span>
+        <div class="admin-table-secondary">${escapeHtml(employee.hrAdmin ? "HR access enabled" : "Employee access only")}</div>
       </td>
       <td>
         <div class="admin-table-primary">${escapeHtml(String(employee.activeSessions || 0))}</div>
@@ -3141,6 +3163,10 @@ function renderEmployeeDirectoryRow(employee) {
           <form data-revoke-employee-sessions-form>
             <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
             <button class="ghost-button" type="submit">${icon("refresh")} Sign Out Sessions</button>
+          </form>
+          <form data-add-employee-hr-group-form>
+            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+            <button class="ghost-button" type="submit"${employee.hrAdmin || !employee.active ? " disabled" : ""}>${icon("users")} Add to HR</button>
           </form>
         </div>
       </td>
@@ -3540,13 +3566,13 @@ function renderLauncher() {
     <main class="page-shell launcher-shell">
       ${renderAppUpdateBanner()}
         <section class="launcher-stage">
-          <div class="launcher-brand" aria-label="${escapeHtml(APP_TITLE)}">
+        <div class="launcher-panel entry-surface">
+          <div class="launcher-brand entry-brand" aria-label="${escapeHtml(APP_TITLE)}">
             <div class="launcher-brand-disc">
               <img class="launcher-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             </div>
           </div>
 
-        <div class="launcher-panel">
           <div class="panel-title panel-title-wide launcher-title-block">
             <div>
               <h2>${escapeHtml(APP_DISPLAY_TITLE)}</h2>
@@ -3579,14 +3605,6 @@ function renderHrFeedPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("news")} Employee feed</p>
-          <h2>Feed control</h2>
-        </div>
-        <span class="sync-pill">${notices.length} live</span>
-      </div>
-
       <section class="admin-workspace hr-feed-workspace" aria-label="HR feed control center">
         <section class="tool-panel composer-panel panel-card" aria-label="Publish update">
           <div class="panel-title panel-title-wide">
@@ -3787,6 +3805,7 @@ function renderWeatherSettingsPanel() {
   const updatedAriaLabel = hasWeatherUpdate ? `Updated ${updatedLabel}` : "Not refreshed";
   const conditionLabel = weather.condition || "Weather not configured";
   const temperatureLabel = weather.temperature || "--";
+  const temperatureToneClass = getWeatherTemperatureToneClass(temperatureLabel);
   const highTemperature = weather.highTemperature || "--";
   const lowTemperature = weather.lowTemperature || "--";
   const locationLabel = formatCompactWeatherLocation(weather.resolvedName || weather.location);
@@ -3796,12 +3815,12 @@ function renderWeatherSettingsPanel() {
       <div class="settings-weather-status" aria-label="Weather status">
         <div class="settings-weather-line settings-weather-line-primary">
           <span class="settings-weather-current">
-            <strong class="settings-weather-temperature">${escapeHtml(temperatureLabel)}</strong>
+            <strong class="settings-weather-temperature ${temperatureToneClass}">${escapeHtml(temperatureLabel)}</strong>
             <span class="settings-weather-condition">${escapeHtml(conditionLabel)}</span>
           </span>
           <span class="settings-weather-range">
-            <span class="settings-weather-range-item"><span class="settings-weather-range-label">H</span> ${escapeHtml(highTemperature)}</span>
-            <span class="settings-weather-range-item"><span class="settings-weather-range-label">L</span> ${escapeHtml(lowTemperature)}</span>
+            <span class="settings-weather-range-item settings-weather-range-high" aria-label="High temperature"><span class="settings-weather-range-label" aria-hidden="true">▲</span> ${escapeHtml(highTemperature)}</span>
+            <span class="settings-weather-range-item settings-weather-range-low" aria-label="Low temperature"><span class="settings-weather-range-label" aria-hidden="true">▼</span> ${escapeHtml(lowTemperature)}</span>
           </span>
         </div>
         <div class="settings-weather-line settings-weather-line-secondary">
@@ -5422,6 +5441,25 @@ async function handleRevokeEmployeeSessionsSubmit(event) {
   clearMessageSoon();
 }
 
+async function handleAddEmployeeHrGroupSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(String(data.employeeId || ""))}/hr-group`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await refreshAdminData();
+    setMessage("Employee added to HR. They can use their username and current password on the HR login.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not add employee to HR.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleRevokeAdminSessionsSubmit(event) {
   event.preventDefault();
   const form = event.target;
@@ -5762,6 +5800,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-revoke-employee-sessions-form]")) {
     await handleRevokeEmployeeSessionsSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-add-employee-hr-group-form]")) {
+    await handleAddEmployeeHrGroupSubmit(event);
     return;
   }
 

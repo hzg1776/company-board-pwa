@@ -756,6 +756,16 @@ function publicEmployeeRecord(employee, sessions = []) {
   };
 }
 
+function employeeHasHrAdminAccess(employee = {}, adminUsers = []) {
+  const username = normalizeUsername(employee.username);
+
+  return Boolean(username) && adminUsers.some((adminUser) => (
+    adminUser.username === username &&
+    adminUser.active !== false &&
+    adminUserHasRole(adminUser, "hr")
+  ));
+}
+
 function buildAdminMfaProfile(user = {}, { adminMfaEnabled = true } = {}) {
   if (!adminMfaEnabled) {
     return {
@@ -2464,7 +2474,10 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
   async function listEmployees() {
     const data = await readSecurityState();
     return data.employees
-      .map((employee) => publicEmployeeRecord(employee, data.employeeSessions.filter((session) => session.employeeId === employee.id)))
+      .map((employee) => ({
+        ...publicEmployeeRecord(employee, data.employeeSessions.filter((session) => session.employeeId === employee.id)),
+        hrAdmin: employeeHasHrAdminAccess(employee, data.adminUsers)
+      }))
       .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
   }
 
@@ -2683,6 +2696,80 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
         outcome: "success",
         detail: `roles:${adminRoles.join(",")}`
       }));
+      return adminUser;
+    }).then(({ result, snapshot }) => ({
+      adminUser: publicAdminUserRecord(result, [], ""),
+      snapshot
+    }));
+  }
+
+  async function addEmployeeToHrGroup(req = {}, employeeId) {
+    const targetId = cleanText(employeeId, 80);
+
+    if (!targetId) {
+      throw new Error("Employee id is required.");
+    }
+
+    return updateData((data) => {
+      requireHrManagerAccess(data, req);
+
+      const employee = data.employees.find((entry) => entry.id === targetId);
+
+      if (!employee) {
+        throw new Error("Employee not found.");
+      }
+
+      if (employee.active === false) {
+        throw new Error("Enable this employee before adding HR access.");
+      }
+
+      if (!employee.username || !employee.passwordSalt || !employee.passwordHash) {
+        throw new Error("Employee username and password must be configured first.");
+      }
+
+      const changedAt = nowIso();
+      const existingAdminUser = data.adminUsers.find((adminUser) => adminUser.username === employee.username);
+
+      if (existingAdminUser && (adminUserHasRole(existingAdminUser, "it") || adminUserHasRole(existingAdminUser, "webmaster"))) {
+        throw new Error("That username already belongs to a protected admin account.");
+      }
+
+      const adminUser = normalizeAdminUser({
+        ...(existingAdminUser || {}),
+        id: existingAdminUser?.id || crypto.randomUUID(),
+        displayName: existingAdminUser?.displayName || employee.name || employee.username,
+        email: existingAdminUser?.email || employee.email || employee.recoveryEmail || "",
+        username: employee.username,
+        passwordSalt: employee.passwordSalt,
+        passwordHash: employee.passwordHash,
+        roles: mergeAdminRoles(existingAdminUser?.roles || [], ["hr"]),
+        active: true,
+        createdAt: existingAdminUser?.createdAt || changedAt,
+        updatedAt: changedAt,
+        disabledAt: "",
+        mfaGraceUntil: existingAdminUser?.mfaGraceUntil || graceUntilForNewAdmin(),
+        inviteTokenHash: "",
+        inviteSentAt: "",
+        inviteExpiresAt: "",
+        inviteAcceptedAt: existingAdminUser?.inviteAcceptedAt || changedAt
+      });
+
+      if (existingAdminUser) {
+        data.adminUsers = replaceAdminUser(data.adminUsers, adminUser);
+      } else {
+        data.adminUsers.unshift(adminUser);
+      }
+
+      clearAdminIdentityGuards(data, adminUser.username);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "employee_added_to_hr_group",
+        actor: "hr",
+        accountKey: adminUser.username,
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: "employee-credentials-synced"
+      }));
+
       return adminUser;
     }).then(({ result, snapshot }) => ({
       adminUser: publicAdminUserRecord(result, [], ""),
@@ -4460,6 +4547,19 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       employee.updatedAt = nowIso();
       employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
 
+      data.adminUsers = data.adminUsers.map((adminUser) => {
+        if (adminUser.username !== employee.username || !adminUserHasRole(adminUser, "hr")) {
+          return adminUser;
+        }
+
+        return normalizeAdminUser({
+          ...adminUser,
+          passwordSalt: employee.passwordSalt,
+          passwordHash: employee.passwordHash,
+          updatedAt: employee.updatedAt
+        });
+      });
+
       data.employeeSessions = data.employeeSessions.map((session) => (
         session.employeeId === employee.id
           ? {
@@ -4550,6 +4650,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     listWebmasterAdminUsers,
     createItAdminUser,
     createAdminUser,
+    addEmployeeToHrGroup,
     createWebmasterAdminUser,
     inviteItAdminUser,
     inviteAdminUser,
