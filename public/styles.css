@@ -8386,3 +8386,377 @@ body {
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Final grid row compaction: reduce white space and align entry surfaces to rows. */
+.auth-shell,
+.admin-auth-shell,
+.page-shell.launcher-shell {
+  display: grid !important;
+  min-height: 100dvh !important;
+  align-items: start !important;
+  align-content: start !important;
+  justify-content: center !important;
+  justify-items: center !important;
+  padding: 18px !important;
+}
+
+.entry-surface.auth-gate-card,
+.entry-surface.admin-auth-card,
+.launcher-panel.entry-surface {
+  width: min(720px, calc(100vw - 36px)) !important;
+  max-width: 720px !important;
+  gap: 10px !important;
+  padding: 16px !important;
+  align-items: center !important;
+}
+
+.auth-gate-card.entry-surface {
+  display: grid !important;
+  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-areas:
+    "brand title"
+    "brand notice"
+    "brand content";
+  column-gap: 16px !important;
+  row-gap: 8px !important;
+  justify-items: stretch !important;
+}
+
+.auth-gate-card.entry-surface > .entry-brand {
+  grid-area: brand;
+  align-self: center;
+  justify-self: center !important;
+}
+
+.auth-gate-card.entry-surface .auth-frame-title {
+  grid-area: title;
+  justify-self: stretch !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  text-align: left !important;
+}
+
+.auth-gate-card.entry-surface .auth-frame-title > div {
+  justify-items: start !important;
+  gap: 4px !important;
+  text-align: left !important;
+}
+
+.auth-gate-card.entry-surface .employee-banner {
+  grid-area: notice;
+}
+
+.auth-gate-card.entry-surface .auth-frame-content {
+  grid-area: content;
+}
+
+.auth-gate-card.entry-surface .auth-form,
+.admin-auth-card.entry-surface .admin-auth-form {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+.auth-gate-card.entry-surface .auth-form .field,
+.admin-auth-card.entry-surface .admin-auth-form .field {
+  min-width: 0;
+  margin: 0 !important;
+}
+
+.auth-gate-card.entry-surface .auth-form .button,
+.admin-auth-card.entry-surface .admin-auth-form .button {
+  grid-column: 1 / -1;
+  min-height: 44px !important;
+}
+
+.admin-auth-card.entry-surface {
+  display: grid !important;
+  grid-template-columns: 1fr;
+  row-gap: 10px !important;
+  justify-items: stretch !important;
+}
+
+.admin-auth-card.entry-surface .admin-auth-header {
+  display: grid !important;
+  width: 100% !important;
+  margin: 0 !important;
+}
+
+.admin-auth-card.entry-surface .admin-auth-brand {
+  display: grid !important;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center !important;
+  justify-items: start !important;
+  gap: 14px !important;
+  width: 100% !important;
+  text-align: left !important;
+}
+
+.admin-auth-card.entry-surface .admin-auth-brand-copy {
+  justify-items: start !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  text-align: left !important;
+}
+
+.admin-auth-card.entry-surface .admin-auth-brand-copy .eyebrow,
+.auth-gate-card.entry-surface .auth-frame-eyebrow {
+  text-align: left !important;
+}
+
+.admin-auth-card.entry-surface .admin-auth-brand-disc,
+.auth-gate-card.entry-surface .brand-logo-disc {
+  width: 52px !important;
+  height: 52px !important;
+}
+
+.admin-auth-card.entry-surface .admin-auth-brand-logo,
+.auth-gate-card.entry-surface .brand-lockup-logo {
+  width: 38px !important;
+  height: 38px !important;
+}
+
+.launcher-panel.entry-surface {
+  display: grid !important;
+  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-areas:
+    "brand title"
+    "nav nav";
+  column-gap: 16px !important;
+  row-gap: 10px !important;
+  padding: 16px !important;
+  justify-items: stretch !important;
+}
+
+.launcher-panel.entry-surface .launcher-brand {
+  grid-area: brand;
+  justify-self: center !important;
+}
+
+.launcher-panel.entry-surface .launcher-title-block {
+  grid-area: title;
+  justify-self: stretch !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  text-align: left !important;
+}
+
+.launcher-panel.entry-surface .launcher-title-block > div {
+  text-align: left !important;
+}
+
+.launcher-panel.entry-surface .launcher-grid.launcher-grid-logins {
+  grid-area: nav;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+.launcher-panel.entry-surface .launch-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px !important;
+  padding: 8px 10px !important;
+}
+
+.page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) {
+  gap: 8px !important;
+}
+
+.page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
+  .page-head,
+  .employee-brand-banner,
+  .panel-card,
+  .notice-card,
+  .feed-item,
+  .request-row,
+  .device-row,
+  .settings-weather-card
+) {
+  display: grid;
+  align-items: center;
+}
+
+.page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
+  .panel-stack,
+  .feed-list,
+  .feed-list-quiet,
+  .request-list,
+  .device-list
+) {
+  display: grid !important;
+  gap: 8px !important;
+}
+
+.page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head {
+  grid-template-columns: max-content minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+}
+
+.page-shell.webmaster-shell .page-head {
+  width: fit-content !important;
+  max-width: 100% !important;
+  grid-template-columns: max-content auto !important;
+  justify-content: center !important;
+  justify-self: center !important;
+  margin-inline: auto !important;
+}
+
+.page-shell:is(.hr-shell, .webmaster-shell, .it-shell) {
+  --control-center-column-width: min(720px, calc(100vw - 64px));
+}
+
+.page-shell:is(.hr-shell, .webmaster-shell, .it-shell) :is(
+  .page-head,
+  .hero-strip,
+  .tab-bar,
+  .panel-surface,
+  .panel-stack,
+  .admin-banner,
+  .hr-banner,
+  .webmaster-banner
+) {
+  width: var(--control-center-column-width) !important;
+  max-width: var(--control-center-column-width) !important;
+  margin-inline: auto !important;
+  box-sizing: border-box;
+}
+
+.page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-actions {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  gap: 8px !important;
+  width: 100% !important;
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+.hr-shell .page-actions .ghost-button,
+.webmaster-shell .page-actions .ghost-button,
+.it-shell .page-actions .ghost-button {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  width: auto;
+  padding-block: 8px;
+  color: var(--steel);
+  line-height: 1.18;
+  overflow: visible;
+  overflow-wrap: normal;
+  text-align: center;
+  white-space: normal;
+  border-radius: 999px !important;
+}
+
+.settings-weather-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.8fr) !important;
+  align-items: end !important;
+  gap: 10px 12px !important;
+  padding: 12px 14px !important;
+}
+
+.settings-weather-card .settings-weather-status {
+  display: grid;
+  gap: 6px;
+  align-self: center;
+}
+
+.settings-weather-card .settings-weather-form {
+  align-self: end;
+}
+
+@media (max-width: 720px) {
+  .auth-shell,
+  .admin-auth-shell,
+  .page-shell.launcher-shell {
+    align-items: start !important;
+    align-content: start !important;
+    justify-content: center !important;
+    padding: 12px !important;
+  }
+
+  .entry-surface.auth-gate-card,
+  .entry-surface.admin-auth-card,
+  .launcher-panel.entry-surface {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    padding: 14px !important;
+  }
+
+  .auth-gate-card.entry-surface,
+  .launcher-panel.entry-surface {
+    grid-template-columns: 1fr !important;
+    grid-template-areas:
+      "brand"
+      "title"
+      "notice"
+      "content"
+      "nav";
+    justify-items: center !important;
+  }
+
+  .auth-gate-card.entry-surface .auth-frame-title,
+  .auth-gate-card.entry-surface .auth-frame-title > div,
+  .launcher-panel.entry-surface .launcher-title-block,
+  .launcher-panel.entry-surface .launcher-title-block > div {
+    text-align: center !important;
+    justify-items: center !important;
+  }
+
+  .auth-gate-card.entry-surface .auth-form,
+  .admin-auth-card.entry-surface .admin-auth-form,
+  .settings-weather-card {
+    grid-template-columns: 1fr !important;
+  }
+
+  .launcher-panel.entry-surface .launcher-grid.launcher-grid-logins {
+    grid-template-columns: 1fr !important;
+  }
+
+  .admin-auth-card.entry-surface .admin-auth-brand {
+    grid-template-columns: 1fr !important;
+    justify-items: center !important;
+    gap: 8px !important;
+    text-align: center !important;
+  }
+
+  .admin-auth-card.entry-surface .admin-auth-brand-copy,
+  .admin-auth-card.entry-surface .admin-auth-brand-copy .eyebrow {
+    justify-items: center !important;
+    gap: 5px !important;
+    text-align: center !important;
+  }
+
+  .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) {
+    width: min(100%, calc(100vw - 16px)) !important;
+  }
+
+  .page-shell:is(.hr-shell, .webmaster-shell, .it-shell) {
+    --control-center-column-width: min(100%, calc(100vw - 24px));
+  }
+
+  .page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head {
+    grid-template-columns: 1fr !important;
+  }
+
+  .page-shell.webmaster-shell .page-head {
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-self: stretch !important;
+  }
+
+  .page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-actions {
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr)) !important;
+    width: 100%;
+    justify-self: stretch;
+  }
+}

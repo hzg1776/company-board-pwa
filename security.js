@@ -762,6 +762,7 @@ function employeeHasHrAdminAccess(employee = {}, adminUsers = []) {
   return Boolean(username) && adminUsers.some((adminUser) => (
     adminUser.username === username &&
     adminUser.active !== false &&
+    isHrManagedAdminUser(adminUser) &&
     adminUserHasRole(adminUser, "hr")
   ));
 }
@@ -2730,7 +2731,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       const changedAt = nowIso();
       const existingAdminUser = data.adminUsers.find((adminUser) => adminUser.username === employee.username);
 
-      if (existingAdminUser && (adminUserHasRole(existingAdminUser, "it") || adminUserHasRole(existingAdminUser, "webmaster"))) {
+      if (existingAdminUser && !isHrManagedAdminUser(existingAdminUser)) {
         throw new Error("That username already belongs to a protected admin account.");
       }
 
@@ -4548,7 +4549,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
 
       data.adminUsers = data.adminUsers.map((adminUser) => {
-        if (adminUser.username !== employee.username || !adminUserHasRole(adminUser, "hr")) {
+        if (adminUser.username !== employee.username || !adminUserHasRole(adminUser, "hr") || !isHrManagedAdminUser(adminUser)) {
           return adminUser;
         }
 

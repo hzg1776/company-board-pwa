@@ -229,6 +229,83 @@ test("existing employee can be added to HR and use their username for HR login",
   }
 });
 
+test("employee password reset does not alter protected composite admin credentials", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-protected-admin-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const employeeResult = await store.createEmployeeAccount({
+      name: "Protected Ops",
+      username: "protected.ops",
+      password: "EmployeePass1!"
+    });
+    const seededState = await store.readSecurityState();
+    const employee = seededState.employees.find((entry) => entry.id === employeeResult.employee.id);
+    const createdAt = new Date().toISOString();
+    const protectedAdmin = {
+      id: "legacy-protected-composite-admin",
+      displayName: "Protected Ops",
+      email: "protected.ops@example.com",
+      username: "protected.ops",
+      passwordSalt: employee.passwordSalt,
+      passwordHash: employee.passwordHash,
+      roles: ["it", "hr"],
+      active: true,
+      createdAt,
+      updatedAt: createdAt
+    };
+    seededState.adminUsers.unshift(protectedAdmin);
+    await store.writeData(seededState);
+
+    const employees = await store.listEmployees();
+    const listedEmployee = employees.find((entry) => entry.username === "protected.ops");
+    assert.equal(listedEmployee?.hrAdmin, false);
+    await assert.rejects(
+      store.addEmployeeToHrGroup(
+        {
+          headers: {
+            cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+          }
+        },
+        employeeResult.employee.id
+      ),
+      /protected admin account/
+    );
+
+    await store.resetEmployeePassword(employeeResult.employee.id, "EmployeePass2!");
+    const updatedState = await store.readSecurityState();
+    const unchangedAdmin = updatedState.adminUsers.find((adminUser) => adminUser.id === protectedAdmin.id);
+    assert.equal(unchangedAdmin?.passwordSalt, protectedAdmin.passwordSalt);
+    assert.equal(unchangedAdmin?.passwordHash, protectedAdmin.passwordHash);
+
+    await assert.rejects(
+      store.authenticateAdmin({
+        username: "protected.ops",
+        password: "EmployeePass2!",
+        userAgent: "test"
+      }),
+      /Invalid username or password\./
+    );
+
+    const legacyHrLogin = await store.authenticateAdmin({
+      username: "protected.ops",
+      password: "EmployeePass1!",
+      userAgent: "test"
+    });
+    assert.equal(Boolean(legacyHrLogin.authorized), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("legacy webmaster records normalize to the default webmaster username", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-webmaster-legacy-"));
   const dataFile = path.join(tempDir, "security.json");
