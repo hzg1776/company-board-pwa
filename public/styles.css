@@ -7005,7 +7005,7 @@ body {
   background: transparent !important;
   box-shadow: none !important;
   font-size: 0.76rem !important;
-  font-weight: 800 !important;
+  font-weight: 700 !important;
 }
 
 .employee-shell .feed-list,
@@ -7051,7 +7051,7 @@ body {
   box-shadow: none !important;
   color: #000000 !important;
   font-size: 0.68rem !important;
-  font-weight: 900 !important;
+  font-weight: 700 !important;
   letter-spacing: 0.06em !important;
   line-height: 1.05 !important;
   text-transform: uppercase !important;
@@ -7228,7 +7228,7 @@ body {
   padding: 4px 8px !important;
   border-radius: var(--radius-control) !important;
   font-size: 0.9rem !important;
-  font-weight: 850 !important;
+  font-weight: 700 !important;
   line-height: 1.1 !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
@@ -7236,7 +7236,7 @@ body {
 
 .hr-shell .managed-feed-item .feed-time {
   font-size: 0.72rem !important;
-  font-weight: 900 !important;
+  font-weight: 600 !important;
   line-height: 1.1 !important;
   text-align: right !important;
 }
@@ -7356,7 +7356,7 @@ body {
 
 .employee-shell .employee-brand-banner-kicker {
   font-size: 0.98rem !important;
-  font-weight: 700 !important;
+  font-weight: 600 !important;
   line-height: 1.15 !important;
 }
 
@@ -7390,7 +7390,7 @@ body {
 
 .employee-shell .employee-brand-banner .employee-weather-temperature {
   font-size: 16px !important;
-  font-weight: 700 !important;
+  font-weight: 600 !important;
   line-height: 1 !important;
 }
 
@@ -7449,7 +7449,7 @@ body {
 }
 
 .employee-shell .feed-title {
-  font-weight: 700 !important;
+  font-weight: 600 !important;
   line-height: 1.25 !important;
 }
 
@@ -7614,7 +7614,7 @@ body {
 .request-status,
 .employee-status-ribbon .employee-status-pill {
   font-size: 0.9rem !important;
-  font-weight: 850 !important;
+  font-weight: 700 !important;
   border-width: 1px !important;
 }
 
@@ -7842,6 +7842,7 @@ body {
   padding: 8px 10px !important;
   border-radius: var(--radius-control) !important;
   font-size: 0.95rem !important;
+  font-weight: 600 !important;
   line-height: 1.16 !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
@@ -7855,6 +7856,15 @@ body {
   min-height: 44px !important;
   border-radius: var(--radius-control) !important;
   font-size: 1rem !important;
+  font-weight: 400 !important;
+}
+
+.page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
+  .field,
+  .checkbox-row,
+  .admin-role-checkbox
+) {
+  font-weight: 600 !important;
 }
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
@@ -7898,9 +7908,30 @@ body {
   padding: 4px 8px !important;
   border-radius: var(--radius-control) !important;
   font-size: 0.9rem !important;
-  font-weight: 850 !important;
+  font-weight: 700 !important;
   line-height: 1.1 !important;
   white-space: normal !important;
+}
+
+.page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
+  .field > span,
+  .field.inline span,
+  .stat-card span,
+  .stat-card small,
+  .push-metric span,
+  .webmaster-expand-metric span,
+  .kv-item span,
+  .settings-context-item span
+) {
+  font-weight: 600 !important;
+}
+
+.page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
+  .stat-card strong,
+  .push-metric strong,
+  .webmaster-expand-metric strong
+) {
+  font-weight: 600 !important;
 }
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
@@ -7993,7 +8024,7 @@ body {
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) .admin-table th {
   font-size: 0.82rem !important;
-  font-weight: 850 !important;
+  font-weight: 700 !important;
 }
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) .admin-table td {
@@ -8010,6 +8041,7 @@ body {
   .notice-card h2,
   .notice-card h3
 ) {
+  font-weight: 600 !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
 }
@@ -8138,7 +8170,7 @@ body {
   max-width: 11rem;
   color: #0b4c75 !important;
   font-size: clamp(0.72rem, 1vw, 0.88rem) !important;
-  font-weight: 950 !important;
+  font-weight: 700 !important;
   line-height: 1.05 !important;
   letter-spacing: 0 !important;
   text-align: center !important;
@@ -8218,7 +8250,7 @@ body {
   margin: 0 !important;
   color: #40677d !important;
   font-size: 0.78rem !important;
-  font-weight: 850 !important;
+  font-weight: 700 !important;
   line-height: 1.16 !important;
   letter-spacing: 0 !important;
   text-align: center !important;
@@ -8235,7 +8267,7 @@ body {
   margin: 0 !important;
   color: #0b4c75 !important;
   font-size: clamp(0.86rem, 1.2vw, 1.06rem) !important;
-  font-weight: 950 !important;
+  font-weight: 700 !important;
   line-height: 1.16 !important;
   letter-spacing: 0 !important;
   text-align: center !important;

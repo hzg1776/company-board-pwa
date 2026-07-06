@@ -315,7 +315,7 @@ test("admin page headers keep logo text under the logo mark", async () => {
   assert.equal(getDeclarationValue(lockupBody, "justify-items"), "center !important");
   assert.equal(getDeclarationValue(lockupBody, "text-align"), "center !important");
   assert.equal(getDeclarationValue(brandTextBody, "color"), "#0b4c75 !important");
-  assert.equal(getDeclarationValue(brandTextBody, "font-weight"), "950 !important");
+  assert.equal(getDeclarationValue(brandTextBody, "font-weight"), "700 !important");
   assert.equal(getDeclarationValue(brandTextBody, "text-transform"), "none !important");
   assert.equal(getDeclarationValue(brandTextBody, "white-space"), "normal !important");
   assert.equal(getDeclarationValue(logoDiscBody, "width"), "58px !important");
@@ -389,7 +389,7 @@ test("all logo surfaces keep compact readable brand geometry", async () => {
   assert.equal(getDeclarationValue(logoTextBody, "color"), "#0b4c75 !important");
   assert.equal(getDeclarationValue(logoTextBody, "max-width"), "min(18rem, 100%)");
   assert.equal(getDeclarationValue(logoTextBody, "font-size"), "clamp(0.86rem, 1.2vw, 1.06rem) !important");
-  assert.equal(getDeclarationValue(logoTextBody, "font-weight"), "950 !important");
+  assert.equal(getDeclarationValue(logoTextBody, "font-weight"), "700 !important");
   assert.equal(getDeclarationValue(logoTextBody, "line-height"), "1.16 !important");
   assert.equal(getDeclarationValue(logoTextBody, "text-transform"), "none !important");
   assert.equal(getDeclarationValue(logoTextBody, "white-space"), "normal !important");
@@ -689,7 +689,7 @@ test("semantic color polish uses shared tone tokens for weather and pills", asyn
   assert.equal(getDeclarationValue(coldBody, "color"), "var(--weather-cold) !important");
   assert.equal(getDeclarationValue(highLowBody, "color"), "var(--tone-danger-text)");
   assert.equal(getDeclarationValue(pillSizeBody, "font-size"), "0.9rem !important");
-  assert.equal(getDeclarationValue(pillSizeBody, "font-weight"), "850 !important");
+  assert.equal(getDeclarationValue(pillSizeBody, "font-weight"), "700 !important");
   assert.equal(getDeclarationValue(successPillBody, "background"), "var(--tone-success-bg) !important");
   assert.equal(getDeclarationValue(urgentPillBody, "background"), "var(--tone-danger-bg) !important");
   assert.equal(getDeclarationValue(employeeUrgentPillBody, "color"), "var(--danger) !important");
@@ -701,7 +701,33 @@ test("all operational pages share final readable controls, pills, and card geome
   const css = await loadStylesheet();
   const allPageLayerStart = css.indexOf("/* All-page consistency pass. */");
   const allPageLayer = css.slice(allPageLayerStart);
+  const allPageDesktopCss = allPageLayer.split("@media (max-width: 720px)")[0];
   const activeTabBody = getLastSelectorBody(css, ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .tab-button.active");
+  const sharedControlBody = getLastRuleBody(
+    allPageDesktopCss,
+    "\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?\\.button,[\\s\\S]*?\\.settings-collapse-toggle[\\s\\S]*?\\)"
+  );
+  const sharedHeadingBody = getLastRuleBody(
+    allPageDesktopCss,
+    "\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?\\.panel-title h2,[\\s\\S]*?\\.notice-card h3[\\s\\S]*?\\)"
+  );
+  const sharedFieldInputBody = getLastRuleBody(
+    allPageDesktopCss,
+    "\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?input,[\\s\\S]*?select,[\\s\\S]*?textarea[\\s\\S]*?\\)"
+  );
+  const sharedFieldBody = getLastRuleBody(
+    allPageDesktopCss,
+    "\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?\\.field,[\\s\\S]*?\\.admin-role-checkbox[\\s\\S]*?\\)"
+  );
+  const sharedMetadataBody = getLastRuleBody(
+    allPageDesktopCss,
+    "\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?\\.field > span,[\\s\\S]*?\\.settings-context-item span[\\s\\S]*?\\)"
+  );
+  const sharedStatValueBody = getLastRuleBody(
+    allPageDesktopCss,
+    "\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\) :is\\([\\s\\S]*?\\.stat-card strong,[\\s\\S]*?\\.webmaster-expand-metric strong[\\s\\S]*?\\)"
+  );
+  const adminTableHeaderBody = getLastSelectorBody(css, ".page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) .admin-table th");
   const mobileShellBody = getLastRuleBody(
     css,
     "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell:is\\(\\.employee-shell, \\.hr-shell, \\.webmaster-shell, \\.it-shell\\)"
@@ -714,13 +740,21 @@ test("all operational pages share final readable controls, pills, and card geome
   assert.match(css, /\/\* All-page consistency pass\. \*\//);
   assert.notEqual(allPageLayerStart, -1);
   assert.match(allPageLayer, /\.empty-state\s*\)\s*\{[\s\S]*?border-radius:\s*var\(--radius-control\) !important;/);
-  assert.match(allPageLayer, /\.settings-collapse-toggle\s*\)\s*\{[\s\S]*?min-height:\s*44px !important;[\s\S]*?text-transform:\s*none !important;/);
+  assert.match(allPageLayer, /\.settings-collapse-toggle\s*\)\s*\{[\s\S]*?min-height:\s*44px !important;[\s\S]*?font-weight:\s*600 !important;[\s\S]*?text-transform:\s*none !important;/);
   assert.match(allPageLayer, /\.employee-status-ribbon \.employee-status-pill\s*\)\s*\{[\s\S]*?display:\s*inline-flex !important;[\s\S]*?min-height:\s*30px !important;[\s\S]*?border-radius:\s*var\(--radius-control\) !important;[\s\S]*?font-size:\s*0\.9rem !important;/);
+  assert.match(allPageDesktopCss, /\.employee-status-ribbon \.employee-status-pill\s*\)\s*\{[\s\S]*?font-weight:\s*700 !important;/);
   assert.match(allPageLayer, /\.notice-card[\s\S]*?\) :is\(\.feed-type, \.priority-pill, \.notice-type\)\s*\{[\s\S]*?border-radius:\s*var\(--radius-control\) !important;[\s\S]*?text-transform:\s*none !important;/);
   assert.match(allPageLayer, /\.employee-status-ribbon \.employee-status-pill:nth-child\(3\)\s*\)\s*\{[\s\S]*?background:\s*var\(--tone-status-bg\) !important;/);
   assert.match(allPageLayer, /\.employee-status-ribbon \.employee-status-pill:nth-child\(2\)\s*\)\s*\{[\s\S]*?background:\s*var\(--tone-danger-bg\) !important;/);
   assert.match(allPageLayer, /\.request-status\.danger,[\s\S]*?\.employee-status-ribbon \.employee-status-pill:nth-child\(2\)\s*\)\s*\{[\s\S]*?background:\s*var\(--tone-danger-bg\) !important;/);
   assert.equal(getDeclarationValue(activeTabBody, "background"), "var(--tone-info-bg) !important");
+  assert.equal(getDeclarationValue(sharedControlBody, "font-weight"), "600 !important");
+  assert.equal(getDeclarationValue(sharedHeadingBody, "font-weight"), "600 !important");
+  assert.equal(getDeclarationValue(sharedFieldInputBody, "font-weight"), "400 !important");
+  assert.equal(getDeclarationValue(sharedFieldBody, "font-weight"), "600 !important");
+  assert.equal(getDeclarationValue(sharedMetadataBody, "font-weight"), "600 !important");
+  assert.equal(getDeclarationValue(sharedStatValueBody, "font-weight"), "600 !important");
+  assert.equal(getDeclarationValue(adminTableHeaderBody, "font-weight"), "700 !important");
   assert.equal(getDeclarationValue(mobileShellBody, "width"), "min(100%, calc(100vw - 16px)) !important");
   assert.equal(getDeclarationValue(mobilePillBody, "font-size"), "0.86rem !important");
 });
@@ -1071,7 +1105,7 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(brandLogoBody, "width"), "72px !important");
   assert.equal(getDeclarationValue(brandLogoBody, "height"), "72px !important");
   assert.equal(getDeclarationValue(brandTitleBody, "font-size"), "0.98rem !important");
-  assert.equal(getDeclarationValue(brandTitleBody, "font-weight"), "700 !important");
+  assert.equal(getDeclarationValue(brandTitleBody, "font-weight"), "600 !important");
   assert.equal(getDeclarationValue(brandTitleBody, "line-height"), "1.15 !important");
   assert.equal(getDeclarationValue(brandWeatherBody, "border"), "0 !important");
   assert.equal(getDeclarationValue(brandWeatherBody, "background"), "transparent !important");
@@ -1088,7 +1122,7 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(brandWeatherCurrentBody, "align-items"), "center");
   assert.equal(getDeclarationValue(brandWeatherCurrentBody, "gap"), "4px !important");
   assert.equal(getDeclarationValue(brandWeatherTemperatureBody, "font-size"), "16px !important");
-  assert.equal(getDeclarationValue(brandWeatherTemperatureBody, "font-weight"), "700 !important");
+  assert.equal(getDeclarationValue(brandWeatherTemperatureBody, "font-weight"), "600 !important");
   assert.equal(getDeclarationValue(brandWeatherTemperatureBody, "line-height"), "1 !important");
   assert.equal(getDeclarationValue(brandWeatherTextBody, "font-size"), "16px !important");
   assert.equal(getDeclarationValue(brandWeatherTextBody, "line-height"), "1.1 !important");
@@ -1137,7 +1171,7 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(employeeFeedHeadBody, "display"), "grid !important");
   assert.equal(getDeclarationValue(feedTypeBody, "letter-spacing"), "0.02em !important");
   assert.equal(getDeclarationValue(feedTypeBody, "text-transform"), "none !important");
-  assert.equal(getDeclarationValue(feedTitleBody, "font-weight"), "700 !important");
+  assert.equal(getDeclarationValue(feedTitleBody, "font-weight"), "600 !important");
   assert.equal(getDeclarationValue(feedBody, "font-weight"), "400 !important");
   assert.match(css, /\.employee-shell \.feed-item\s*\{[^}]*border-left:\s*6px solid var\(--steel\) !important;/s);
   assert.match(css, /\.employee-shell \.feed-item\.priority-important\s*\{[^}]*border-left-color:\s*var\(--signal\) !important;/s);
