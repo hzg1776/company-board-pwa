@@ -561,6 +561,52 @@ function routePath(route) {
   return appPath();
 }
 
+function buildDocumentTitle({
+  appTitle = APP_DISPLAY_TITLE,
+  route = "launcher",
+  employeeAuthorized = false,
+  hrAuthorized = false,
+  webmasterAuthorized = false,
+  itAuthorized = false,
+  activeAdminTab: hrTab = "feed",
+  activeWebmasterTab: webmasterTab = "overview",
+  activeItTab: itTab = "accounts"
+} = {}) {
+  const title = String(appTitle || "").trim() || "Portal";
+  const hrTitles = {
+    feed: "HR Feed",
+    share: "HR Users",
+    settings: "HR Settings"
+  };
+  const webmasterTitles = {
+    overview: "Systems Overview",
+    traffic: "Systems Traffic",
+    system: "System Diagnostics",
+    content: "Systems Content",
+    codex: "Systems Codex",
+    settings: "Systems Settings"
+  };
+  const itTitles = {
+    accounts: "IT Admin Accounts",
+    company: "IT Company Settings",
+    audit: "IT Audit Log",
+    emergency: "IT Emergency Access"
+  };
+  let pageTitle = "";
+
+  if (route === "employee") {
+    pageTitle = employeeAuthorized ? "Employee Feed" : "Employee Login";
+  } else if (route === "hr") {
+    pageTitle = hrAuthorized ? (hrTitles[hrTab] || hrTitles.feed) : "HR Login";
+  } else if (route === "webmaster") {
+    pageTitle = webmasterAuthorized ? (webmasterTitles[webmasterTab] || webmasterTitles.overview) : "Systems Login";
+  } else if (route === "it") {
+    pageTitle = itAuthorized ? (itTitles[itTab] || itTitles.accounts) : "IT Login";
+  }
+
+  return pageTitle ? `${pageTitle} - ${title}` : title;
+}
+
 function formatDurationMs(value) {
   const duration = Math.max(0, Number(value || 0));
 
@@ -4663,19 +4709,21 @@ function render() {
       : route === "webmaster"
           ? (state.access.webmaster.authorized ? renderWebmaster() : renderAdminAuthGate("webmaster"))
           : (state.access.employee.authorized ? renderEmployee() : renderEmployeeAuthGate());
-  document.title = route === "launcher"
-    ? APP_DISPLAY_TITLE
-    : route === "it"
-    ? `${APP_DISPLAY_TITLE} IT`
-    : route === "hr"
-      ? `${APP_DISPLAY_TITLE} HR`
-    : route === "webmaster"
-      ? `${APP_DISPLAY_TITLE} Systems`
-      : APP_DISPLAY_TITLE;
-    const focusSnapshot = captureFocusSnapshot();
-    app.innerHTML = pageMarkup;
-    restoreFocusSnapshot(focusSnapshot);
-  }
+  document.title = buildDocumentTitle({
+    appTitle: APP_DISPLAY_TITLE,
+    route,
+    employeeAuthorized: Boolean(state.access.employee.authorized),
+    hrAuthorized: Boolean(state.access.hr.authorized),
+    webmasterAuthorized: Boolean(state.access.webmaster.authorized),
+    itAuthorized: Boolean(state.access.it.authorized),
+    activeAdminTab,
+    activeWebmasterTab,
+    activeItTab
+  });
+  const focusSnapshot = captureFocusSnapshot();
+  app.innerHTML = pageMarkup;
+  restoreFocusSnapshot(focusSnapshot);
+}
 
 function captureFocusSnapshot() {
   const active = document.activeElement;
