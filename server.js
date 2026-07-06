@@ -7,6 +7,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { createAnalyticsStore } from "./analytics.js";
+import { parseEmployeeBatchUpload } from "./employee-batch.js";
 import { createNotificationHub } from "./notifications.js";
 import { createBoardStore } from "./storage.js";
 import { createSecurityStore } from "./security.js";
@@ -2552,6 +2553,19 @@ async function handleApi(req, res, url) {
 
       const body = await readJsonBody(req);
       const result = await securityStore.createEmployeeAccount(body);
+      sendJson(res, 201, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/employees/batch") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const employees = parseEmployeeBatchUpload({
+        content: body.content,
+        format: body.format
+      });
+      const result = await securityStore.createEmployeeAccountsBatch({ employees });
       sendJson(res, 201, result);
       return;
     }

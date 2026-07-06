@@ -270,6 +270,13 @@ const state = {
     loaded: false,
     employees: []
   },
+  employeeBatchUpload: {
+    busy: false,
+    content: "",
+    created: 0,
+    credentials: [],
+    format: "auto"
+  },
   securityEvents: {
     loaded: false,
     events: []
@@ -3533,6 +3540,97 @@ function renderEmployeeCreatePanel() {
   `;
 }
 
+function employeeBatchCredentialRows() {
+  return Array.isArray(state.employeeBatchUpload?.credentials) ? state.employeeBatchUpload.credentials : [];
+}
+
+function renderEmployeeBatchCredentialsPanel() {
+  const credentials = employeeBatchCredentialRows();
+  const created = Number(state.employeeBatchUpload?.created || credentials.length || 0);
+
+  if (!credentials.length) {
+    return "";
+  }
+
+  return `
+    <div class="employee-batch-result" role="status" aria-live="polite">
+      <div class="employee-access-head">
+        <div>
+          <h4>${escapeHtml(`${created} Imported`)}</h4>
+        </div>
+        <div class="employee-batch-actions">
+          <button class="ghost-button" type="button" data-copy-employee-batch-credentials>${icon("clipboard")} Copy Credentials</button>
+          <button class="ghost-button" type="button" data-clear-employee-batch-results>Clear</button>
+        </div>
+      </div>
+      <div class="admin-table-wrap employee-batch-table-wrap">
+        <table class="admin-table admin-table-employees">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Username</th>
+              <th>Temporary Password</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${credentials
+              .map(
+                (credential) => `
+                  <tr>
+                    <td>${escapeHtml(credential.name || "")}</td>
+                    <td>${escapeHtml(credential.username || "")}</td>
+                    <td><code class="employee-batch-password">${escapeHtml(credential.temporaryPassword || "")}</code></td>
+                  </tr>
+                `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderEmployeeBatchUploadPanel() {
+  const batch = state.employeeBatchUpload || {};
+  const busy = Boolean(batch.busy);
+  const format = String(batch.format || "auto");
+  const content = String(batch.content || "");
+  const shouldOpen = busy || Boolean(content) || employeeBatchCredentialRows().length > 0;
+
+  return `
+    <section class="panel-card employee-access-card employee-batch-card">
+      <details class="settings-collapse" ${shouldOpen ? "open" : ""}>
+        <summary class="ghost-button settings-collapse-toggle">${icon("clipboard")} Batch Upload</summary>
+        <form class="employee-batch-form" data-employee-batch-form>
+          <div class="employee-batch-grid">
+            <label class="field">
+              <span>Format</span>
+              <select name="format">
+                <option value="auto" ${format === "auto" ? "selected" : ""}>Auto</option>
+                <option value="json" ${format === "json" ? "selected" : ""}>JSON</option>
+                <option value="yaml" ${format === "yaml" ? "selected" : ""}>YAML</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>File</span>
+              <input name="file" type="file" accept=".json,.yaml,.yml,application/json,text/yaml,text/x-yaml" data-employee-batch-file>
+            </label>
+            <label class="field field-span-2">
+              <span>Employees</span>
+              <textarea class="employee-batch-textarea" name="content" rows="11" required spellcheck="false" placeholder='{"employees":[{"name":"Alex Morgan","email":"alex@example.com"}]}'>${escapeHtml(content)}</textarea>
+            </label>
+          </div>
+          <div class="employee-batch-actions">
+            <button class="button employee-create-submit" type="submit" ${busy ? "disabled" : ""}>${icon("users")} Import Employees</button>
+          </div>
+        </form>
+        ${renderEmployeeBatchCredentialsPanel()}
+      </details>
+    </section>
+  `;
+}
+
 function renderEmployee() {
   const notices = visiblePosts();
   const setup = buildEmployeeSetupState();
@@ -3922,6 +4020,7 @@ function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
       ${renderEmployeeDirectoryPanel()}
+      ${renderEmployeeBatchUploadPanel()}
       ${renderEmployeeCreatePanel()}
     </section>
   `;
@@ -5007,6 +5106,157 @@ async function handleCreateEmployeeSubmit(event) {
   clearMessageSoon();
 }
 
+function cleanCredentialClipboardCell(value) {
+  return String(value ?? "").replace(/[\t\r\n]+/g, " ").trim();
+}
+
+function formatEmployeeBatchCredentialsForClipboard(credentials = employeeBatchCredentialRows()) {
+  const rows = [["Name", "Username", "Temporary Password"]];
+
+  for (const credential of credentials) {
+    rows.push([
+      cleanCredentialClipboardCell(credential.name),
+      cleanCredentialClipboardCell(credential.username),
+      cleanCredentialClipboardCell(credential.temporaryPassword)
+    ]);
+  }
+
+  return rows.map((row) => row.join("\t")).join("\n");
+}
+
+function inferEmployeeBatchFormatFromFileName(fileName) {
+  const lowerName = String(fileName || "").toLowerCase();
+
+  if (lowerName.endsWith(".json")) {
+    return "json";
+  }
+
+  if (lowerName.endsWith(".yaml") || lowerName.endsWith(".yml")) {
+    return "yaml";
+  }
+
+  return "auto";
+}
+
+async function handleEmployeeBatchFileChange(event) {
+  const input = event.target;
+
+  if (!(input instanceof HTMLInputElement) || !input.matches("[data-employee-batch-file]")) {
+    return;
+  }
+
+  const file = input.files?.[0];
+
+  if (!file) {
+    return;
+  }
+
+  try {
+    const content = await file.text();
+    const form = input.closest("[data-employee-batch-form]");
+    const textarea = form?.querySelector("textarea[name='content']");
+    const formatSelect = form?.querySelector("select[name='format']");
+
+    if (textarea instanceof HTMLTextAreaElement) {
+      textarea.value = content;
+    }
+
+    if (formatSelect instanceof HTMLSelectElement) {
+      formatSelect.value = inferEmployeeBatchFormatFromFileName(file.name);
+    }
+  } catch {
+    setMessage("Could not read the upload file.");
+    render();
+    clearMessageSoon();
+  }
+}
+
+async function handleEmployeeBatchUploadSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const content = String(formData.get("content") || "").trim();
+  const format = String(formData.get("format") || "auto");
+
+  if (!content) {
+    setMessage("Paste JSON or YAML before importing.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  state.employeeBatchUpload = {
+    ...state.employeeBatchUpload,
+    busy: true,
+    content,
+    format
+  };
+  render();
+
+  try {
+    const result = await requestJson("/api/employees/batch", {
+      method: "POST",
+      body: JSON.stringify({
+        format,
+        content
+      })
+    });
+    const credentials = Array.isArray(result.credentials) ? result.credentials : [];
+    state.employeeBatchUpload = {
+      busy: false,
+      content: "",
+      created: Number(result.created || credentials.length || 0),
+      credentials,
+      format: "auto"
+    };
+    form.reset();
+    await refreshAdminData();
+    setMessage(`Imported ${state.employeeBatchUpload.created} employee account${state.employeeBatchUpload.created === 1 ? "" : "s"}. Copy temporary credentials now.`, "success");
+  } catch (error) {
+    state.employeeBatchUpload = {
+      ...state.employeeBatchUpload,
+      busy: false,
+      content,
+      format
+    };
+    setMessage(error.message || "Could not import employee accounts.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleCopyEmployeeBatchCredentials(event) {
+  event.preventDefault();
+  const credentials = employeeBatchCredentialRows();
+
+  if (!credentials.length) {
+    setMessage("No batch credentials are available to copy.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  const copied = await copyText(formatEmployeeBatchCredentialsForClipboard(credentials));
+  setMessage(copied ? "Copied temporary credentials." : "Could not copy temporary credentials.", copied ? "success" : "");
+  render();
+  clearMessageSoon();
+}
+
+function handleClearEmployeeBatchResults(event) {
+  event.preventDefault();
+  state.employeeBatchUpload = {
+    busy: false,
+    content: "",
+    created: 0,
+    credentials: [],
+    format: "auto"
+  };
+  setMessage("Cleared temporary credentials from this screen.", "success");
+  render();
+  clearMessageSoon();
+}
+
 function resetAdminCreateFormDefaults(form, scope) {
   if (scope === "it") {
     const defaultRole = form.querySelector('input[name="roles"][value="hr"]');
@@ -5528,6 +5778,8 @@ document.addEventListener("click", async (event) => {
   const tabButton = target.closest("[data-tab]");
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
+  const copyEmployeeBatchCredentialsButton = target.closest("[data-copy-employee-batch-credentials]");
+  const clearEmployeeBatchResultsButton = target.closest("[data-clear-employee-batch-results]");
   const enableAlertsButton = target.closest("[data-enable-alerts]");
   const disableAlertsButton = target.closest("[data-disable-alerts]");
   const sendTestPushButton = target.closest("[data-send-test-push]");
@@ -5698,6 +5950,16 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (copyEmployeeBatchCredentialsButton) {
+    await handleCopyEmployeeBatchCredentials(event);
+    return;
+  }
+
+  if (clearEmployeeBatchResultsButton) {
+    handleClearEmployeeBatchResults(event);
+    return;
+  }
+
   if (enableAlertsButton) {
     event.preventDefault();
 
@@ -5780,6 +6042,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-create-employee-form]")) {
     await handleCreateEmployeeSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-employee-batch-form]")) {
+    await handleEmployeeBatchUploadSubmit(event);
     return;
   }
 
@@ -5874,6 +6141,10 @@ app.addEventListener("submit", async (event) => {
     render();
     clearMessageSoon();
   }
+});
+
+app.addEventListener("change", async (event) => {
+  await handleEmployeeBatchFileChange(event);
 });
 
 app.addEventListener("toggle", (event) => {

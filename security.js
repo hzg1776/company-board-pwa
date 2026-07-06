@@ -4,6 +4,7 @@ import {
   readRuntimeTextFile,
   writeRuntimeJsonFileAtomic
 } from "./runtime-files.js";
+import { EMPLOYEE_BATCH_LIMIT } from "./employee-batch.js";
 
 const EMPLOYEE_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
@@ -1371,6 +1372,10 @@ function validateEmployeePassword(password) {
   if (String(password || "").length < MIN_PASSWORD_LENGTH) {
     throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
   }
+}
+
+function createTemporaryEmployeePassword() {
+  return `Temp-${crypto.randomBytes(12).toString("base64url")}1!`;
 }
 
 function validateAdminPassword(password) {
@@ -3918,6 +3923,113 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     }));
   }
 
+  async function createEmployeeAccountsBatch({ employees = [] } = {}) {
+    if (!Array.isArray(employees)) {
+      throw new Error("Employees must be an array.");
+    }
+
+    if (!employees.length) {
+      throw new Error("Batch upload must include at least one employee.");
+    }
+
+    if (employees.length > EMPLOYEE_BATCH_LIMIT) {
+      throw new Error(`Batch upload is limited to ${EMPLOYEE_BATCH_LIMIT} employees.`);
+    }
+
+    const seenUsernames = new Set();
+    const preparedEmployees = employees.map((entry, index) => {
+      const employeeName = cleanText(entry?.name, 120);
+      const employeeUsername = normalizeUsername(entry?.username);
+
+      if (!employeeName) {
+        throw new Error(`Row ${index + 1} is missing a name.`);
+      }
+
+      if (!employeeUsername) {
+        throw new Error(`Row ${index + 1} is missing a username.`);
+      }
+
+      if (seenUsernames.has(employeeUsername)) {
+        throw new Error(`Duplicate username in upload: ${employeeUsername}`);
+      }
+
+      seenUsernames.add(employeeUsername);
+
+      const providedPassword = String(entry?.password || "");
+      const temporaryPassword = providedPassword || createTemporaryEmployeePassword();
+      validateEmployeePassword(temporaryPassword);
+
+      return {
+        row: index + 1,
+        input: {
+          ...entry,
+          name: employeeName,
+          username: employeeUsername
+        },
+        temporaryPassword,
+        generatedPassword: !providedPassword
+      };
+    });
+
+    return updateData((data) => {
+      const existingUsernames = new Set(data.employees.map((employee) => employee.username));
+
+      for (const prepared of preparedEmployees) {
+        if (existingUsernames.has(prepared.input.username)) {
+          throw new Error(`That username is already in use: ${prepared.input.username}`);
+        }
+      }
+
+      const createdAt = nowIso();
+      const createdEmployees = preparedEmployees.map((prepared) => {
+        const passwordHash = createPasswordHash(prepared.temporaryPassword);
+
+        return normalizeEmployee({
+          id: crypto.randomUUID(),
+          name: prepared.input.name,
+          username: prepared.input.username,
+          externalEmployeeId: prepared.input.externalEmployeeId,
+          email: prepared.input.email,
+          recoveryEmail: prepared.input.recoveryEmail,
+          department: prepared.input.department,
+          location: prepared.input.location,
+          identityProvider: prepared.input.identityProvider,
+          ssoSubject: prepared.input.ssoSubject,
+          passwordResetRequired: prepared.input.passwordResetRequired !== false,
+          passwordSalt: passwordHash.salt,
+          passwordHash: passwordHash.hash,
+          active: true,
+          sessionVersion: 0,
+          lastLoginAt: "",
+          createdAt,
+          updatedAt: createdAt,
+          disabledAt: ""
+        });
+      });
+
+      data.employees = [
+        ...createdEmployees,
+        ...data.employees
+      ];
+
+      return {
+        employees: createdEmployees,
+        credentials: createdEmployees.map((employee, index) => ({
+          name: employee.name,
+          username: employee.username,
+          email: employee.email,
+          temporaryPassword: preparedEmployees[index].temporaryPassword,
+          generated: preparedEmployees[index].generatedPassword
+        }))
+      };
+    }).then(({ result, snapshot }) => ({
+      employees: result.employees.map((employee) => publicEmployeeRecord(employee, [])),
+      credentials: result.credentials,
+      created: result.employees.length,
+      snapshot
+    }));
+  }
+
   async function setEmployeeActive(employeeId, active) {
     const targetId = cleanText(employeeId, 80);
 
@@ -4678,6 +4790,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     revokeItAdminUserSessions,
     listEmployees,
     createEmployeeAccount,
+    createEmployeeAccountsBatch,
     setEmployeeActive,
     changeAdminPassword,
     changeWebmasterPassword,

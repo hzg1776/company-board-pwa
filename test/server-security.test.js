@@ -773,6 +773,153 @@ test("trusted proxy loopback honors forwarded client IPs for login throttling", 
   assert.equal(secondEmployeeLogin.status, 200);
 });
 
+test("HR can batch upload employee accounts from JSON with generated passwords", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-employee-batch-json-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    ADMIN_MFA_ENABLED: "false"
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const login = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(login.status, 200);
+  const hrBody = await login.json();
+  const hrCookie = readSetCookie(login);
+
+  const upload = await fetch(`${server.baseUrl}/api/employees/batch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    },
+    body: JSON.stringify({
+      format: "json",
+      content: JSON.stringify({
+        employees: [
+          { name: "Liza Gfeller", email: "lgfeller@palzivna.com" },
+          { name: "Herman Goldstein", email: "hgoldstein@palzivna.com", department: "Operations" }
+        ]
+      })
+    })
+  });
+  assert.equal(upload.status, 201);
+  const uploadBody = await upload.json();
+  assert.equal(uploadBody.created, 2);
+  assert.deepEqual(
+    uploadBody.credentials.map((credential) => credential.username),
+    ["lgfeller", "hgoldstein"]
+  );
+  assert.ok(uploadBody.credentials.every((credential) => credential.temporaryPassword.length >= 14));
+  assert.equal(uploadBody.employees[0].email, "lgfeller@palzivna.com");
+
+  const employeesResponse = await fetch(`${server.baseUrl}/api/employees`, {
+    headers: {
+      Cookie: hrCookie
+    }
+  });
+  assert.equal(employeesResponse.status, 200);
+  const employeesBody = await employeesResponse.json();
+  assert.deepEqual(
+    employeesBody.employees.map((employee) => employee.username).sort(),
+    ["hgoldstein", "lgfeller"]
+  );
+});
+
+test("HR batch YAML upload rejects duplicate usernames without partial creation", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-employee-batch-yaml-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    ADMIN_MFA_ENABLED: "false"
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const login = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(login.status, 200);
+  const hrBody = await login.json();
+  const hrCookie = readSetCookie(login);
+
+  const upload = await fetch(`${server.baseUrl}/api/employees/batch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    },
+    body: JSON.stringify({
+      format: "yaml",
+      content: `
+employees:
+  - name: Christy Jenkins
+    email: cjenkins@palzivna.com
+  - name: Duplicate Christy
+    username: cjenkins
+    email: duplicate@palzivna.com
+`
+    })
+  });
+  assert.equal(upload.status, 400);
+  const uploadBody = await upload.json();
+  assert.match(uploadBody.error, /Duplicate username in upload: cjenkins/);
+
+  const employeesResponse = await fetch(`${server.baseUrl}/api/employees`, {
+    headers: {
+      Cookie: hrCookie
+    }
+  });
+  assert.equal(employeesResponse.status, 200);
+  const employeesBody = await employeesResponse.json();
+  assert.deepEqual(employeesBody.employees, []);
+});
+
 test("server scopes the HR admin API to HR-only admin accounts", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-users-"));
   const securityFile = path.join(tempDir, "security.json");

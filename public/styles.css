@@ -1439,6 +1439,56 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.employee-batch-form {
+  display: grid;
+  gap: 12px;
+}
+
+.employee-batch-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(260px, 1.3fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.employee-batch-textarea {
+  min-height: 220px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.employee-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.employee-batch-result {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.employee-batch-result h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.employee-batch-table-wrap {
+  margin-top: 0;
+}
+
+.employee-batch-password {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
 .admin-role-picker {
   margin: 0;
   padding: 10px 12px;
@@ -2656,6 +2706,10 @@ body[data-route="admin"] {
   }
 
   .employee-create-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-batch-grid {
     grid-template-columns: 1fr;
   }
 

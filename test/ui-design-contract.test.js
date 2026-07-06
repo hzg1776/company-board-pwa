@@ -151,6 +151,16 @@ test("employee masthead omits the alert-count status strip", async () => {
   assert.doesNotMatch(app, /\$\{notices\.length\} live/);
 });
 
+test("HR users panel exposes JSON and YAML employee batch upload controls", async () => {
+  const app = await loadClientApp();
+
+  assert.match(app, /data-employee-batch-form/);
+  assert.match(app, /data-employee-batch-file/);
+  assert.match(app, /\/api\/employees\/batch/);
+  assert.match(app, /data-copy-employee-batch-credentials/);
+  assert.doesNotMatch(app, /lgfeller@palzivna\.com/);
+});
+
 test("global compact rows share consistent text and icon spacing", async () => {
   const css = await loadStylesheet();
   const rootBody = getLastSelectorBody(css, ":root");
