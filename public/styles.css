@@ -6080,6 +6080,7 @@ body {
   --employee-feed-column-width: min(720px, calc(100vw - 64px));
   padding: 12px 0 56px;
   gap: 8px;
+  align-content: start;
   justify-items: center;
 }
 
@@ -7359,17 +7360,6 @@ body {
   line-height: 1.15 !important;
 }
 
-.employee-shell .employee-brand-utility {
-  display: grid;
-  grid-column: 1;
-  justify-items: center;
-  justify-self: center;
-  gap: 2px;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-}
-
 .employee-shell .employee-brand-banner .employee-weather-card {
   border: 0 !important;
   background: transparent !important;
@@ -7417,34 +7407,6 @@ body {
   padding-left: 6px !important;
 }
 
-.employee-shell .employee-brand-banner .employee-status-strip {
-  width: 100% !important;
-  max-width: 100% !important;
-  justify-self: center;
-  margin: 0 !important;
-  border: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.employee-shell .employee-brand-banner .employee-status-ribbon {
-  align-items: center;
-  gap: 2px 8px !important;
-  justify-content: center;
-  padding: 0 !important;
-  font-size: 0.74rem !important;
-  line-height: 1.1 !important;
-}
-
-.employee-shell .employee-brand-banner .employee-status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px !important;
-  font-size: 0.74rem !important;
-  line-height: 1.1 !important;
-}
-
-.employee-shell .employee-brand-banner .employee-status-pill .icon,
 .employee-shell .employee-brand-banner .employee-weather-updated-symbol .icon {
   flex: 0 0 12px !important;
   width: 12px !important;
@@ -7522,11 +7484,6 @@ body {
     justify-self: center;
   }
 
-  .employee-shell .employee-brand-utility {
-    justify-items: center;
-    justify-self: center;
-  }
-
   .employee-shell .employee-brand-banner .employee-weather-card {
     justify-self: center;
     text-align: center;
@@ -7535,11 +7492,6 @@ body {
   .employee-shell .employee-brand-banner .employee-weather-line {
     justify-content: center;
   }
-
-  .employee-shell .employee-brand-banner .employee-status-ribbon {
-    justify-content: center;
-  }
-
   .employee-shell .feed-item {
     width: 100% !important;
     min-width: 0;

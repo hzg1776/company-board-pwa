@@ -2790,21 +2790,6 @@ function renderManagedFeedItem(post) {
   `;
 }
 
-function renderEmployeeStatusStrip(notices, setup) {
-  const urgentCount = notices.filter((post) => post.priority === "Urgent").length;
-  const alertState = setup.ready ? "Alerts on" : "Sign up for alerts";
-
-  return `
-    <section class="employee-status-strip" aria-label="Employee portal status">
-      <div class="employee-status-ribbon">
-        <span class="employee-status-pill">${icon("bell")} ${escapeHtml(alertState)}</span>
-        <span class="employee-status-pill">${icon("alert")} ${urgentCount} urgent</span>
-        <span class="employee-status-pill">${icon("news")} ${notices.length} live</span>
-      </div>
-    </section>
-  `;
-}
-
 function formatWeatherFreshness(updatedAt) {
   const updatedMs = Date.parse(String(updatedAt || ""));
 
@@ -3562,9 +3547,6 @@ function renderEmployee() {
                 <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
               </div>
               ${renderEmployeeWeatherCard()}
-              <div class="employee-brand-utility">
-                ${renderEmployeeStatusStrip(notices, setup)}
-              </div>
             </div>
           </div>
         </section>

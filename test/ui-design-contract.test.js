@@ -140,25 +140,15 @@ test("weather and status UI remains visible in the operational portal", async ()
   }
 });
 
-test("employee status strip keeps each icon paired with its label", async () => {
+test("employee masthead omits the alert-count status strip", async () => {
   const app = await loadClientApp();
-  const css = await loadStylesheet();
-  const statusStripBody = getLastSelectorBody(css, ".employee-shell .employee-status-strip");
-  const statusRibbonBody = getLastSelectorBody(css, ".employee-shell .employee-status-ribbon");
-  const statusItemBody = getLastSelectorBody(css, ".employee-shell .employee-status-ribbon .employee-status-pill");
-  const statusIconBody = getLastSelectorBody(css, ".employee-status-ribbon .icon");
 
-  assert.match(app, /class="employee-status-ribbon"/);
-  assert.match(app, /class="employee-status-pill"/);
-  assert.equal(getDeclarationValue(statusStripBody, "border"), "0 !important");
-  assert.equal(getDeclarationValue(statusStripBody, "background"), "transparent !important");
-  assert.equal(getDeclarationValue(statusRibbonBody, "border-top"), "0 !important");
-  assert.equal(getDeclarationValue(statusItemBody, "display"), "inline-flex");
-  assert.equal(getDeclarationValue(statusItemBody, "align-items"), "center");
-  assert.equal(getDeclarationValue(statusItemBody, "gap"), "6px");
-  assert.equal(getDeclarationValue(statusIconBody, "flex"), "0 0 16px");
-  assert.equal(getDeclarationValue(statusIconBody, "width"), "16px");
-  assert.equal(getDeclarationValue(statusIconBody, "height"), "16px");
+  assert.doesNotMatch(app, /function renderEmployeeStatusStrip/);
+  assert.doesNotMatch(app, /employee-status-strip/);
+  assert.doesNotMatch(app, /employee-status-ribbon/);
+  assert.doesNotMatch(app, /employee-status-pill/);
+  assert.doesNotMatch(app, /Alerts on/);
+  assert.doesNotMatch(app, /\$\{notices\.length\} live/);
 });
 
 test("global compact rows share consistent text and icon spacing", async () => {
@@ -1014,18 +1004,11 @@ test("employee feed page uses a static feed/header width with weather in the hea
     "\\.employee-shell \\.employee-brand-banner \\.employee-weather-condition,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-weather-range,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-weather-location,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-weather-updated"
   );
   const brandWeatherRangeBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .employee-brand-banner .employee-weather-range");
-  const brandStatusBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .employee-brand-banner .employee-status-strip");
-  const brandStatusRibbonBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .employee-brand-banner .employee-status-ribbon");
-  const brandStatusPillBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .employee-brand-banner .employee-status-pill");
-  const brandHeaderIconBody = getLastRuleBody(
-    contentFitDesktopCss,
-    "\\.employee-shell \\.employee-brand-banner \\.employee-status-pill \\.icon,\\s*\\.employee-shell \\.employee-brand-banner \\.employee-weather-updated-symbol \\.icon"
-  );
+  const brandWeatherIconBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .employee-brand-banner .employee-weather-updated-symbol .icon");
   const mobileBrandHeadLayoutBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .employee-brand-banner-head");
   const mobileBrandIdentityBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .employee-brand-identity");
   const mobileBrandWeatherBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .employee-brand-banner .employee-weather-card");
   const mobileBrandWeatherLineBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .employee-brand-banner .employee-weather-line");
-  const mobileBrandStatusRibbonBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .employee-brand-banner .employee-status-ribbon");
   const feedColumnBody = getLastRuleBody(
     css,
     "\\.employee-subscription-banner,\\s*\\.employee-status-strip,\\s*\\.feed-shell,\\s*\\.feed-list,\\s*\\.employee-signout-floor"
@@ -1044,11 +1027,14 @@ test("employee feed page uses a static feed/header width with weather in the hea
 
   assert.match(app, /class="employee-brand-banner"/);
   assert.match(app, /class="employee-brand-identity"/);
-  assert.match(app, /class="employee-brand-utility"/);
-  assert.match(app, /<div class="employee-brand-identity">\s*<img class="employee-brand-banner-logo"[\s\S]*?<div class="employee-brand-banner-copy">[\s\S]*?Announcements &amp; Alerts[\s\S]*?<\/div>\s*\$\{renderEmployeeWeatherCard\(\)\}\s*<div class="employee-brand-utility">\s*\$\{renderEmployeeStatusStrip\(notices, setup\)\}\s*<\/div>\s*<\/div>/);
+  assert.doesNotMatch(app, /class="employee-brand-utility"/);
+  assert.match(app, /<div class="employee-brand-identity">\s*<img class="employee-brand-banner-logo"[\s\S]*?<div class="employee-brand-banner-copy">[\s\S]*?Announcements &amp; Alerts[\s\S]*?<\/div>\s*\$\{renderEmployeeWeatherCard\(\)\}\s*<\/div>\s*<\/div>\s*<\/section>/);
+  assert.doesNotMatch(app, /renderEmployeeStatusStrip/);
+  assert.doesNotMatch(app, /employee-status-strip/);
   assert.doesNotMatch(app, /\$\{renderEmployeeSubscriptionBanner\(setup\)\}\s*\$\{renderEmployeeStatusStrip\(notices, setup\)\}/);
   assert.equal(getDeclarationValue(employeeShellBody, "justify-items"), "center");
   assert.equal(getDeclarationValue(employeeShellBody, "gap"), "8px");
+  assert.equal(getDeclarationValue(employeeShellBody, "align-content"), "start");
   assert.equal(getDeclarationValue(employeeShellBody, "padding"), "12px 0 56px");
   assert.equal(getDeclarationValue(employeeShellBody, "--employee-feed-column-width"), "min(720px, calc(100vw - 64px))");
   assert.equal(getDeclarationValue(contentBoxBody, "width"), "fit-content !important");
@@ -1087,14 +1073,6 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(brandTitleBody, "font-size"), "0.98rem !important");
   assert.equal(getDeclarationValue(brandTitleBody, "font-weight"), "700 !important");
   assert.equal(getDeclarationValue(brandTitleBody, "line-height"), "1.15 !important");
-  const brandUtilityBody = getLastSelectorBody(contentFitDesktopCss, ".employee-shell .employee-brand-utility");
-  assert.equal(getDeclarationValue(brandUtilityBody, "display"), "grid");
-  assert.equal(getDeclarationValue(brandUtilityBody, "grid-column"), "1");
-  assert.equal(getDeclarationValue(brandUtilityBody, "justify-items"), "center");
-  assert.equal(getDeclarationValue(brandUtilityBody, "gap"), "2px");
-  assert.equal(getDeclarationValue(brandUtilityBody, "justify-self"), "center");
-  assert.equal(getDeclarationValue(brandUtilityBody, "width"), "100%");
-  assert.equal(getDeclarationValue(brandUtilityBody, "max-width"), "100%");
   assert.equal(getDeclarationValue(brandWeatherBody, "border"), "0 !important");
   assert.equal(getDeclarationValue(brandWeatherBody, "background"), "transparent !important");
   assert.equal(getDeclarationValue(brandWeatherBody, "box-shadow"), "none !important");
@@ -1116,38 +1094,16 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(brandWeatherTextBody, "line-height"), "1.1 !important");
   assert.equal(getDeclarationValue(brandWeatherRangeBody, "gap"), "6px !important");
   assert.equal(getDeclarationValue(brandWeatherRangeBody, "padding-left"), "6px !important");
-  assert.equal(getDeclarationValue(brandStatusBody, "width"), "100% !important");
-  assert.equal(getDeclarationValue(brandStatusBody, "max-width"), "100% !important");
-  assert.equal(getDeclarationValue(brandStatusBody, "justify-self"), "center");
-  assert.equal(getDeclarationValue(brandStatusBody, "margin"), "0 !important");
-  assert.equal(getDeclarationValue(brandStatusBody, "border"), "0 !important");
-  assert.equal(getDeclarationValue(brandStatusBody, "background"), "transparent !important");
-  assert.equal(getDeclarationValue(brandStatusBody, "box-shadow"), "none !important");
-  assert.equal(getDeclarationValue(brandStatusRibbonBody, "align-items"), "center");
-  assert.equal(getDeclarationValue(brandStatusRibbonBody, "gap"), "2px 8px !important");
-  assert.equal(getDeclarationValue(brandStatusRibbonBody, "justify-content"), "center");
-  assert.equal(getDeclarationValue(brandStatusRibbonBody, "padding"), "0 !important");
-  assert.equal(getDeclarationValue(brandStatusRibbonBody, "font-size"), "0.74rem !important");
-  assert.equal(getDeclarationValue(brandStatusRibbonBody, "line-height"), "1.1 !important");
-  assert.equal(getDeclarationValue(brandStatusPillBody, "display"), "inline-flex");
-  assert.equal(getDeclarationValue(brandStatusPillBody, "align-items"), "center");
-  assert.equal(getDeclarationValue(brandStatusPillBody, "gap"), "4px !important");
-  assert.equal(getDeclarationValue(brandStatusPillBody, "font-size"), "0.74rem !important");
-  assert.equal(getDeclarationValue(brandStatusPillBody, "line-height"), "1.1 !important");
-  assert.equal(getDeclarationValue(brandHeaderIconBody, "width"), "12px !important");
-  assert.equal(getDeclarationValue(brandHeaderIconBody, "height"), "12px !important");
+  assert.equal(getDeclarationValue(brandWeatherIconBody, "width"), "12px !important");
+  assert.equal(getDeclarationValue(brandWeatherIconBody, "height"), "12px !important");
   assert.equal(getDeclarationValue(mobileBrandHeadLayoutBody, "grid-template-columns"), "1fr !important");
   assert.equal(getDeclarationValue(mobileBrandHeadLayoutBody, "justify-items"), "center");
   assert.equal(getDeclarationValue(mobileBrandHeadLayoutBody, "gap"), "6px !important");
   assert.equal(getDeclarationValue(mobileBrandIdentityBody, "justify-content"), "center");
   assert.equal(getDeclarationValue(mobileBrandIdentityBody, "justify-self"), "center");
-  const mobileBrandUtilityBody = getLastSelectorBody(contentFitMobileCss, ".employee-shell .employee-brand-utility");
-  assert.equal(getDeclarationValue(mobileBrandUtilityBody, "justify-items"), "center");
-  assert.equal(getDeclarationValue(mobileBrandUtilityBody, "justify-self"), "center");
   assert.equal(getDeclarationValue(mobileBrandWeatherBody, "justify-self"), "center");
   assert.equal(getDeclarationValue(mobileBrandWeatherBody, "text-align"), "center");
   assert.equal(getDeclarationValue(mobileBrandWeatherLineBody, "justify-content"), "center");
-  assert.equal(getDeclarationValue(mobileBrandStatusRibbonBody, "justify-content"), "center");
   assert.equal(getDeclarationValue(feedColumnBody, "width"), "min(760px, calc(100% - 32px))");
   assert.ok(subscriptionRenderer);
   assert.ok(setupWizardRenderer);
@@ -1260,11 +1216,12 @@ test("stylesheet uses one consolidated operational theme layer", async () => {
   assert.doesNotMatch(css, /letter-spacing:\s*-/i);
 });
 
-test("client app keeps employee weather and status surfaces wired", async () => {
+test("client app keeps employee weather and alert setup surfaces wired", async () => {
   const app = await loadClientApp();
 
   assert.match(app, /requestJson\("\/api\/weather"\)/);
-  assert.match(app, /function renderEmployeeStatusStrip/);
-  assert.match(app, /employee-status-strip/);
+  assert.match(app, /function renderEmployeeSubscriptionBanner/);
+  assert.doesNotMatch(app, /function renderEmployeeStatusStrip/);
+  assert.doesNotMatch(app, /employee-status-strip/);
   assert.match(app, /data-weather-form/);
 });
