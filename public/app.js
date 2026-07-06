@@ -3561,10 +3561,10 @@ function renderEmployee() {
               <div class="employee-brand-banner-copy">
                 <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
               </div>
-            </div>
-            <div class="employee-brand-utility">
               ${renderEmployeeWeatherCard()}
-              ${renderEmployeeStatusStrip(notices, setup)}
+              <div class="employee-brand-utility">
+                ${renderEmployeeStatusStrip(notices, setup)}
+              </div>
             </div>
           </div>
         </section>

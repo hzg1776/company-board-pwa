@@ -135,7 +135,7 @@ svg {
   display: grid;
   justify-items: center;
   gap: 10px;
-  width: 100%;
+  width: 100% !important;
   max-width: 100%;
   padding: 0;
   border: 0;
@@ -7328,20 +7328,23 @@ body {
 
 .employee-shell .employee-brand-banner-head {
   display: grid !important;
-  grid-template-columns: max-content minmax(0, 1fr) !important;
+  grid-template-columns: 1fr !important;
   align-items: center;
-  justify-items: stretch;
-  gap: 8px !important;
+  justify-items: center;
+  gap: 4px !important;
   width: 100% !important;
   justify-self: stretch;
-  text-align: left;
+  text-align: center;
 }
 
 .employee-shell .employee-brand-identity {
-  display: inline-flex;
+  display: grid !important;
   align-items: center;
-  justify-self: start;
-  gap: 6px;
+  justify-items: center !important;
+  grid-column: 1;
+  justify-self: stretch;
+  gap: 4px !important;
+  width: 100% !important;
   min-width: 0;
 }
 
@@ -7358,9 +7361,11 @@ body {
 
 .employee-shell .employee-brand-utility {
   display: grid;
-  justify-items: end;
-  justify-self: end;
+  grid-column: 1;
+  justify-items: center;
+  justify-self: center;
   gap: 2px;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
 }
@@ -7370,16 +7375,16 @@ body {
   background: transparent !important;
   box-shadow: none !important;
   gap: 2px !important;
-  justify-self: end;
+  justify-self: center;
   margin: 0 !important;
   max-width: 100% !important;
-  text-align: right;
+  text-align: center;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-line {
   align-items: center;
   gap: 2px 6px !important;
-  justify-content: flex-end;
+  justify-content: center;
 }
 
 .employee-shell .employee-brand-banner .employee-weather-line-primary,
@@ -7415,7 +7420,7 @@ body {
 .employee-shell .employee-brand-banner .employee-status-strip {
   width: 100% !important;
   max-width: 100% !important;
-  justify-self: stretch;
+  justify-self: center;
   margin: 0 !important;
   border: 0 !important;
   background: transparent !important;
@@ -7683,16 +7688,15 @@ body {
 }
 
 .priority-pill.important,
-.request-status.warning,
-.admin-table-chip,
-.employee-status-ribbon .employee-status-pill:nth-child(2) {
+.request-status.warning {
   color: var(--tone-warning-text) !important;
   background: var(--tone-warning-bg) !important;
   border-color: var(--tone-warning-line) !important;
 }
 
 .priority-pill.urgent,
-.request-status.danger {
+.request-status.danger,
+.employee-status-ribbon .employee-status-pill:nth-child(2) {
   color: var(--tone-danger-text) !important;
   background: var(--tone-danger-bg) !important;
   border-color: var(--tone-danger-line) !important;
@@ -7985,9 +7989,7 @@ body {
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
   .priority-pill.important,
-  .request-status.warning,
-  .admin-table-chip,
-  .employee-status-ribbon .employee-status-pill:nth-child(2)
+  .request-status.warning
 ) {
   color: var(--tone-warning-text) !important;
   background: var(--tone-warning-bg) !important;
@@ -7996,11 +7998,18 @@ body {
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
   .priority-pill.urgent,
-  .request-status.danger
+  .request-status.danger,
+  .employee-status-ribbon .employee-status-pill:nth-child(2)
 ) {
   color: var(--tone-danger-text) !important;
   background: var(--tone-danger-bg) !important;
   border-color: var(--tone-danger-line) !important;
+}
+
+.page-shell.employee-shell .priority-pill.urgent {
+  color: var(--danger) !important;
+  background: var(--danger-soft) !important;
+  border-color: var(--danger) !important;
 }
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
@@ -8156,8 +8165,10 @@ body {
 
 /* Logo lockup text: keep the brand label under the mark. */
 .page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .page-head > .brand {
+  grid-column: 1 / -1;
+  grid-row: 1;
   justify-content: center !important;
-  justify-self: start;
+  justify-self: center !important;
   margin-right: 0 !important;
 }
 
@@ -8198,14 +8209,23 @@ body {
 /* Shared logo lockups: every visible brand label sits under the mark. */
 .auth-gate-card.entry-surface > .entry-brand,
 .launcher-panel.entry-surface .launcher-brand,
-.admin-auth-card.entry-surface .admin-auth-brand,
-.employee-shell .employee-brand-banner .employee-brand-identity {
+.admin-auth-card.entry-surface .admin-auth-brand {
   display: grid !important;
   justify-items: center !important;
   align-items: center !important;
   gap: 8px !important;
   width: max-content !important;
   min-width: 76px;
+  text-align: center !important;
+}
+
+.employee-shell .employee-brand-banner .employee-brand-identity {
+  display: grid !important;
+  justify-items: center !important;
+  align-items: center !important;
+  gap: 4px !important;
+  width: 100% !important;
+  min-width: 0;
   text-align: center !important;
 }
 
@@ -8337,8 +8357,14 @@ body {
   width: 100% !important;
 }
 
+.page-shell.launcher-shell .launcher-stage {
+  width: min(720px, 100%) !important;
+  gap: 6px;
+}
+
 .launcher-shell.page-shell .launcher-stage {
-  width: min(660px, 100%) !important;
+  width: min(720px, 100%) !important;
+  gap: 6px;
 }
 
 .launcher-shell.page-shell {
@@ -8387,7 +8413,7 @@ body {
   }
 }
 
-/* Final grid row compaction: reduce white space and align entry surfaces to rows. */
+/* Final grid row compaction: compact centered entry headers with stable controls. */
 .auth-shell,
 .admin-auth-shell,
 .page-shell.launcher-shell {
@@ -8412,13 +8438,14 @@ body {
 
 .auth-gate-card.entry-surface {
   display: grid !important;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 1fr;
   grid-template-areas:
-    "brand title"
-    "brand notice"
-    "brand content";
-  column-gap: 16px !important;
-  row-gap: 8px !important;
+    "brand"
+    "title"
+    "notice"
+    "content";
+  column-gap: 0 !important;
+  row-gap: 9px !important;
   justify-items: stretch !important;
 }
 
@@ -8426,21 +8453,22 @@ body {
   grid-area: brand;
   align-self: center;
   justify-self: center !important;
+  margin-bottom: 1px !important;
 }
 
 .auth-gate-card.entry-surface .auth-frame-title {
   grid-area: title;
-  justify-self: stretch !important;
+  justify-self: center !important;
   width: 100% !important;
   max-width: 100% !important;
   margin: 0 !important;
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .auth-gate-card.entry-surface .auth-frame-title > div {
-  justify-items: start !important;
+  justify-items: center !important;
   gap: 4px !important;
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .auth-gate-card.entry-surface .employee-banner {
@@ -8466,6 +8494,21 @@ body {
   margin: 0 !important;
 }
 
+.auth-gate-card.entry-surface .auth-form .auth-form-actions {
+  display: grid !important;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch !important;
+  justify-items: stretch !important;
+  width: 100%;
+}
+
+.auth-gate-card.entry-surface .auth-form .auth-form-actions .button {
+  justify-self: stretch !important;
+  width: 100% !important;
+  justify-content: center !important;
+}
+
 .auth-gate-card.entry-surface .auth-form .button,
 .admin-auth-card.entry-surface .admin-auth-form .button {
   grid-column: 1 / -1;
@@ -8487,24 +8530,24 @@ body {
 
 .admin-auth-card.entry-surface .admin-auth-brand {
   display: grid !important;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 1fr;
   align-items: center !important;
-  justify-items: start !important;
-  gap: 14px !important;
+  justify-items: center !important;
+  gap: 8px !important;
   width: 100% !important;
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .admin-auth-card.entry-surface .admin-auth-brand-copy {
-  justify-items: start !important;
+  justify-items: center !important;
   width: 100% !important;
   max-width: 100% !important;
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .admin-auth-card.entry-surface .admin-auth-brand-copy .eyebrow,
 .auth-gate-card.entry-surface .auth-frame-eyebrow {
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .admin-auth-card.entry-surface .admin-auth-brand-disc,
@@ -8521,14 +8564,15 @@ body {
 
 .launcher-panel.entry-surface {
   display: grid !important;
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 1fr;
   grid-template-areas:
-    "brand title"
-    "nav nav";
-  column-gap: 16px !important;
-  row-gap: 10px !important;
+    "brand"
+    "title"
+    "nav";
+  column-gap: 0 !important;
+  row-gap: 9px !important;
   padding: 16px !important;
-  justify-items: stretch !important;
+  justify-items: center !important;
 }
 
 .launcher-panel.entry-surface .launcher-brand {
@@ -8538,15 +8582,15 @@ body {
 
 .launcher-panel.entry-surface .launcher-title-block {
   grid-area: title;
-  justify-self: stretch !important;
+  justify-self: center !important;
   width: 100% !important;
   max-width: 100% !important;
   margin: 0 !important;
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .launcher-panel.entry-surface .launcher-title-block > div {
-  text-align: left !important;
+  text-align: center !important;
 }
 
 .launcher-panel.entry-surface .launcher-grid.launcher-grid-logins {
