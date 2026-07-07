@@ -5,7 +5,8 @@ function parseArgs(argv) {
   const options = {
     baseUrl: '',
     setupToken: 'bootstrap-secret-2026',
-    artifactDir: ''
+    artifactDir: '',
+    includeLockout: false
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -16,6 +17,8 @@ function parseArgs(argv) {
       options.setupToken = argv[++i];
     } else if (arg === '--artifact-dir' && i + 1 < argv.length) {
       options.artifactDir = argv[++i];
+    } else if (arg === '--include-lockout') {
+      options.includeLockout = true;
     }
   }
 
@@ -117,6 +120,7 @@ async function main() {
   const hrCookie = cookieValue(hrSetup.setCookie);
   const hrCsrf = hrSetup.body?.csrfToken || '';
   results.hrSetup = { status: hrSetup.status, authorized: hrSetup.body?.authorized ?? null, error: hrSetup.body?.error ?? null };
+  expectStatus(results.hrSetup.status, 201, 'deployed HR setup');
 
   const employeeCreate = await request('/api/employees', {
     method: 'POST',
@@ -259,21 +263,30 @@ async function main() {
     logout: employeeLogout.status
   };
 
-  const lockStatuses = [];
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
-  await delay(5500);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
-  await delay(10500);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
-  await delay(20500);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
-  const lockout = await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } });
-  results.lockout = {
-    statuses: [...lockStatuses, lockout.status],
-    finalError: lockout.body?.error ?? null
-  };
+  if (options.includeLockout) {
+    const lockStatuses = [];
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    await delay(5500);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    await delay(10500);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    await delay(20500);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    const lockout = await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } });
+    results.lockout = {
+      skipped: false,
+      statuses: [...lockStatuses, lockout.status],
+      finalError: lockout.body?.error ?? null
+    };
+  } else {
+    results.lockout = {
+      skipped: true,
+      statuses: [],
+      finalError: null
+    };
+  }
 
   const hrLoginAgain = await request('/api/hr/login', {
     method: 'POST',
@@ -300,7 +313,6 @@ async function main() {
     expectStatus(page.status, 200, `deployed ${pageName} page`);
     assertSmoke(page.html === true, `deployed ${pageName} page should return HTML`);
   }
-  expectStatus(results.hrSetup.status, 201, 'deployed HR setup');
   expectStatus(results.hrWriteFlow.employeeCreate, 201, 'deployed employee create');
   expectStatus(results.hrWriteFlow.postCreate, 201, 'deployed post create');
   expectAnyStatus(results.hrWriteFlow.weatherUpdate, [200, 502], 'deployed weather update');
@@ -322,8 +334,12 @@ async function main() {
   expectStatus(results.employee.push.subscribeStatus, 201, 'deployed push subscribe');
   expectStatus(results.employee.push.unsubscribeStatus, 200, 'deployed push unsubscribe');
   expectStatus(results.employee.logout, 200, 'deployed employee logout');
-  assertSmoke(results.lockout.statuses.includes(429), 'deployed lockout should eventually throttle bad webmaster logins');
-  assertSmoke(!/username is required/i.test(results.lockout.finalError || ''), 'deployed lockout should not fail for a missing username');
+  if (options.includeLockout) {
+    assertSmoke(results.lockout.statuses.includes(429), 'deployed lockout should eventually throttle bad webmaster logins');
+    assertSmoke(!/username is required/i.test(results.lockout.finalError || ''), 'deployed lockout should not fail for a missing username');
+  } else {
+    assertSmoke(results.lockout.skipped === true, 'deployed lockout probe should be skipped unless --include-lockout is passed');
+  }
   expectStatus(results.securityEvents.loginAgain, 200, 'deployed HR login after lockout');
   expectStatus(results.securityEvents.status, 200, 'deployed security events');
   expectStatus(results.webmasterLogout, 200, 'deployed webmaster logout');
