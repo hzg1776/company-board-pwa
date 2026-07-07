@@ -221,6 +221,20 @@ async function writeScenarioResult(artifactRoot, name, result) {
   await fsp.writeFile(filePath, JSON.stringify(result, null, 2));
 }
 
+function assertSmoke(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function expectStatus(actual, expected, label) {
+  assertSmoke(actual === expected, `${label} expected HTTP ${expected}, received ${actual}`);
+}
+
+function expectAnyStatus(actual, expected, label) {
+  assertSmoke(expected.includes(actual), `${label} expected HTTP ${expected.join(' or ')}, received ${actual}`);
+}
+
 async function runStartupFailureScenario(artifactRoot, name, port, publicBaseUrl, trustedProxyAddresses) {
   const server = await startServer(artifactRoot, name, port, publicBaseUrl, trustedProxyAddresses);
   try {
@@ -252,7 +266,7 @@ async function runAuthSplitScenario(artifactRoot, basePort) {
 
     const hrSetup = await request('/api/hr/setup', {
       method: 'POST',
-      body: { password: 'HrPassword!234', setupToken: 'bootstrap-secret-2026' }
+      body: { username: 'hr', password: 'HrPassword!234', setupToken: 'bootstrap-secret-2026' }
     });
     const hrCookie = cookieValue(hrSetup.setCookie);
     const hrCsrf = hrSetup.body?.csrfToken || '';
@@ -262,7 +276,7 @@ async function runAuthSplitScenario(artifactRoot, basePort) {
       method: 'POST',
       cookie: hrCookie,
       headers: { 'x-csrf-token': hrCsrf },
-      body: { password: 'Webmaster!234' }
+      body: { username: 'webmaster', password: 'Webmaster!234' }
     });
     const webmasterCookie = cookieValue(webmasterSetup.setCookie);
     const webmasterCsrf = webmasterSetup.body?.csrfToken || '';
@@ -276,20 +290,20 @@ async function runAuthSplitScenario(artifactRoot, basePort) {
     const webmasterAfterHrLogout = await request('/api/webmaster/check', { cookie: webmasterCookie });
 
     const lockStatuses = [];
-    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
-    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
-    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
     await delay(5500);
-    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
     await delay(10500);
-    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
     await delay(20500);
-    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
-    const lockout = await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } });
+    lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+    const lockout = await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } });
 
     const hrLoginAgain = await request('/api/hr/login', {
       method: 'POST',
-      body: { password: 'HrPassword!234' }
+      body: { username: 'hr', password: 'HrPassword!234' }
     });
     const hrCookie2 = cookieValue(hrLoginAgain.setCookie);
     const events = await request('/api/security/events?limit=10', { cookie: hrCookie2 });
@@ -323,6 +337,19 @@ async function runAuthSplitScenario(artifactRoot, basePort) {
     };
     results.webmasterLogout = { status: webmasterLogout.status };
 
+    expectStatus(results.hrSetup.status, 201, 'auth_split HR setup');
+    expectStatus(results.webmasterBeforeProvision.status, 200, 'auth_split webmaster check before provision');
+    assertSmoke(results.webmasterBeforeProvision.setupRequired === true, 'auth_split webmaster setup should be required before provision');
+    assertSmoke(results.webmasterBeforeProvision.hrAuthorized === true, 'auth_split HR session should authorize webmaster setup');
+    expectStatus(results.webmasterSetup.status, 201, 'auth_split webmaster setup');
+    assertSmoke(results.webmasterSetup.authorized === true, 'auth_split webmaster setup should authorize webmaster session');
+    expectStatus(results.sessionSplit.hrLogout, 200, 'auth_split HR logout');
+    assertSmoke(results.sessionSplit.webmasterAuthorizedAfterHrLogout === true, 'auth_split webmaster session should survive HR logout');
+    assertSmoke(results.lockout.statuses.includes(429), 'auth_split lockout should eventually throttle bad webmaster logins');
+    assertSmoke(!/username is required/i.test(results.lockout.finalError || ''), 'auth_split lockout should not fail for a missing username');
+    expectStatus(results.securityEvents.status, 200, 'auth_split security events');
+    expectStatus(results.webmasterLogout.status, 200, 'auth_split webmaster logout');
+
     const stderr = await readText(server.stderrPath);
     const securityLogLines = stderr.split(/\r?\n/).filter((line) => line.startsWith('[security]'));
     const result = {
@@ -352,7 +379,7 @@ async function runProxyScenario(artifactRoot, basePort) {
     const request = createRequester(`http://127.0.0.1:${port}`);
     const hrSetup = await request('/api/hr/setup', {
       method: 'POST',
-      body: { password: 'HrPassword!234', setupToken: 'bootstrap-secret-2026' }
+      body: { username: 'hr', password: 'HrPassword!234', setupToken: 'bootstrap-secret-2026' }
     });
     const hrCookie = cookieValue(hrSetup.setCookie);
     const hrCsrf = hrSetup.body?.csrfToken || '';
@@ -360,7 +387,7 @@ async function runProxyScenario(artifactRoot, basePort) {
       method: 'POST',
       cookie: hrCookie,
       headers: { 'x-csrf-token': hrCsrf },
-      body: { password: 'Webmaster!234' }
+      body: { username: 'webmaster', password: 'Webmaster!234' }
     });
     const webmasterCookie = cookieValue(webmasterSetup.setCookie);
 
@@ -379,21 +406,33 @@ async function runProxyScenario(artifactRoot, basePort) {
         'x-forwarded-host': 'evil.example',
         'x-forwarded-proto': 'https'
       },
-      body: { password: 'Webmaster!234' }
+      body: { username: 'webmaster', password: 'Webmaster!234' }
     });
 
-    const result = {
-      result: {
-        summary: {
-          status: summary.status,
-          origin: summary.body?.urls?.origin ?? null,
-          employee: summary.body?.urls?.employee ?? null
-        },
-        spoofedLogin: {
-          status: spoofedLogin.status,
-          error: spoofedLogin.body?.error ?? null
-        }
+    const resultData = {
+      setup: {
+        hr: hrSetup.status,
+        webmaster: webmasterSetup.status
       },
+      summary: {
+        status: summary.status,
+        origin: summary.body?.urls?.origin ?? null,
+        employee: summary.body?.urls?.employee ?? null
+      },
+      spoofedLogin: {
+        status: spoofedLogin.status,
+        error: spoofedLogin.body?.error ?? null
+      }
+    };
+
+    expectStatus(resultData.setup.hr, 201, 'proxy_untrusted HR setup');
+    expectStatus(resultData.setup.webmaster, 201, 'proxy_untrusted webmaster setup');
+    expectStatus(resultData.summary.status, 200, 'proxy_untrusted webmaster summary');
+    assertSmoke(!String(resultData.summary.origin || '').includes('evil.example'), 'proxy_untrusted summary must not trust spoofed host');
+    expectStatus(resultData.spoofedLogin.status, 403, 'proxy_untrusted spoofed webmaster login');
+
+    const result = {
+      result: resultData,
       stdout: await readText(server.stdoutPath),
       stderr: await readText(server.stderrPath),
       runtimeDir: server.runtimeDir
@@ -432,7 +471,7 @@ async function runBroadFlowScenario(artifactRoot, basePort) {
 
     const hrSetup = await request('/api/hr/setup', {
       method: 'POST',
-      body: { password: 'HrPassword!234', setupToken: 'bootstrap-secret-2026' }
+      body: { username: 'hr', password: 'HrPassword!234', setupToken: 'bootstrap-secret-2026' }
     });
     const hrCookie = cookieValue(hrSetup.setCookie);
     const hrCsrf = hrSetup.body?.csrfToken || '';
@@ -472,7 +511,7 @@ async function runBroadFlowScenario(artifactRoot, basePort) {
     const pushConfig = await request('/api/push/config', { cookie: employeeCookie });
     const pushStatusBefore = await request('/api/push/status', { cookie: employeeCookie });
     const subscriptionBody = {
-      endpoint: 'https://push.example.test/device-1',
+      endpoint: 'https://fcm.googleapis.com/fcm/send/smoke-device-1',
       expirationTime: null,
       keys: {
         p256dh: 'sample-public-key',
@@ -523,6 +562,25 @@ async function runBroadFlowScenario(artifactRoot, basePort) {
     };
     results.logouts = { hr: hrLogout.status, employee: employeeLogout.status };
 
+    for (const [pageName, page] of Object.entries(results.pages)) {
+      expectStatus(page.status, 200, `broad_app_flow ${pageName} page`);
+      assertSmoke(page.html === true, `broad_app_flow ${pageName} page should return HTML`);
+    }
+    expectStatus(results.hrSetup.status, 201, 'broad_app_flow HR setup');
+    expectStatus(results.employeeCreate.status, 201, 'broad_app_flow employee create');
+    expectStatus(results.postCreate.status, 201, 'broad_app_flow post create');
+    expectAnyStatus(results.weatherUpdate.status, [200, 502], 'broad_app_flow weather update');
+    expectStatus(results.employeeLogin.status, 200, 'broad_app_flow employee login');
+    assertSmoke(results.employeeLogin.authorized === true, 'broad_app_flow employee login should authorize');
+    expectStatus(results.employeeFeed.postsStatus, 200, 'broad_app_flow employee posts');
+    expectStatus(results.employeeFeed.weatherStatus, 200, 'broad_app_flow employee weather');
+    expectStatus(results.push.configStatus, 200, 'broad_app_flow push config');
+    expectStatus(results.push.statusBefore, 200, 'broad_app_flow push status');
+    expectStatus(results.push.subscribeStatus, 201, 'broad_app_flow push subscribe');
+    expectStatus(results.push.unsubscribeStatus, 200, 'broad_app_flow push unsubscribe');
+    expectStatus(results.logouts.hr, 200, 'broad_app_flow HR logout');
+    expectStatus(results.logouts.employee, 200, 'broad_app_flow employee logout');
+
     const result = {
       result: results,
       stdout: await readText(server.stdoutPath),
@@ -570,6 +628,13 @@ async function main() {
   const summaryPath = path.join(artifactRoot, 'summary.json');
   await fsp.writeFile(summaryPath, JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
+
+  const failures = Object.entries(summary)
+    .filter(([, value]) => value && typeof value === 'object' && value.error)
+    .map(([name, value]) => `${name}: ${value.error}`);
+  if (failures.length) {
+    throw new Error(`Smoke regression failed:\n${failures.join('\n')}`);
+  }
 }
 
 main().then(() => {

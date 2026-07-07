@@ -30,6 +30,20 @@ function cookieValue(header) {
   return header ? String(header).split(';')[0] : '';
 }
 
+function assertSmoke(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function expectStatus(actual, expected, label) {
+  assertSmoke(actual === expected, `${label} expected HTTP ${expected}, received ${actual}`);
+}
+
+function expectAnyStatus(actual, expected, label) {
+  assertSmoke(expected.includes(actual), `${label} expected HTTP ${expected.join(' or ')}, received ${actual}`);
+}
+
 function createRequester(baseUrl) {
   const root = baseUrl.replace(/\/+$/, '');
   return async function request(pathname, { method = 'GET', headers = {}, body, cookie } = {}) {
@@ -73,6 +87,10 @@ async function main() {
   }
 
   const request = createRequester(options.baseUrl);
+  const smokeRunId = Date.now().toString(36);
+  const employeeUsername = `smoke.${smokeRunId}`;
+  const employeeName = `Smoke Employee ${smokeRunId}`;
+  const postTitle = `Smoke Test Notice ${smokeRunId}`;
   const results = {
     baseUrl: options.baseUrl.replace(/\/+$/, '')
   };
@@ -94,7 +112,7 @@ async function main() {
 
   const hrSetup = await request('/api/hr/setup', {
     method: 'POST',
-    body: { password: 'HrPassword!234', setupToken: options.setupToken }
+    body: { username: 'hr', password: 'HrPassword!234', setupToken: options.setupToken }
   });
   const hrCookie = cookieValue(hrSetup.setCookie);
   const hrCsrf = hrSetup.body?.csrfToken || '';
@@ -104,14 +122,14 @@ async function main() {
     method: 'POST',
     cookie: hrCookie,
     headers: { 'x-csrf-token': hrCsrf },
-    body: { name: 'Taylor Employee', username: 'taylor', password: 'Employee!234' }
+    body: { name: employeeName, username: employeeUsername, password: 'Employee!234' }
   });
   const postCreate = await request('/api/posts', {
     method: 'POST',
     cookie: hrCookie,
     headers: { 'x-csrf-token': hrCsrf },
     body: {
-      title: 'Smoke Test Notice',
+      title: postTitle,
       body: 'Employee feed smoke notice.',
       type: 'News',
       priority: 'Important',
@@ -135,7 +153,7 @@ async function main() {
     method: 'POST',
     cookie: hrCookie,
     headers: { 'x-csrf-token': hrCsrf },
-    body: { password: 'Webmaster!234' }
+    body: { username: 'webmaster', password: 'Webmaster!234' }
   });
   const webmasterCookie = cookieValue(webmasterSetup.setCookie);
   const webmasterCsrf = webmasterSetup.body?.csrfToken || '';
@@ -162,7 +180,7 @@ async function main() {
       'x-forwarded-host': 'evil.example',
       'x-forwarded-proto': 'https'
     },
-    body: { password: 'Webmaster!234' }
+    body: { username: 'webmaster', password: 'Webmaster!234' }
   });
   results.proxy = {
     summary: {
@@ -191,7 +209,7 @@ async function main() {
 
   const employeeLogin = await request('/api/employee/login', {
     method: 'POST',
-    body: { username: 'taylor', password: 'Employee!234' }
+    body: { username: employeeUsername, password: 'Employee!234' }
   });
   const employeeCookie = cookieValue(employeeLogin.setCookie);
   const posts = await request('/api/posts', { cookie: employeeCookie });
@@ -199,7 +217,7 @@ async function main() {
   const pushConfig = await request('/api/push/config', { cookie: employeeCookie });
   const pushStatusBefore = await request('/api/push/status', { cookie: employeeCookie });
   const subscriptionBody = {
-    endpoint: 'https://push.example.test/device-1',
+    endpoint: `https://fcm.googleapis.com/fcm/send/${employeeUsername}-device-1`,
     expirationTime: null,
     keys: {
       p256dh: 'sample-public-key',
@@ -242,16 +260,16 @@ async function main() {
   };
 
   const lockStatuses = [];
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
+  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
   await delay(5500);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
+  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
   await delay(10500);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
+  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
   await delay(20500);
-  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } })).status);
-  const lockout = await request('/api/webmaster/login', { method: 'POST', body: { password: 'wrong-pass' } });
+  lockStatuses.push((await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } })).status);
+  const lockout = await request('/api/webmaster/login', { method: 'POST', body: { username: 'webmaster', password: 'wrong-pass' } });
   results.lockout = {
     statuses: [...lockStatuses, lockout.status],
     finalError: lockout.body?.error ?? null
@@ -259,7 +277,7 @@ async function main() {
 
   const hrLoginAgain = await request('/api/hr/login', {
     method: 'POST',
-    body: { password: 'HrPassword!234' }
+    body: { username: 'hr', password: 'HrPassword!234' }
   });
   const hrCookie2 = cookieValue(hrLoginAgain.setCookie);
   const events = await request('/api/security/events?limit=10', { cookie: hrCookie2 });
@@ -275,6 +293,40 @@ async function main() {
     types: Array.isArray(events.body?.events) ? events.body.events.map((event) => event.type) : []
   };
   results.webmasterLogout = webmasterLogout.status;
+
+  expectStatus(results.pages.health.status, 200, 'deployed health');
+  assertSmoke(results.pages.health.ok === true, 'deployed health should report ok');
+  for (const [pageName, page] of Object.entries(results.pages).filter(([pageName]) => pageName !== 'health')) {
+    expectStatus(page.status, 200, `deployed ${pageName} page`);
+    assertSmoke(page.html === true, `deployed ${pageName} page should return HTML`);
+  }
+  expectStatus(results.hrSetup.status, 201, 'deployed HR setup');
+  expectStatus(results.hrWriteFlow.employeeCreate, 201, 'deployed employee create');
+  expectStatus(results.hrWriteFlow.postCreate, 201, 'deployed post create');
+  expectAnyStatus(results.hrWriteFlow.weatherUpdate, [200, 502], 'deployed weather update');
+  expectStatus(results.webmaster.before.status, 200, 'deployed webmaster check before provision');
+  assertSmoke(results.webmaster.before.setupRequired === true, 'deployed webmaster setup should be required before provision');
+  assertSmoke(results.webmaster.before.hrAuthorized === true, 'deployed HR session should authorize webmaster setup');
+  expectStatus(results.webmaster.setup.status, 201, 'deployed webmaster setup');
+  expectStatus(results.proxy.summary.status, 200, 'deployed webmaster summary');
+  assertSmoke(!String(results.proxy.summary.origin || '').includes('evil.example'), 'deployed summary must not trust spoofed host');
+  expectStatus(results.proxy.spoofedLogin.status, 403, 'deployed spoofed webmaster login');
+  expectStatus(results.sessionSplit.hrLogout, 200, 'deployed HR logout');
+  assertSmoke(results.sessionSplit.webmasterAuthorizedAfterHrLogout === true, 'deployed webmaster session should survive HR logout');
+  expectStatus(results.employee.login.status, 200, 'deployed employee login');
+  assertSmoke(results.employee.login.authorized === true, 'deployed employee login should authorize');
+  expectStatus(results.employee.feed.postsStatus, 200, 'deployed employee posts');
+  expectStatus(results.employee.feed.weatherStatus, 200, 'deployed employee weather');
+  expectStatus(results.employee.push.configStatus, 200, 'deployed push config');
+  expectStatus(results.employee.push.statusBefore, 200, 'deployed push status');
+  expectStatus(results.employee.push.subscribeStatus, 201, 'deployed push subscribe');
+  expectStatus(results.employee.push.unsubscribeStatus, 200, 'deployed push unsubscribe');
+  expectStatus(results.employee.logout, 200, 'deployed employee logout');
+  assertSmoke(results.lockout.statuses.includes(429), 'deployed lockout should eventually throttle bad webmaster logins');
+  assertSmoke(!/username is required/i.test(results.lockout.finalError || ''), 'deployed lockout should not fail for a missing username');
+  expectStatus(results.securityEvents.loginAgain, 200, 'deployed HR login after lockout');
+  expectStatus(results.securityEvents.status, 200, 'deployed security events');
+  expectStatus(results.webmasterLogout, 200, 'deployed webmaster logout');
 
   if (options.artifactDir) {
     await fs.mkdir(options.artifactDir, { recursive: true });
