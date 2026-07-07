@@ -997,7 +997,6 @@ Copying this into Codex should give it enough context to trace the site health a
 
 function renderAuthFrame({
   title,
-  eyebrow = "",
   error = "",
   content,
   className = "",
@@ -1012,7 +1011,6 @@ function renderAuthFrame({
         ${brandBlock("", "entry-brand")}
         <div class="panel-title auth-frame-title">
           <div>
-            ${eyebrow ? `<p class="eyebrow auth-frame-eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
             <h2>${escapeHtml(title)}</h2>
           </div>
         </div>
@@ -1026,8 +1024,6 @@ function renderAuthFrame({
 }
 
 function renderAdminAuthFrame({ route, title, error = "", content, footer = "" }) {
-  const routeLabel = route === "webmaster" ? "System Ops admin" : route === "it" ? "IT admin" : "HR admin";
-
   return `
     <main class="admin-auth-shell">
       <section class="admin-auth-card panel-card entry-surface" data-admin-auth-surface="${escapeHtml(route)}">
@@ -1037,7 +1033,6 @@ function renderAdminAuthFrame({ route, title, error = "", content, footer = "" }
               <img class="admin-auth-brand-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
             </div>
             <div class="admin-auth-brand-copy">
-              <p class="eyebrow">${escapeHtml(routeLabel)}</p>
               <h1>${escapeHtml(title)}</h1>
             </div>
           </div>
@@ -2963,7 +2958,6 @@ function renderEmployeeAuthGate() {
 
   return renderAuthFrame({
     title: "Employee sign in",
-    eyebrow: "Employee access",
     error: authError,
     content: `
       <form class="auth-form" data-employee-login-form>

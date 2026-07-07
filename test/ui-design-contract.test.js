@@ -685,6 +685,9 @@ test("entry surfaces keep relocated logo, labels, casing, and touch targets", as
   assert.match(app, /aria-label="\$\{escapeHtml\(canSetup \? "Create username" : "Username"\)\}"/);
   assert.match(app, /<div class="launcher-panel entry-surface">[\s\S]*?<div class="launcher-brand entry-brand"/);
   assert.doesNotMatch(app, /<section class="launcher-stage">\s*<div class="launcher-brand" aria-label/);
+  assert.doesNotMatch(app, /eyebrow: "Employee access"/);
+  assert.doesNotMatch(app, /auth-frame-eyebrow/);
+  assert.doesNotMatch(app, /<p class="eyebrow">\$\{escapeHtml\(routeLabel\)\}<\/p>/);
 
   assert.equal(getDeclarationValue(entryCardBody, "width"), "min(520px, calc(100vw - 36px)) !important");
   assert.equal(getDeclarationValue(entryCardBody, "max-width"), "520px !important");
