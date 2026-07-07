@@ -266,6 +266,18 @@ const state = {
       details: null
     }
   },
+  adminMfaPolicy: {
+    loaded: false,
+    busy: false,
+    policy: {
+      enabled: true,
+      effectiveEnabled: true,
+      environmentEnabled: true,
+      updatedAt: "",
+      updatedBy: "",
+      reason: ""
+    }
+  },
   employeeDirectory: {
     loaded: false,
     employees: []
@@ -1227,6 +1239,7 @@ function csrfTokenForPath(pathname) {
   if (
     route === "/api/it/logout" ||
     route === "/api/it/password" ||
+    route === "/api/it/mfa-policy" ||
     route === "/api/it/admin-users" ||
     route.startsWith("/api/it/admin-users/")
   ) {
@@ -1264,6 +1277,29 @@ function csrfTokenForPath(pathname) {
 
 function normalizeAdminScope(scope = "hr") {
   return scope === "it" ? "it" : scope === "webmaster" ? "webmaster" : "hr";
+}
+
+function defaultAdminMfaPolicy() {
+  return {
+    enabled: true,
+    effectiveEnabled: true,
+    environmentEnabled: true,
+    updatedAt: "",
+    updatedBy: "",
+    reason: ""
+  };
+}
+
+function normalizeAdminMfaPolicy(policy = {}) {
+  return {
+    ...defaultAdminMfaPolicy(),
+    enabled: policy.enabled !== false,
+    effectiveEnabled: policy.effectiveEnabled !== false,
+    environmentEnabled: policy.environmentEnabled !== false,
+    updatedAt: String(policy.updatedAt || ""),
+    updatedBy: String(policy.updatedBy || ""),
+    reason: String(policy.reason || "")
+  };
 }
 
 function adminApiBase(scope = "hr") {
@@ -1627,6 +1663,21 @@ async function refreshWebmasterData() {
   return state.webmaster;
 }
 
+async function loadAdminMfaPolicy() {
+  const probe = await safeTimedRequestJson("/api/it/mfa-policy", {
+    policy: defaultAdminMfaPolicy()
+  });
+
+  state.adminMfaPolicy = {
+    ...state.adminMfaPolicy,
+    loaded: true,
+    busy: false,
+    policy: normalizeAdminMfaPolicy(probe.body.policy)
+  };
+
+  return state.adminMfaPolicy;
+}
+
 async function refreshItData() {
   const access = await loadItAccessStatus();
 
@@ -1635,6 +1686,11 @@ async function refreshItData() {
       loaded: false,
       adminUsers: []
     });
+    state.adminMfaPolicy = {
+      ...state.adminMfaPolicy,
+      loaded: false,
+      busy: false
+    };
     state.securityEvents = {
       loaded: false,
       events: []
@@ -1644,14 +1700,16 @@ async function refreshItData() {
     };
   }
 
-  const [itAdminDirectory, securityEvents] = await Promise.all([
+  const [itAdminDirectory, securityEvents, adminMfaPolicy] = await Promise.all([
     loadAdminDirectory("it"),
-    loadSecurityEvents()
+    loadSecurityEvents(),
+    loadAdminMfaPolicy()
   ]);
 
   return {
     itAdminDirectory,
-    securityEvents
+    securityEvents,
+    adminMfaPolicy
   };
 }
 
@@ -3849,14 +3907,6 @@ function renderAdminSecurityPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("alert")} Security visibility</p>
-          <h2>Recent auth events</h2>
-        </div>
-        <span class="sync-pill">Persisted</span>
-      </div>
-
       <section class="panel-card">
         <div class="panel-title panel-title-wide">
           <div>
@@ -4036,14 +4086,6 @@ function renderWebmasterOverviewPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("chart")} Power Center</p>
-          <h2>Systems Overview</h2>
-        </div>
-        <span class="sync-pill">${icon("check")} Live snapshot</span>
-      </div>
-
       ${renderWebmasterExpandableCard({
         id: "overview-site-snapshot",
         eyebrow: "Site snapshot",
@@ -4121,13 +4163,6 @@ function renderWebmasterTrafficPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("refresh")} Traffic</p>
-          <h2>Request activity</h2>
-        </div>
-      </div>
-
       ${renderWebmasterExpandableCard({
         id: "traffic-summary",
         eyebrow: "Traffic summary",
@@ -4210,13 +4245,6 @@ function renderWebmasterSystemPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("monitor")} System</p>
-          <h2>Host and device diagnostics</h2>
-        </div>
-      </div>
-
       ${renderWebmasterExpandableCard({
         id: "system-runtime",
         eyebrow: "Runtime diagnostics",
@@ -4306,13 +4334,6 @@ function renderWebmasterContentPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("board")} Content</p>
-          <h2>Portal inventory</h2>
-        </div>
-      </div>
-
       ${renderWebmasterExpandableCard({
         id: "content-inventory",
         eyebrow: "Inventory",
@@ -4382,13 +4403,6 @@ function renderWebmasterCodexPanel() {
 
   return `
     <section class="panel-stack">
-      <div class="panel-title panel-title-wide">
-        <div>
-          <p class="eyebrow">${icon("clipboard")} Codex</p>
-          <h2>Copy the incident brief</h2>
-        </div>
-      </div>
-
       ${renderWebmasterExpandableCard({
         id: "codex-brief",
         eyebrow: "Codex transfer",
@@ -4531,6 +4545,48 @@ function renderItCompanySettingsPanel() {
   `;
 }
 
+function renderAdminMfaPolicyPanel() {
+  const policy = normalizeAdminMfaPolicy(state.adminMfaPolicy.policy);
+  const environmentEnabled = policy.environmentEnabled !== false;
+  const configuredEnabled = policy.enabled !== false;
+  const effectiveEnabled = environmentEnabled && configuredEnabled && policy.effectiveEnabled !== false;
+  const statusLabel = !environmentEnabled ? "Server Disabled" : effectiveEnabled ? "Required" : "Disabled";
+  const lastChanged = policy.updatedAt ? formatDate(policy.updatedAt) : "Default";
+  const updatedBy = policy.updatedBy ? `By @${policy.updatedBy}` : "System default";
+
+  return `
+    <section class="panel-card admin-mfa-policy-card">
+      <div class="panel-title panel-title-wide">
+        <div>
+          <p class="eyebrow">${icon("lock")} Security Policy</p>
+          <h3>Admin MFA Requirement</h3>
+        </div>
+        <span class="sync-pill">${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="hero-strip admin-mfa-policy-summary" aria-label="Admin MFA policy summary">
+        ${renderStatCard(effectiveEnabled ? "Required" : "Off", "Enforcement", effectiveEnabled ? "Authenticator challenge active" : "Password-only admin sign-in")}
+        ${renderStatCard(environmentEnabled ? "Ready" : "Off", "Server Override", environmentEnabled ? "Runtime policy controls access" : "ADMIN_MFA_ENABLED is off")}
+        ${renderStatCard(lastChanged, "Last Change", updatedBy)}
+      </div>
+      <form class="auth-form admin-mfa-policy-form" data-admin-mfa-policy-form>
+        <label class="checkbox-row">
+          <input type="checkbox" name="enabled" value="true" ${configuredEnabled ? "checked" : ""} ${state.adminMfaPolicy.busy || !environmentEnabled ? "disabled" : ""}>
+          <span>Require MFA for admin accounts</span>
+        </label>
+        <label class="field">
+          <span>Reason</span>
+          <input name="reason" maxlength="160" value="${escapeHtml(policy.reason || "")}" placeholder="Required when turning off MFA" ${state.adminMfaPolicy.busy || !environmentEnabled ? "disabled" : ""}>
+        </label>
+        <div class="form-actions">
+          <button class="button" type="submit" ${state.adminMfaPolicy.busy || !environmentEnabled ? "disabled" : ""}>
+            ${escapeHtml(state.adminMfaPolicy.busy ? "Saving..." : "Save MFA Control")}
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function renderItEmergencyPanel() {
   const itAdmins = (state.itAdminDirectory.adminUsers || []).filter((adminUser) => Array.isArray(adminUser.roles) && adminUser.roles.includes("it"));
   const activeItAdmins = itAdmins.filter((adminUser) => adminUser.active !== false);
@@ -4567,6 +4623,7 @@ function renderItEmergencyPanel() {
           ${renderStatCard(itMfaLabel, "MFA", itMfaNote)}
         </div>
       </section>
+      ${renderAdminMfaPolicyPanel()}
       ${itMfaAvailable ? renderAdminMfaPanel("it") : ""}
     </section>
   `;
@@ -5353,6 +5410,54 @@ async function handleAdminMfaVerifySubmit(event) {
   clearMessageSoon();
 }
 
+async function handleAdminMfaPolicySubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+  const enabled = formData.get("enabled") !== null;
+  const reason = String(formData.get("reason") || "").trim();
+
+  if (!enabled && !reason) {
+    setMessage("Enter a reason before turning off admin MFA.");
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  state.adminMfaPolicy = {
+    ...state.adminMfaPolicy,
+    busy: true
+  };
+  render();
+
+  try {
+    const result = await requestJson("/api/it/mfa-policy", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled,
+        reason
+      })
+    });
+    state.adminMfaPolicy = {
+      loaded: true,
+      busy: false,
+      policy: normalizeAdminMfaPolicy(result.policy)
+    };
+    clearAdminMfaState("it");
+    await refreshItData();
+    setMessage(enabled ? "Admin MFA requirement is on." : "Admin MFA requirement is off.", "success");
+  } catch (error) {
+    state.adminMfaPolicy = {
+      ...state.adminMfaPolicy,
+      busy: false
+    };
+    setMessage(error.message || "Could not update the MFA requirement.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleCreateAdminSubmit(event) {
   event.preventDefault();
   const form = event.target;
@@ -6017,6 +6122,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-admin-mfa-verify-form]")) {
     await handleAdminMfaVerifySubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-admin-mfa-policy-form]")) {
+    await handleAdminMfaPolicySubmit(event);
     return;
   }
 

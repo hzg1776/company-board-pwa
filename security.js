@@ -680,6 +680,15 @@ function normalizeRecoveryState(input = {}) {
   };
 }
 
+function normalizeAdminMfaPolicy(input = {}) {
+  return {
+    enabled: input.enabled === false ? false : true,
+    updatedAt: cleanText(input.updatedAt, 40),
+    updatedBy: normalizeUsername(input.updatedBy),
+    reason: cleanText(input.reason, 160)
+  };
+}
+
 function normalizeSecurityState(input = {}) {
   const adminUsers = normalizeAdminUsers(input);
   const employees = Array.isArray(input.employees)
@@ -693,6 +702,7 @@ function normalizeSecurityState(input = {}) {
       .map((session) => normalizeEmployeeSession(session))
       .filter((session) => session.id && session.employeeId)
     : [];
+  const adminMfaPolicy = normalizeAdminMfaPolicy(input.adminMfaPolicy);
   const loginGuards = normalizeLoginGuards(input.loginGuards);
   const recovery = normalizeRecoveryState(input.recovery);
   const securityEvents = Array.isArray(input.securityEvents)
@@ -707,6 +717,7 @@ function normalizeSecurityState(input = {}) {
     adminSessions,
     employees,
     employeeSessions,
+    adminMfaPolicy,
     loginGuards,
     recovery,
     securityEvents
@@ -789,6 +800,19 @@ function buildAdminMfaProfile(user = {}, { adminMfaEnabled = true } = {}) {
     enabledAt: cleanText(user.mfaEnabledAt, 40),
     graceUntil,
     status: enabled ? "enabled" : graceActive ? "grace" : "setup-required"
+  };
+}
+
+function publicAdminMfaPolicy(data = {}, serverAdminMfaEnabled = true) {
+  const policy = normalizeAdminMfaPolicy(data.adminMfaPolicy);
+
+  return {
+    enabled: policy.enabled,
+    effectiveEnabled: Boolean(serverAdminMfaEnabled) && policy.enabled,
+    environmentEnabled: Boolean(serverAdminMfaEnabled),
+    updatedAt: policy.updatedAt,
+    updatedBy: policy.updatedBy,
+    reason: policy.reason
   };
 }
 
@@ -1725,12 +1749,22 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
   const HR_RECOVERY_REQUEST_COOLDOWN_MS = 60 * 1000;
   const HR_RECOVERY_MAX_FAILURES = 5;
   const HR_RECOVERY_LOCKOUT_MS = 15 * 60 * 1000;
+  const serverAdminMfaEnabled = Boolean(adminMfaEnabled);
   const mfaOptions = { adminMfaEnabled: Boolean(adminMfaEnabled) };
   const publicAdminAccessUser = (user = {}) => buildPublicAdminAccessUser(user, mfaOptions);
   const publicAdminUserRecord = (user = {}, sessions = [], currentUserId = "") => (
     buildPublicAdminUserRecord(user, sessions, currentUserId, mfaOptions)
   );
   const adminMfaResponse = (session, adminUser, extra = {}) => buildAdminMfaResponse(session, adminUser, extra, mfaOptions);
+
+  function effectiveAdminMfaEnabled(data = {}) {
+    return serverAdminMfaEnabled && normalizeAdminMfaPolicy(data.adminMfaPolicy).enabled;
+  }
+
+  function syncAdminMfaOptions(data = {}) {
+    mfaOptions.adminMfaEnabled = effectiveAdminMfaEnabled(data);
+    return data;
+  }
 
   function assertAdminMfaAvailable() {
     if (!mfaOptions.adminMfaEnabled) {
@@ -1741,7 +1775,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
   async function readStoredState() {
     if (!dataFile) {
       memoryState = normalizeSecurityState(memoryState);
-      return memoryState;
+      return syncAdminMfaOptions(memoryState);
     }
 
     try {
@@ -1753,7 +1787,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
         await writeRuntimeJsonFileAtomic(dataFile, normalized);
       }
 
-      return normalized;
+      return syncAdminMfaOptions(normalized);
     } catch (error) {
       if (isUnsafeRuntimePathError(error)) {
         throw error;
@@ -1761,7 +1795,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
 
       const seed = normalizeSecurityState();
       await writeRuntimeJsonFileAtomic(dataFile, seed);
-      return seed;
+      return syncAdminMfaOptions(seed);
     }
   }
 
@@ -1770,11 +1804,11 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
 
     if (!dataFile) {
       memoryState = normalized;
-      return normalized;
+      return syncAdminMfaOptions(normalized);
     }
 
     await writeRuntimeJsonFileAtomic(dataFile, normalized);
-    return normalized;
+    return syncAdminMfaOptions(normalized);
   }
 
   async function init() {
@@ -2431,6 +2465,54 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       session.updatedAt = session.revokedAt;
       return { removed: true };
     }).then(({ result }) => result);
+  }
+
+  async function getAdminMfaPolicy() {
+    const data = await readSecurityState();
+    return {
+      policy: publicAdminMfaPolicy(data, serverAdminMfaEnabled)
+    };
+  }
+
+  async function updateAdminMfaPolicy(req = {}, {
+    enabled = true,
+    reason = "",
+    userAgent = "",
+    clientIp = ""
+  } = {}) {
+    const nextEnabled = enabled !== false;
+    const reasonText = cleanText(reason, 160);
+
+    if (!nextEnabled && !reasonText) {
+      throw new Error("Reason is required when disabling admin MFA.");
+    }
+
+    return updateData((data) => {
+      const { adminUser } = requireItManagerAccess(data, req);
+      const changedAt = nowIso();
+      data.adminMfaPolicy = normalizeAdminMfaPolicy({
+        enabled: nextEnabled,
+        updatedAt: changedAt,
+        updatedBy: adminUser.username,
+        reason: reasonText
+      });
+
+      const event = appendSecurityEvent(data, createSecurityEvent({
+        type: "admin_mfa_policy_updated",
+        actor: "it",
+        accountKey: adminUser.username,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: nextEnabled ? "mfa-required" : "mfa-disabled",
+        step: reasonText,
+        userAgent
+      }));
+      logSecurityEvent(event);
+
+      return publicAdminMfaPolicy(data, serverAdminMfaEnabled);
+    }).then(({ result }) => ({
+      policy: result
+    }));
   }
 
   async function listSecurityEvents({ limit = 100 } = {}) {
@@ -4754,6 +4836,8 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     checkHrAccess,
     checkWebmasterAccess,
     checkEmployeeAccess,
+    getAdminMfaPolicy,
+    updateAdminMfaPolicy,
     authenticateEmployee,
     logoutEmployee,
     listSecurityEvents,

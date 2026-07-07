@@ -866,7 +866,7 @@ test(
         };
       })()
     `);
-    await waitForCondition(session, "document.body.innerText.includes('Systems Overview')");
+    await waitForCondition(session, "document.body.innerText.includes('Routes, access, and latest update')");
 
     const webmasterScreen = await evaluateExpression(session, `
       ({
@@ -876,7 +876,9 @@ test(
     `);
 
     assert.equal(webmasterScreen.hasAuthForm, false);
-    assert.ok(String(webmasterScreen.text).includes("Systems Overview"));
+    assert.ok(String(webmasterScreen.text).includes("Routes, access, and latest update"));
+    assert.ok(!String(webmasterScreen.text).includes("Power Center"));
+    assert.ok(!String(webmasterScreen.text).includes("Live snapshot"));
 
     const webmasterStatus = await evaluateExpression(session, `
       (async () => {
@@ -959,7 +961,7 @@ test(
         return true;
       })()
     `);
-    await waitForCondition(session, "document.body.innerText.includes('Systems Overview')");
+    await waitForCondition(session, "document.body.innerText.includes('Routes, access, and latest update')");
     await evaluateExpression(session, `
       (() => {
         const settingsButton = Array.from(document.querySelectorAll('[data-tab]'))

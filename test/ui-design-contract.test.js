@@ -161,6 +161,17 @@ test("HR users panel exposes JSON and YAML employee batch upload controls", asyn
   assert.doesNotMatch(app, /lgfeller@palzivna\.com/);
 });
 
+test("IT emergency panel exposes the protected admin MFA policy control", async () => {
+  const app = await loadClientApp();
+
+  assert.match(app, /data-admin-mfa-policy-form/);
+  assert.match(app, /\/api\/it\/mfa-policy/);
+  assert.match(app, /Require MFA for admin accounts/);
+  assert.match(app, /renderAdminMfaPolicyPanel/);
+  assert.doesNotMatch(app, /\/api\/hr\/mfa-policy/);
+  assert.doesNotMatch(app, /\/api\/webmaster\/mfa-policy/);
+});
+
 test("global compact rows share consistent text and icon spacing", async () => {
   const css = await loadStylesheet();
   const rootBody = getLastSelectorBody(css, ":root");
@@ -209,6 +220,11 @@ test("global operational layout prevents clipping and mobile overflow", async ()
     css,
     "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.hero-strip,\\s*\\.hero-strip-admin,\\s*\\.hero-strip-hr,\\s*\\.hero-strip-webmaster,\\s*\\.panel-metrics"
   );
+  const finalHeroStripBody = getLastRuleBody(
+    css,
+    "\\.hero-strip,\\s*\\.hero-strip-admin,\\s*\\.hero-strip-hr,\\s*\\.hero-strip-webmaster,\\s*\\.panel-metrics"
+  );
+  const statCardBody = getLastRuleBody(css, "\\.stat-card,\\s*\\.webmaster-shell \\.hero-strip \\.stat-card");
   const roleCheckboxBody = getLastSelectorBody(css, ".admin-role-checkbox");
   const tableWrapBody = getLastSelectorBody(css, ".admin-table-wrap");
   const weatherTempBody = getLastRuleBody(css, "(?:^|\\r?\\n)\\.employee-weather-temperature");
@@ -239,10 +255,38 @@ test("global operational layout prevents clipping and mobile overflow", async ()
   assert.equal(getDeclarationValue(mobileTabBarBody, "overflow"), "visible");
   assert.equal(getDeclarationValue(mobileTabBarBody, "margin-bottom"), "10px");
   assert.equal(getDeclarationValue(mobilePageActionsBody, "grid-template-columns"), "repeat(auto-fit, minmax(0, 1fr)) !important");
-  assert.equal(getDeclarationValue(mobileHeroStripBody, "grid-template-columns"), "repeat(2, minmax(0, 1fr))");
+  assert.equal(getDeclarationValue(finalHeroStripBody, "display"), "flex");
+  assert.equal(getDeclarationValue(finalHeroStripBody, "flex-wrap"), "wrap");
+  assert.equal(getDeclarationValue(finalHeroStripBody, "align-items"), "flex-start");
+  assert.equal(getDeclarationValue(finalHeroStripBody, "justify-content"), "center");
+  assert.equal(getDeclarationValue(statCardBody, "width"), "auto !important");
+  assert.equal(getDeclarationValue(statCardBody, "height"), "auto !important");
+  assert.equal(getDeclarationValue(statCardBody, "min-height"), "auto !important");
+  assert.equal(getDeclarationValue(mobileHeroStripBody, "grid-template-columns"), "none");
+  assert.equal(getDeclarationValue(mobileHeroStripBody, "justify-content"), "center");
   assert.equal(getDeclarationValue(mobileHeroStripBody, "gap"), "6px");
-  assert.equal(hasSelectorDeclaration(css, ".stat-card", "min-height", "58px"), true);
+  assert.equal(hasSelectorDeclaration(css, ".stat-card", "min-height", "58px"), false);
   assert.equal(hasSelectorDeclaration(css, ".stat-card", "padding", "10px\\s+12px"), true);
+});
+
+test("radio and checkbox choices align horizontally", async () => {
+  const css = await loadStylesheet();
+  const roleEditorBody = getLastSelectorBody(css, ".admin-role-editor");
+  const roleChoiceBody = getLastRuleBody(css, "\\.admin-role-checkbox,\\s*\\.checkbox-row");
+  const choiceInputBody = getLastRuleBody(
+    css,
+    "\\.admin-role-checkbox input\\[type=\"radio\"\\],\\s*\\.checkbox-row input\\[type=\"checkbox\"\\]"
+  );
+
+  assert.equal(getDeclarationValue(roleEditorBody, "display"), "flex");
+  assert.equal(getDeclarationValue(roleEditorBody, "flex-wrap"), "wrap");
+  assert.equal(getDeclarationValue(roleEditorBody, "align-items"), "center");
+  assert.equal(getDeclarationValue(roleChoiceBody, "display"), "inline-flex");
+  assert.equal(getDeclarationValue(roleChoiceBody, "align-items"), "center");
+  assert.equal(getDeclarationValue(roleChoiceBody, "gap"), "var(--ui-icon-gap)");
+  assert.equal(getDeclarationValue(choiceInputBody, "width"), "18px !important");
+  assert.equal(getDeclarationValue(choiceInputBody, "min-height"), "18px !important");
+  assert.equal(getDeclarationValue(choiceInputBody, "margin"), "0");
 });
 
 test("stylesheet rounds visible operational corners", async () => {
@@ -404,10 +448,10 @@ test("all logo surfaces keep compact readable brand geometry", async () => {
   assert.equal(getDeclarationValue(logoTextBody, "text-transform"), "none !important");
   assert.equal(getDeclarationValue(logoTextBody, "white-space"), "normal !important");
 
-  assert.equal(getDeclarationValue(authAdminDiscBody, "width"), "58px !important");
-  assert.equal(getDeclarationValue(authAdminDiscBody, "height"), "58px !important");
-  assert.equal(getDeclarationValue(authAdminLogoBody, "width"), "42px !important");
-  assert.equal(getDeclarationValue(authAdminLogoBody, "height"), "42px !important");
+  assert.equal(getDeclarationValue(authAdminDiscBody, "width"), "76px !important");
+  assert.equal(getDeclarationValue(authAdminDiscBody, "height"), "76px !important");
+  assert.equal(getDeclarationValue(authAdminLogoBody, "width"), "60px !important");
+  assert.equal(getDeclarationValue(authAdminLogoBody, "height"), "60px !important");
   assert.equal(getDeclarationValue(rawLogoBody, "width"), "58px !important");
   assert.equal(getDeclarationValue(rawLogoBody, "height"), "58px !important");
 });
@@ -611,6 +655,18 @@ test("entry surfaces keep relocated logo, labels, casing, and touch targets", as
     css,
     ".auth-gate-card.entry-surface .auth-form .auth-form-actions .button"
   );
+  const authCardTextBody = getLastRuleBody(
+    css,
+    "\\.entry-surface\\.auth-gate-card,\\s*\\.entry-surface\\.admin-auth-card,\\s*\\.launcher-panel\\.entry-surface"
+  );
+  const authFieldBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface \\.auth-form \\.field,\\s*\\.admin-auth-card\\.entry-surface \\.admin-auth-form \\.field"
+  );
+  const authInputBody = getLastRuleBody(
+    css,
+    "\\.auth-gate-card\\.entry-surface input,\\s*\\.admin-auth-card\\.entry-surface input"
+  );
   const entryFooterActionBody = getLastRuleBody(
     css,
     "\\.entry-surface \\.auth-inline-action,\\s*\\.entry-surface \\.admin-auth-footer \\.auth-inline-action"
@@ -655,8 +711,12 @@ test("entry surfaces keep relocated logo, labels, casing, and touch targets", as
   assert.equal(getDeclarationValue(employeeLoginButtonBody, "justify-self"), "stretch !important");
   assert.equal(getDeclarationValue(employeeLoginButtonBody, "width"), "100% !important");
   assert.equal(getDeclarationValue(employeeLoginButtonBody, "justify-content"), "center !important");
+  assert.equal(getDeclarationValue(authCardTextBody, "text-align"), "center !important");
+  assert.equal(getDeclarationValue(authFieldBody, "text-align"), "center !important");
+  assert.equal(getDeclarationValue(authInputBody, "text-align"), "center !important");
   assert.equal(getDeclarationValue(entryLabelBody, "display"), "block");
   assert.equal(getDeclarationValue(entryLabelBody, "font-weight"), "700 !important");
+  assert.equal(getDeclarationValue(entryLabelBody, "text-align"), "center !important");
   assert.equal(getDeclarationValue(entryFooterActionBody, "min-height"), "44px !important");
   assert.equal(getDeclarationValue(employeeLaunchBody, "color"), "var(--tone-info-text) !important");
   assert.equal(getDeclarationValue(hrLaunchBody, "color"), "var(--tone-success-text) !important");
@@ -769,8 +829,9 @@ test("all operational pages share final readable controls, pills, and card geome
   assert.equal(getDeclarationValue(mobilePillBody, "font-size"), "0.86rem !important");
 });
 
-test("webmaster overview aligns the shell, cards, and snapshot badge", async () => {
+test("webmaster overview aligns the shell and omits redundant section banners", async () => {
   const css = await loadStylesheet();
+  const app = await loadClientApp();
   const allPageLayerStart = css.indexOf("/* All-page consistency pass. */");
   const allPageLayerMediaStart = css.indexOf("@media (max-width: 720px)", allPageLayerStart);
   const desktopCss = css.slice(allPageLayerStart, allPageLayerMediaStart);
@@ -784,18 +845,17 @@ test("webmaster overview aligns the shell, cards, and snapshot badge", async () 
     "\\.page-shell\\.webmaster-shell \\.page-head,\\s*\\.page-shell\\.webmaster-shell \\.hero-strip,\\s*\\.page-shell\\.webmaster-shell \\.tab-bar,\\s*\\.page-shell\\.webmaster-shell \\.panel-stack"
   );
   const finalWebmasterHeadBody = getLastSelectorBody(finalGridDesktopCss, ".page-shell.webmaster-shell .page-head");
-  const webmasterPanelTitleBody = getLastSelectorBody(desktopCss, ".page-shell.webmaster-shell .panel-title-wide");
-  const webmasterPanelPillBody = getLastSelectorBody(desktopCss, ".page-shell.webmaster-shell .panel-title-wide .sync-pill");
   const finalMobileWebmasterHeadBody = getLastSelectorBody(finalGridMobileCss, ".page-shell.webmaster-shell .page-head");
-  const mobilePanelTitleBody = getLastRuleBody(
-    css,
-    "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell\\.webmaster-shell \\.panel-title-wide"
-  );
   const mobileActionsBody = getLastRuleBody(
     css,
     "@media \\(max-width: 720px\\)\\s*\\{[\\s\\S]*?\\.page-shell\\.webmaster-shell \\.page-head \\.page-actions"
   );
 
+  assert.doesNotMatch(app, /Power Center/);
+  assert.doesNotMatch(app, /Live snapshot/);
+  assert.doesNotMatch(app, /Security visibility/);
+  assert.doesNotMatch(app, /Host and device diagnostics/);
+  assert.doesNotMatch(app, /Portal inventory/);
   assert.equal(getDeclarationValue(webmasterShellBody, "width"), "min(1440px, calc(100vw - 96px)) !important");
   assert.equal(getDeclarationValue(webmasterContentBody, "width"), "min(100%, 1204px)");
   assert.equal(getDeclarationValue(webmasterContentBody, "margin-inline"), "auto");
@@ -804,12 +864,8 @@ test("webmaster overview aligns the shell, cards, and snapshot badge", async () 
   assert.equal(getDeclarationValue(finalWebmasterHeadBody, "grid-template-columns"), "max-content auto !important");
   assert.equal(getDeclarationValue(finalWebmasterHeadBody, "justify-self"), "center !important");
   assert.equal(getDeclarationValue(finalWebmasterHeadBody, "margin-inline"), "auto !important");
-  assert.equal(getDeclarationValue(webmasterPanelTitleBody, "grid-template-columns"), "minmax(0, 1fr) auto");
-  assert.equal(getDeclarationValue(webmasterPanelTitleBody, "width"), "min(100%, 1204px)");
-  assert.equal(getDeclarationValue(webmasterPanelPillBody, "justify-self"), "end");
   assert.equal(getDeclarationValue(finalMobileWebmasterHeadBody, "width"), "100% !important");
   assert.equal(getDeclarationValue(finalMobileWebmasterHeadBody, "justify-self"), "stretch !important");
-  assert.equal(getDeclarationValue(mobilePanelTitleBody, "grid-template-columns"), "1fr");
   assert.equal(getDeclarationValue(mobileActionsBody, "display"), "grid");
   assert.equal(getDeclarationValue(mobileActionsBody, "grid-template-columns"), "repeat(2, minmax(0, 1fr)) !important");
 });

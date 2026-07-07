@@ -2956,22 +2956,26 @@ body[data-route="admin"] {
 }
 
 .hero-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
   gap: 10px;
 }
 
 .hero-strip-admin,
 .hero-strip-hr {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: none;
 }
 
 .hero-strip-webmaster {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: none;
 }
 
 .stat-card {
-  min-height: 92px;
+  width: auto;
+  height: auto;
+  min-height: auto;
   padding: 14px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(232, 236, 239, 0.98)),
@@ -3119,6 +3123,10 @@ body[data-route="admin"] {
   box-shadow: var(--shadow);
 }
 
+.admin-mfa-policy-form {
+  margin-top: 12px;
+}
+
 .panel-title-wide {
   display: flex;
   align-items: flex-start;
@@ -3163,7 +3171,7 @@ body[data-route="admin"] {
 }
 
 .weather-card .panel-metrics .stat-card {
-  min-height: 84px;
+  min-height: auto;
 }
 
 .field.inline {
@@ -3182,7 +3190,7 @@ body[data-route="admin"] {
 
 .hero-strip .stat-card,
 .panel-metrics .stat-card {
-  min-height: 88px;
+  min-height: auto;
 }
 
 .webmaster-shell .panel-card {
@@ -4248,13 +4256,19 @@ body[data-route="admin"] {
 
   .hr-shell .hero-strip,
   .hr-shell .hero-strip-hr {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    grid-template-columns: none;
     gap: 8px;
   }
 
   .hr-shell .hero-strip .stat-card,
   .hr-shell .hero-strip-hr .stat-card {
-    min-height: 74px;
+    width: auto;
+    height: auto;
+    min-height: auto;
     padding: 10px;
     border-radius: var(--radius-soft);
   }
@@ -4752,7 +4766,9 @@ h1,
 }
 
 .stat-card {
-  min-height: 86px;
+  width: auto;
+  height: auto;
+  min-height: auto;
   padding: 14px 16px;
 }
 
@@ -6524,7 +6540,9 @@ textarea {
 }
 
 .stat-card {
-  min-height: 76px;
+  width: auto;
+  height: auto;
+  min-height: auto;
   padding: var(--ui-card-padding);
 }
 
@@ -6539,6 +6557,45 @@ textarea {
 
 .employee-weather-temperature {
   line-height: 1.18;
+}
+
+.admin-role-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-row-gap);
+}
+
+.admin-role-chip-row {
+  align-items: center;
+}
+
+.admin-role-checkbox,
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-icon-gap);
+  width: max-content;
+  max-width: 100%;
+  margin-top: 0;
+  line-height: var(--ui-compact-line-height);
+}
+
+.admin-role-checkbox input[type="radio"],
+.checkbox-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 18px !important;
+  min-width: 18px;
+  height: 18px !important;
+  min-height: 18px !important;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--steel);
+}
+
+.admin-role-editor .ghost-button {
+  flex: 0 0 auto;
+  justify-self: auto;
 }
 
 .admin-role-checkbox {
@@ -6607,12 +6664,18 @@ textarea {
   .hero-strip-hr,
   .hero-strip-webmaster,
   .panel-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    grid-template-columns: none;
     gap: 8px;
   }
 
   .stat-card {
-    min-height: 64px;
+    width: auto;
+    height: auto;
+    min-height: auto;
     padding: 10px 12px;
   }
 
@@ -6757,12 +6820,21 @@ body {
 .hero-strip-hr,
 .hero-strip-webmaster,
 .panel-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  grid-template-columns: none;
   gap: 8px;
 }
 
 .stat-card,
 .webmaster-shell .hero-strip .stat-card {
-  min-height: 62px;
+  flex: 0 1 auto;
+  width: auto !important;
+  max-width: 100%;
+  height: auto !important;
+  min-height: auto !important;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
@@ -6986,13 +7058,19 @@ body {
   .hero-strip-hr,
   .hero-strip-webmaster,
   .panel-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    grid-template-columns: none;
     gap: 6px;
   }
 
   .stat-card,
   .webmaster-shell .hero-strip .stat-card {
-    min-height: 58px;
+    width: auto !important;
+    height: auto !important;
+    min-height: auto !important;
     padding: 9px 10px;
   }
 
@@ -7765,6 +7843,7 @@ body {
   display: block;
   margin-bottom: 6px;
   font-weight: 700 !important;
+  text-align: center !important;
 }
 
 .entry-surface .auth-inline-action,
@@ -7839,27 +7918,6 @@ body {
 .page-shell.webmaster-shell .panel-stack {
   width: min(100%, 1204px);
   margin-inline: auto;
-}
-
-.page-shell.webmaster-shell .panel-title-wide {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 16px;
-  width: min(100%, 1204px);
-  margin: 18px auto 12px;
-  padding-inline: clamp(8px, 2vw, 24px);
-}
-
-.page-shell.webmaster-shell .panel-title-wide > div {
-  min-width: 0;
-  text-align: center;
-}
-
-.page-shell.webmaster-shell .panel-title-wide .sync-pill {
-  justify-self: end;
-  align-self: center;
-  white-space: nowrap !important;
 }
 
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) :is(
@@ -8103,18 +8161,6 @@ body {
 @media (max-width: 720px) {
   .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) {
     width: min(100%, calc(100vw - 16px)) !important;
-  }
-
-  .page-shell.webmaster-shell .panel-title-wide {
-    grid-template-columns: 1fr;
-    align-items: center;
-    gap: 10px;
-    padding-inline: 4px;
-    text-align: center;
-  }
-
-  .page-shell.webmaster-shell .panel-title-wide .sync-pill {
-    justify-self: center;
   }
 
   .page-shell.webmaster-shell .page-head {
@@ -8472,6 +8518,7 @@ body {
   gap: 10px !important;
   padding: 16px !important;
   align-items: center !important;
+  text-align: center !important;
 }
 
 .auth-gate-card.entry-surface {
@@ -8530,6 +8577,12 @@ body {
 .admin-auth-card.entry-surface .admin-auth-form .field {
   min-width: 0;
   margin: 0 !important;
+  text-align: center !important;
+}
+
+.auth-gate-card.entry-surface input,
+.admin-auth-card.entry-surface input {
+  text-align: center !important;
 }
 
 .auth-gate-card.entry-surface .auth-form .auth-form-actions {
@@ -8588,16 +8641,16 @@ body {
   text-align: center !important;
 }
 
-.admin-auth-card.entry-surface .admin-auth-brand-disc,
-.auth-gate-card.entry-surface .brand-logo-disc {
-  width: 52px !important;
-  height: 52px !important;
+.auth-gate-card.entry-surface .brand-logo-disc,
+.admin-auth-card.entry-surface .admin-auth-brand-disc {
+  width: 76px !important;
+  height: 76px !important;
 }
 
-.admin-auth-card.entry-surface .admin-auth-brand-logo,
-.auth-gate-card.entry-surface .brand-lockup-logo {
-  width: 38px !important;
-  height: 38px !important;
+.auth-gate-card.entry-surface .brand-lockup-logo,
+.admin-auth-card.entry-surface .admin-auth-brand-logo {
+  width: 60px !important;
+  height: 60px !important;
 }
 
 .launcher-panel.entry-surface {
@@ -8772,6 +8825,7 @@ body {
     width: calc(100vw - 24px) !important;
     max-width: calc(100vw - 24px) !important;
     padding: 14px !important;
+    text-align: center !important;
   }
 
   .auth-gate-card.entry-surface,

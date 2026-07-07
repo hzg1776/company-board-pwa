@@ -2193,6 +2193,188 @@ test("server can explicitly disable admin MFA for emergency local recovery", asy
   assert.equal(Boolean(loginBody.user?.mfa?.available), false);
 });
 
+test("IT can temporarily disable and re-enable admin MFA enforcement without deleting secrets", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-mfa-policy-toggle-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupItAccess({
+    username: "it",
+    password: "OwnerSecret1!",
+    userAgent: "test"
+  });
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const hrLoginBeforeMfa = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(hrLoginBeforeMfa.status, 200);
+  const hrLoginBeforeMfaBody = await hrLoginBeforeMfa.json();
+  assert.equal(Boolean(hrLoginBeforeMfaBody.authorized), true);
+  const hrCookie = readSetCookie(hrLoginBeforeMfa);
+
+  const deniedHrPolicyChange = await fetch(`${server.baseUrl}/api/it/mfa-policy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrLoginBeforeMfaBody.csrfToken
+    },
+    body: JSON.stringify({
+      enabled: false,
+      reason: "hr should not control it security policy"
+    })
+  });
+  assert.equal(deniedHrPolicyChange.status, 401);
+
+  const seededState = await provisionStore.readSecurityState();
+  const hrUser = seededState.adminUsers.find((adminUser) => adminUser.username === "hr.owner");
+  hrUser.mfaSecret = "JBSWY3DPEHPK3PXP";
+  hrUser.mfaEnabledAt = "2026-06-22T12:00:00.000Z";
+  hrUser.mfaGraceUntil = "";
+  await provisionStore.writeData(seededState);
+
+  const challengedLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(challengedLogin.status, 200);
+  const challengedLoginBody = await challengedLogin.json();
+  assert.equal(Boolean(challengedLoginBody.authorized), false);
+  assert.equal(Boolean(challengedLoginBody.mfaRequired), true);
+  assert.equal(challengedLoginBody.mfaMode, "verify");
+
+  const itLogin = await fetch(`${server.baseUrl}/api/it/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "it",
+      password: "OwnerSecret1!"
+    })
+  });
+  assert.equal(itLogin.status, 200);
+  const itBody = await itLogin.json();
+  assert.equal(Boolean(itBody.authorized), true);
+  const itCookie = readSetCookie(itLogin);
+
+  const initialPolicy = await fetch(`${server.baseUrl}/api/it/mfa-policy`, {
+    headers: {
+      Cookie: itCookie
+    }
+  });
+  assert.equal(initialPolicy.status, 200);
+  const initialPolicyBody = await initialPolicy.json();
+  assert.equal(Boolean(initialPolicyBody.policy?.enabled), true);
+  assert.equal(Boolean(initialPolicyBody.policy?.effectiveEnabled), true);
+
+  const disablePolicy = await fetch(`${server.baseUrl}/api/it/mfa-policy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      enabled: false,
+      reason: "temporary test group rollout support"
+    })
+  });
+  assert.equal(disablePolicy.status, 200);
+  const disablePolicyBody = await disablePolicy.json();
+  assert.equal(Boolean(disablePolicyBody.policy?.enabled), false);
+  assert.equal(Boolean(disablePolicyBody.policy?.effectiveEnabled), false);
+  assert.equal(disablePolicyBody.policy?.reason, "temporary test group rollout support");
+
+  const bypassedLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(bypassedLogin.status, 200);
+  const bypassedLoginBody = await bypassedLogin.json();
+  assert.equal(Boolean(bypassedLoginBody.authorized), true);
+  assert.equal(Boolean(bypassedLoginBody.mfaRequired), false);
+  assert.equal(Boolean(bypassedLoginBody.user?.mfa?.available), false);
+
+  const disabledState = await provisionStore.readSecurityState();
+  const disabledHrUser = disabledState.adminUsers.find((adminUser) => adminUser.username === "hr.owner");
+  assert.equal(disabledHrUser.mfaSecret, "JBSWY3DPEHPK3PXP");
+  assert.equal(disabledState.securityEvents.some((event) => event.type === "admin_mfa_policy_updated"), true);
+
+  const enablePolicy = await fetch(`${server.baseUrl}/api/it/mfa-policy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    },
+    body: JSON.stringify({
+      enabled: true,
+      reason: "restore default requirement"
+    })
+  });
+  assert.equal(enablePolicy.status, 200);
+  const enablePolicyBody = await enablePolicy.json();
+  assert.equal(Boolean(enablePolicyBody.policy?.enabled), true);
+  assert.equal(Boolean(enablePolicyBody.policy?.effectiveEnabled), true);
+
+  const rechallengedLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(rechallengedLogin.status, 200);
+  const rechallengedLoginBody = await rechallengedLogin.json();
+  assert.equal(Boolean(rechallengedLoginBody.authorized), false);
+  assert.equal(Boolean(rechallengedLoginBody.mfaRequired), true);
+  assert.equal(rechallengedLoginBody.mfaMode, "verify");
+});
+
 test("server rejects runtime data files outside the managed runtime directory", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-runtime-paths-"));
   const runtimeDataDir = path.join(tempDir, "runtime-data");

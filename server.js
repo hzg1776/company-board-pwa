@@ -1742,6 +1742,28 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "GET" && isItApiPath("mfa-policy")) {
+      if (!(await requireItAccess(req, res))) return;
+
+      const result = await securityStore.getAdminMfaPolicy();
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && isItApiPath("mfa-policy")) {
+      if (!(await requireItMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.updateAdminMfaPolicy(req, {
+        enabled: body.enabled !== false,
+        reason: body.reason,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && isItApiPath("mfa", "enroll")) {
       if (!requireSameOrigin(req, res)) return;
 
