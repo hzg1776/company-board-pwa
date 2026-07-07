@@ -681,7 +681,13 @@ test("entry surfaces keep relocated logo, labels, casing, and touch targets", as
   assert.match(app, /brandBlock\("", "entry-brand"\)/);
   assert.match(app, /class="admin-auth-card panel-card entry-surface"/);
   assert.match(app, /class="admin-auth-brand entry-brand"/);
-  assert.match(app, /<input name="username" maxlength="80" required autocomplete="username" aria-label="Username">/);
+  assert.match(app, /const employeeAutocompleteSection = loginAutocompleteSection\("employee"\);/);
+  assert.match(app, /autocomplete="\$\{escapeHtml\(employeeAutocompleteSection\)\} username" aria-label="Username"/);
+  assert.match(app, /autocomplete="\$\{escapeHtml\(employeeAutocompleteSection\)\} current-password"/);
+  assert.match(app, /const adminAutocompleteSection = loginAutocompleteSection\(normalizedRoute\);/);
+  assert.match(app, /const adminPasswordAutocomplete = canSetup \? "new-password" : "current-password";/);
+  assert.match(app, /autocomplete="\$\{escapeHtml\(adminAutocompleteSection\)\} username" aria-label="\$\{escapeHtml\(canSetup \? "Create username" : "Username"\)\}"/);
+  assert.match(app, /autocomplete="\$\{escapeHtml\(adminAutocompleteSection\)\} \$\{escapeHtml\(adminPasswordAutocomplete\)\}"/);
   assert.match(app, /aria-label="\$\{escapeHtml\(canSetup \? "Create username" : "Username"\)\}"/);
   assert.match(app, /<div class="launcher-panel entry-surface">[\s\S]*?<div class="launcher-brand entry-brand"/);
   assert.doesNotMatch(app, /<section class="launcher-stage">\s*<div class="launcher-brand" aria-label/);

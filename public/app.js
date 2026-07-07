@@ -2953,8 +2953,14 @@ function renderAccessPinPanel() {
   });
 }
 
+function loginAutocompleteSection(route = "employee") {
+  const normalizedRoute = route === "it" ? "it" : route === "webmaster" ? "webmaster" : route === "hr" ? "hr" : "employee";
+  return `section-${normalizedRoute}`;
+}
+
 function renderEmployeeAuthGate() {
   const authError = state.access.employee.error || state.message;
+  const employeeAutocompleteSection = loginAutocompleteSection("employee");
 
   return renderAuthFrame({
     title: "Employee sign in",
@@ -2963,11 +2969,11 @@ function renderEmployeeAuthGate() {
       <form class="auth-form" data-employee-login-form>
         <label class="field">
           <span>Username</span>
-          <input name="username" maxlength="80" required autocomplete="username" aria-label="Username">
+          <input name="username" maxlength="80" required autocomplete="${escapeHtml(employeeAutocompleteSection)} username" aria-label="Username">
         </label>
         <label class="field">
           <span>Password</span>
-          <input name="password" type="password" minlength="10" required autocomplete="current-password">
+          <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(employeeAutocompleteSection)} current-password">
         </label>
         <div class="auth-form-actions">
           <button class="button" type="submit">Sign In</button>
@@ -3093,9 +3099,11 @@ function renderAdminAuthGate(route) {
   const normalizedRoute = route === "it" ? "it" : route === "webmaster" ? "webmaster" : "hr";
   const access = state.access[normalizedRoute] || state.access.hr;
   const sectionTitle = normalizedRoute === "it" ? "IT" : normalizedRoute === "webmaster" ? "System Ops" : "HR";
+  const adminAutocompleteSection = loginAutocompleteSection(normalizedRoute);
   const inviteToken = currentInviteToken();
   const authError = access.error || state.message;
   const canSetup = normalizedRoute === "it" || normalizedRoute === "hr" ? access.setupRequired : (access.setupRequired && access.hrAuthorized);
+  const adminPasswordAutocomplete = canSetup ? "new-password" : "current-password";
   const setupBlocked = normalizedRoute === "webmaster" && access.setupRequired && !access.hrAuthorized;
   const recoveryMode = normalizedRoute === "hr"
     ? state.authRecovery.hr
@@ -3165,11 +3173,11 @@ function renderAdminAuthGate(route) {
           ` : ""}
           <label class="field">
             <span>${escapeHtml(canSetup ? "Create username" : "Username")}</span>
-            <input name="username" maxlength="80" required autocomplete="username" aria-label="${escapeHtml(canSetup ? "Create username" : "Username")}">
+            <input name="username" maxlength="80" required autocomplete="${escapeHtml(adminAutocompleteSection)} username" aria-label="${escapeHtml(canSetup ? "Create username" : "Username")}">
           </label>
           <label class="field">
             <span>${escapeHtml(canSetup ? "Create password" : "Password")}</span>
-            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(canSetup ? "new-password" : "current-password")}">
+            <input name="password" type="password" minlength="10" required autocomplete="${escapeHtml(adminAutocompleteSection)} ${escapeHtml(adminPasswordAutocomplete)}">
           </label>
           <button class="button admin-auth-submit" type="submit">${escapeHtml(canSetup ? "Save Credentials" : "Sign In")}</button>
         </form>
