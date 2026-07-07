@@ -2008,17 +2008,9 @@ test("client app exposes direct launcher logins without a dedicated admin gatewa
   assert.match(appSource, /href="\$\{escapeHtml\(routePath\(route\)\)\}" data-route="\$\{escapeHtml\(route\)\}"/);
 });
 
-test("client app does not ship placeholder helper text in username or password inputs", async () => {
+test("client app does not ship placeholder helper text in live forms", async () => {
   const appSource = await readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
-  const credentialInputs = Array.from(
-    appSource.matchAll(/<input\b[^>]*(?:name="username"|type="password")[^>]*>/g)
-  ).map((match) => match[0]);
-
-  assert.ok(credentialInputs.length > 0);
-
-  for (const inputMarkup of credentialInputs) {
-    assert.doesNotMatch(inputMarkup, /\splaceholder=/);
-  }
+  assert.doesNotMatch(appSource, /\splaceholder=/);
 });
 
 test("client app does not ship static explanatory copy across the live screens", async () => {

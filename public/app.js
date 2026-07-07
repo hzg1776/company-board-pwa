@@ -3371,7 +3371,7 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
           <div class="admin-identity-grid">
             <label class="field">
               <span>Display name</span>
-              <input name="displayName" maxlength="120" required value="${escapeHtml(adminUser.displayName || "")}" placeholder="Admin name">
+              <input name="displayName" maxlength="120" required value="${escapeHtml(adminUser.displayName || "")}">
             </label>
           </div>
           <button class="ghost-button" type="submit">${icon("check")} Save Identity</button>
@@ -3506,7 +3506,7 @@ function renderAdminAccountsPanel(scope = "hr") {
       <form class="employee-create-form admin-create-grid" data-create-admin-form data-admin-scope="${escapeHtml(normalizedScope)}">
         <label class="field">
           <span>Display name</span>
-          <input name="displayName" maxlength="120" required placeholder="Alex Morgan">
+          <input name="displayName" maxlength="120" required>
         </label>
         <label class="field">
           <span>Username</span>
@@ -3579,7 +3579,7 @@ function renderEmployeeCreatePanel() {
         <form class="employee-create-form employee-create-grid" data-create-employee-form>
           <label class="field">
             <span>Name</span>
-            <input name="name" maxlength="120" required placeholder="Employee Name">
+            <input name="name" maxlength="120" required>
           </label>
           <label class="field">
             <span>Username</span>
@@ -3678,7 +3678,7 @@ function renderEmployeeBatchUploadPanel() {
             </label>
             <label class="field field-span-2">
               <span>Employees</span>
-              <textarea class="employee-batch-textarea" name="content" rows="11" required spellcheck="false" placeholder='{"employees":[{"name":"Alex Morgan","email":"alex@example.com"}]}'>${escapeHtml(content)}</textarea>
+              <textarea class="employee-batch-textarea" name="content" rows="11" required spellcheck="false">${escapeHtml(content)}</textarea>
             </label>
           </div>
           <div class="employee-batch-actions">
@@ -4011,7 +4011,7 @@ function renderWeatherSettingsPanel() {
       </div>
       <form class="settings-weather-form" data-weather-form>
         <label class="field settings-weather-location-field">
-          <input name="location" maxlength="120" required value="${escapeHtml(locationValue)}" placeholder="City, State or ZIP" aria-label="Weather location">
+          <input name="location" maxlength="120" required value="${escapeHtml(locationValue)}" aria-label="Weather location">
         </label>
         <button class="ghost-button" type="submit">${icon("refresh")} Refresh</button>
       </form>
@@ -4577,7 +4577,7 @@ function renderAdminMfaPolicyPanel() {
         </label>
         <label class="field">
           <span>Reason</span>
-          <input name="reason" maxlength="160" value="${escapeHtml(policy.reason || "")}" placeholder="Required when turning off MFA" ${state.adminMfaPolicy.busy || !environmentEnabled ? "disabled" : ""}>
+          <input name="reason" maxlength="160" value="${escapeHtml(policy.reason || "")}" ${state.adminMfaPolicy.busy || !environmentEnabled ? "disabled" : ""}>
         </label>
         <div class="form-actions">
           <button class="button" type="submit" ${state.adminMfaPolicy.busy || !environmentEnabled ? "disabled" : ""}>
