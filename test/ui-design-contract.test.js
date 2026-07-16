@@ -1245,6 +1245,7 @@ test("employee feed page uses a static feed/header width with weather in the hea
   assert.equal(getDeclarationValue(feedColumnBody, "width"), "min(760px, calc(100% - 32px))");
   assert.ok(subscriptionRenderer);
   assert.ok(setupWizardRenderer);
+  assert.match(app, /const installRequired = requiresStandaloneForPush\(navigator\.userAgent\);/);
   assert.match(subscriptionRenderer, /<section class="employee-subscription-banner warning" aria-label="Subscribe to alerts">/);
   assert.match(subscriptionRenderer, /\$\{renderEmployeeSetupWizard\(\)\}/);
   assert.match(setupWizardRenderer, /class="button employee-subscribe-button"/);

@@ -1,4 +1,5 @@
 import {
+  requiresStandaloneForPush,
   resolveDeviceSetupAction,
   resolveDeviceSetupSecondaryAction
 } from "./device-setup.js";
@@ -68,13 +69,7 @@ function platformNameFromUserAgent() {
 }
 
 function isIosDevice() {
-  const ua = navigator.userAgent.toLowerCase();
-  return ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod");
-}
-
-function isMobileDevice() {
-  const ua = navigator.userAgent.toLowerCase();
-  return ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod") || ua.includes("android");
+  return requiresStandaloneForPush(navigator.userAgent);
 }
 
 function isInstalledWebApp() {
@@ -2149,7 +2144,7 @@ function buildEmployeeSetupState() {
   const pushSubscribed = currentPush.subscribed;
   const pushPermission = currentPush.permission;
   const pushReady = currentPush.active;
-  const installRequired = isMobileDevice();
+  const installRequired = requiresStandaloneForPush(navigator.userAgent);
   const installed = !installRequired || isInstalledWebApp();
   const notificationGranted = pushPermission === "granted";
   let nextStep = {

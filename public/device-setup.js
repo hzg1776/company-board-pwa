@@ -1,3 +1,8 @@
+export function requiresStandaloneForPush(userAgent = "") {
+  const normalizedUserAgent = String(userAgent).toLowerCase();
+  return ["iphone", "ipad", "ipod"].some((platform) => normalizedUserAgent.includes(platform));
+}
+
 export function resolveDeviceSetupAction({ submitterAction, primaryActionId } = {}) {
   const explicitAction = String(submitterAction || "").trim();
 

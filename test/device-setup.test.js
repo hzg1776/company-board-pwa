@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
+import * as deviceSetup from "../public/device-setup.js";
+
+const {
   resolveDeviceSetupAction,
   resolveDeviceSetupSecondaryAction
-} from "../public/device-setup.js";
+} = deviceSetup;
+
+test("only iOS requires standalone mode before push setup is complete", () => {
+  const samsungInternet = "Mozilla/5.0 (Linux; Android 14; SAMSUNG SM-S921U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36";
+  const pixelChrome = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36";
+  const iphoneSafari = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+
+  assert.equal(deviceSetup.requiresStandaloneForPush?.(samsungInternet), false);
+  assert.equal(deviceSetup.requiresStandaloneForPush?.(pixelChrome), false);
+  assert.equal(deviceSetup.requiresStandaloneForPush?.(iphoneSafari), true);
+});
 
 test("resolveDeviceSetupAction prefers an explicit submitter action", () => {
   assert.equal(
