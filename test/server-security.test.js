@@ -2548,11 +2548,25 @@ test("server sends baseline security headers on app shell and static assets", as
 
   const shell = await fetch(`${server.baseUrl}/palzivalerts/`);
   assert.equal(shell.status, 200);
-  assert.match(shell.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
+  const csp = shell.headers.get("content-security-policy") || "";
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /base-uri 'none'/);
+  assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /style-src 'self'/);
+  assert.doesNotMatch(csp, /'unsafe-inline'/);
   assert.equal(shell.headers.get("x-frame-options"), "DENY");
   assert.equal(shell.headers.get("x-content-type-options"), "nosniff");
   assert.equal(shell.headers.get("referrer-policy"), "no-referrer");
   assert.match(shell.headers.get("permissions-policy") || "", /geolocation=\(\)/);
+  const shellHtml = await shell.text();
+  assert.doesNotMatch(shellHtml, /<script>(?!\s*<\/script>)/);
+  assert.match(shellHtml, /<script src="\/app-config\.js\?v=[^"]+"><\/script>/);
+
+  const config = await fetch(`${server.baseUrl}/app-config.js`);
+  assert.equal(config.status, 200);
+  assert.match(config.headers.get("content-type") || "", /^text\/javascript/);
+  assert.equal(config.headers.get("cache-control"), "no-store");
+  assert.match(await config.text(), /^window\.__BOARD_CONFIG__ = /);
 
   const script = await fetch(`${server.baseUrl}/app.js`);
   assert.equal(script.status, 200);

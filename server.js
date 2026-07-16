@@ -65,14 +65,14 @@ const ADMIN_SESSION_COOKIE_MAX_AGE = 60 * 60 * 12;
 const SECURITY_HEADERS = Object.freeze({
   "Content-Security-Policy": [
     "default-src 'self'",
-    "base-uri 'self'",
+    "base-uri 'none'",
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
     "img-src 'self' data:",
     "manifest-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self'",
+    "style-src 'self'",
     "connect-src 'self'",
     "worker-src 'self'"
   ].join("; "),
@@ -737,11 +737,15 @@ async function renderIndexHtml() {
     .replaceAll("__SITE_DESCRIPTION__", escapeHtml(siteConfig.description))
     .replaceAll("__SITE_THEME_COLOR__", escapeHtml(siteConfig.themeColor))
     .replaceAll("__SITE_BACKGROUND_COLOR__", escapeHtml(siteConfig.backgroundColor))
-    .replaceAll("__ASSET_VERSION__", escapeHtml(assetVersion))
-    .replace("<!-- BOARD_CONFIG -->", `<script>window.__BOARD_CONFIG__ = ${serializeForScript({
-      ...siteConfig,
-      assetVersion
-    })};</script>`);
+    .replaceAll("__ASSET_VERSION__", escapeHtml(assetVersion));
+}
+
+async function renderAppConfig() {
+  const assetVersion = await resolveAssetVersion();
+  return `window.__BOARD_CONFIG__ = ${serializeForScript({
+    ...siteConfig,
+    assetVersion
+  })};\n`;
 }
 
 async function renderServiceWorker() {
@@ -797,6 +801,15 @@ async function sendServiceWorker(res) {
     "Cache-Control": "no-store"
   });
   res.end(await renderServiceWorker());
+}
+
+async function sendAppConfig(res) {
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    "Content-Type": "text/javascript; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(await renderAppConfig());
 }
 
 function sendManifest(res) {
@@ -3076,6 +3089,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/sw.js") {
     await sendServiceWorker(res);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/app-config.js") {
+    await sendAppConfig(res);
     return;
   }
 

@@ -1,0 +1,322 @@
+{
+  "standard": "OWASP ASVS 5.0.0",
+  "profile": "Level 2 (all Level 1 and Level 2 requirements)",
+  "source": "https://github.com/OWASP/ASVS/tree/v5.0.0/5.0",
+  "assessment_date": "2026-07-16",
+  "status_definitions": {
+    "Verified": "Current repository evidence directly verifies the complete requirement.",
+    "Partial": "A relevant control exists, but the requirement is not completely proven or has a documented gap.",
+    "Not verified": "Current evidence shows the requirement is unmet or no adequate control exists.",
+    "Not applicable": "The application does not use the technology or flow covered by the requirement.",
+    "Not assessed": "The requirement has not received sufficient requirement-specific review."
+  },
+  "not_applicable_chapters": [
+    {
+      "chapter_id": "V9",
+      "evidence": "security.js and server.js use opaque server-side reference sessions; no JWT, JWS, or other self-contained authentication or authorization token is accepted",
+      "control_owner": "Application",
+      "notes": "Project-A does not implement self-contained tokens."
+    },
+    {
+      "chapter_id": "V10",
+      "evidence": "package.json, server.js, and security.js contain no OAuth 2.0 or OpenID Connect client, resource server, authorization server, or identity-provider flow",
+      "control_owner": "Application",
+      "notes": "Project-A uses first-party username/password sessions and does not implement OAuth or OIDC."
+    },
+    {
+      "chapter_id": "V17",
+      "evidence": "package.json, server.js, and public/app.js contain no WebRTC, TURN, media-server, or signaling implementation",
+      "control_owner": "Application",
+      "notes": "Project-A has no real-time audio, video, TURN, SRTP, or WebRTC signaling surface."
+    }
+  ],
+  "assessments": [
+    {
+      "requirement_id": "V1.3.6",
+      "status": "Verified",
+      "evidence": "notifications.js endpoint allowlist; url-safety.js; test/notifications.test.js rejects untrusted push endpoints",
+      "control_owner": "Application",
+      "notes": "Outbound push endpoints are parsed and restricted before the server contacts them."
+    },
+    {
+      "requirement_id": "V3.3.1",
+      "status": "Not verified",
+      "evidence": "security.js accessCookieNames(); server.js serializeCookie()",
+      "control_owner": "Application",
+      "notes": "Production cookies can receive Secure, but current cookie names use palziv_* rather than the ASVS-required __Secure- or __Host- prefixes."
+    },
+    {
+      "requirement_id": "V3.3.2",
+      "status": "Verified",
+      "evidence": "server.js serializeCookie() defaults SameSite=Lax; test/server-security.test.js exercises authenticated browser flows",
+      "control_owner": "Application",
+      "notes": "Session cookies use a same-site policy appropriate for same-origin portal navigation."
+    },
+    {
+      "requirement_id": "V3.3.3",
+      "status": "Not verified",
+      "evidence": "security.js accessCookieNames(); server.js serializeCookie() uses Path=/palzivalerts by default",
+      "control_owner": "Application",
+      "notes": "Session cookie names do not use the __Host- prefix and their application-scoped Path is incompatible with that prefix."
+    },
+    {
+      "requirement_id": "V3.3.4",
+      "status": "Verified",
+      "evidence": "server.js serializeCookie() adds HttpOnly for session cookies; test/server-security.test.js authentication flows",
+      "control_owner": "Application",
+      "notes": "Session values are issued only through Set-Cookie and are not exposed to client JavaScript."
+    },
+    {
+      "requirement_id": "V3.4.1",
+      "status": "Partial",
+      "evidence": "server.js SECURITY_HEADERS sets Strict-Transport-Security with includeSubDomains",
+      "control_owner": "Application and Cloudflare",
+      "notes": "HSTS is present, but the configured max-age is 15552000 seconds rather than the ASVS minimum of one year."
+    },
+    {
+      "requirement_id": "V3.4.3",
+      "status": "Verified",
+      "evidence": "server.js SECURITY_HEADERS; test/server-security.test.js baseline security header test",
+      "control_owner": "Application",
+      "notes": "CSP restricts scripts and styles to self and blocks objects and framing without unsafe-inline."
+    },
+    {
+      "requirement_id": "V3.4.4",
+      "status": "Verified",
+      "evidence": "server.js SECURITY_HEADERS; test/server-security.test.js baseline security header test",
+      "control_owner": "Application",
+      "notes": "All application and static responses receive X-Content-Type-Options: nosniff."
+    },
+    {
+      "requirement_id": "V3.4.5",
+      "status": "Verified",
+      "evidence": "server.js SECURITY_HEADERS; test/server-security.test.js baseline security header test",
+      "control_owner": "Application",
+      "notes": "Referrer-Policy is no-referrer."
+    },
+    {
+      "requirement_id": "V3.5.1",
+      "status": "Verified",
+      "evidence": "server.js requireSameOrigin() and CSRF token checks; test/server-security.test.js",
+      "control_owner": "Application",
+      "notes": "State-changing authenticated requests require same-origin context and CSRF proof."
+    },
+    {
+      "requirement_id": "V5.3.2",
+      "status": "Verified",
+      "evidence": "server.js resolveManagedDataFile(); runtime-files.js; test/runtime-files.test.js and test/server-security.test.js",
+      "control_owner": "Application",
+      "notes": "Runtime paths are server-controlled, constrained to the managed data directory, and reject unsafe link traversal."
+    },
+    {
+      "requirement_id": "V6.1.1",
+      "status": "Partial",
+      "evidence": "security.js login throttling; docs/OPERATIONS_RUNBOOK.md; test/server-security.test.js trusted proxy throttle coverage",
+      "control_owner": "Application and Operations",
+      "notes": "Rate limiting is implemented and tested, but a complete anti-automation policy and malicious-lockout analysis are not documented."
+    },
+    {
+      "requirement_id": "V6.3.1",
+      "status": "Verified",
+      "evidence": "security.js authentication throttle; test/server-security.test.js trusted proxy login throttling; test/security.test.js recovery lockout",
+      "control_owner": "Application",
+      "notes": "Authentication and recovery flows enforce bounded failure handling."
+    },
+    {
+      "requirement_id": "V6.3.3",
+      "status": "Partial",
+      "evidence": "security.js TOTP implementation; server.js ADMIN_MFA_ENABLED default; test/security.test.js and test/server-security.test.js admin MFA coverage",
+      "control_owner": "Application and IT",
+      "notes": "Privileged administrators use MFA by default, but employee accounts remain single-factor and no ASVS relaxation rationale exists."
+    },
+    {
+      "requirement_id": "V6.4.3",
+      "status": "Partial",
+      "evidence": "security.js recovery and emergency-account flows; test/security.test.js HR recovery and MFA tests",
+      "control_owner": "Application and IT",
+      "notes": "Recovery is separated and audited, but requirement-specific proof that every reset path preserves MFA is incomplete."
+    },
+    {
+      "requirement_id": "V6.5.3",
+      "status": "Verified",
+      "evidence": "security.js uses node:crypto randomBytes for MFA seeds, session material, recovery, and invitation secrets",
+      "control_owner": "Application",
+      "notes": "Security-sensitive generated values use the platform CSPRNG."
+    },
+    {
+      "requirement_id": "V6.6.3",
+      "status": "Verified",
+      "evidence": "security.js recovery attempt limiter; test/security.test.js HR recovery codes lock out after repeated guesses",
+      "control_owner": "Application",
+      "notes": "Code-based recovery is protected against online brute force."
+    },
+    {
+      "requirement_id": "V7.2.1",
+      "status": "Verified",
+      "evidence": "security.js session lookup and authorization helpers; server.js role access gates",
+      "control_owner": "Application",
+      "notes": "All authoritative session verification occurs in the backend."
+    },
+    {
+      "requirement_id": "V7.2.3",
+      "status": "Verified",
+      "evidence": "security.js session creation uses node:crypto randomBytes with at least 128 bits of entropy",
+      "control_owner": "Application",
+      "notes": "Reference session tokens use the platform CSPRNG."
+    },
+    {
+      "requirement_id": "V7.2.4",
+      "status": "Verified",
+      "evidence": "security.js login and session creation; test/security.test.js and test/server-security.test.js session revocation coverage",
+      "control_owner": "Application",
+      "notes": "Successful authentication creates a fresh session rather than promoting an existing anonymous token."
+    },
+    {
+      "requirement_id": "V7.4.3",
+      "status": "Verified",
+      "evidence": "security.js password reset and session revocation; test/server-security.test.js password reset revokes existing managed session",
+      "control_owner": "Application",
+      "notes": "Credential resets revoke other active sessions."
+    },
+    {
+      "requirement_id": "V7.5.1",
+      "status": "Not verified",
+      "evidence": "security.js MFA setup and account-update flows; no requirement-specific fresh re-authentication control or regression test found",
+      "control_owner": "Application",
+      "notes": "An authenticated session is required, but fresh full re-authentication before every sensitive authentication-attribute change is not proven."
+    },
+    {
+      "requirement_id": "V8.1.1",
+      "status": "Verified",
+      "evidence": "ACCESS_CONTROL_LIST.md; docs/OWNER_ROLE_MODEL.md",
+      "control_owner": "Application and IT",
+      "notes": "Role and function-level authorization rules are documented."
+    },
+    {
+      "requirement_id": "V8.2.2",
+      "status": "Partial",
+      "evidence": "server.js resource authorization gates; test/server-security.test.js role-boundary and employee-access coverage",
+      "control_owner": "Application",
+      "notes": "High-risk resource boundaries are tested, but no complete endpoint-by-endpoint BOLA test inventory exists."
+    },
+    {
+      "requirement_id": "V8.3.1",
+      "status": "Verified",
+      "evidence": "server.js requireHrAccess(), requireWebmasterAccess(), requireItAccess(), and employee session gates",
+      "control_owner": "Application",
+      "notes": "Authorization is enforced by the server and does not rely on UI visibility."
+    },
+    {
+      "requirement_id": "V11.1.1",
+      "status": "Partial",
+      "evidence": "docs/security/OWASP_OPERATIONAL_CONTROLS.md secret rotation and cryptographic inventory controls; docs/SECRET_ROTATION.md",
+      "control_owner": "IT and Engineering",
+      "notes": "Lifecycle ownership and rotation are defined, but the policy is not yet mapped to a recognized key-management standard such as NIST SP 800-57."
+    },
+    {
+      "requirement_id": "V11.1.2",
+      "status": "Not verified",
+      "evidence": "docs/security/OWASP_OPERATIONAL_CONTROLS.md requires a restricted cryptographic inventory; no current completed inventory artifact exists in the repository",
+      "control_owner": "IT and Engineering",
+      "notes": "The required inventory process is documented, but execution evidence is pending."
+    },
+    {
+      "requirement_id": "V11.4.2",
+      "status": "Partial",
+      "evidence": "security.js hashPassword() uses crypto.scryptSync with random salt",
+      "control_owner": "Application",
+      "notes": "A memory-hard KDF is used, but parameters are implicit Node defaults and are not documented against current password-storage guidance."
+    },
+    {
+      "requirement_id": "V11.5.1",
+      "status": "Partial",
+      "evidence": "security.js and server.js use node:crypto randomBytes for security-sensitive tokens",
+      "control_owner": "Application",
+      "notes": "Reviewed secrets meet the entropy intent, but no complete cryptographic inventory proves every non-guessable value."
+    },
+    {
+      "requirement_id": "V12.1.1",
+      "status": "Partial",
+      "evidence": "docs/security/OWASP_OPERATIONAL_CONTROLS.md Cloudflare TLS policy; DEPLOY_CLOUDFLARE.md",
+      "control_owner": "Cloudflare and IT",
+      "notes": "TLS 1.2/1.3 is required operationally, but current external scan evidence must be captured and retained."
+    },
+    {
+      "requirement_id": "V12.2.1",
+      "status": "Partial",
+      "evidence": "docs/security/OWASP_OPERATIONAL_CONTROLS.md Cloudflare TLS and origin controls; DEPLOY_CLOUDFLARE.md",
+      "control_owner": "Cloudflare and IT",
+      "notes": "The public architecture requires HTTPS, but source code alone cannot prove the active edge and origin configuration."
+    },
+    {
+      "requirement_id": "V12.2.2",
+      "status": "Partial",
+      "evidence": "docs/security/OWASP_OPERATIONAL_CONTROLS.md requires a publicly trusted Cloudflare certificate and external TLS evidence",
+      "control_owner": "Cloudflare and IT",
+      "notes": "The control is assigned, but current certificate-chain evidence is not stored with this assessment."
+    },
+    {
+      "requirement_id": "V13.4.2",
+      "status": "Verified",
+      "evidence": "server.js diagnostics authorization; test/server-security.test.js anonymous diagnostics denial",
+      "control_owner": "Application and Operations",
+      "notes": "No production debug mode is exposed and diagnostics require privileged access."
+    },
+    {
+      "requirement_id": "V14.1.1",
+      "status": "Partial",
+      "evidence": "ACCESS_CONTROL_LIST.md; docs/OPERATIONS_RUNBOOK.md identifies sensitive runtime files and backups",
+      "control_owner": "IT and Operations",
+      "notes": "Sensitive stores are identified, but a complete data inventory with formal protection levels is absent."
+    },
+    {
+      "requirement_id": "V14.1.2",
+      "status": "Partial",
+      "evidence": "docs/OPERATIONS_RUNBOOK.md; docs/BACKUP_AND_RESTORE.md; docs/SECRET_ROTATION.md",
+      "control_owner": "IT and Operations",
+      "notes": "Protection procedures exist, but encryption, retention, privacy, and logging rules are not consolidated by data class."
+    },
+    {
+      "requirement_id": "V14.2.4",
+      "status": "Partial",
+      "evidence": "runtime-files.js; ACCESS_CONTROL_LIST.md; docs/OPERATIONS_RUNBOOK.md",
+      "control_owner": "Application and Operations",
+      "notes": "Path, atomic-write, and ACL controls exist; application-level encryption at rest is not implemented."
+    },
+    {
+      "requirement_id": "V15.1.1",
+      "status": "Verified",
+      "evidence": "docs/security/OWASP_OPERATIONAL_CONTROLS.md defines dependency review and remediation deadlines by severity",
+      "control_owner": "Engineering and IT",
+      "notes": "Critical issues are due within 72 hours, high within 7 days, moderate within 30 days, and low within 90 days."
+    },
+    {
+      "requirement_id": "V15.1.2",
+      "status": "Partial",
+      "evidence": "package-lock.json; npm audit --omit=dev",
+      "control_owner": "Engineering",
+      "notes": "Dependencies are pinned and auditable, but a maintained SBOM and trusted-repository policy are not present."
+    },
+    {
+      "requirement_id": "V15.3.4",
+      "status": "Verified",
+      "evidence": "server.js TRUST_PROXY_ADDRESSES validation and trustedProxyRequest(); test/server-security.test.js proxy and throttling coverage",
+      "control_owner": "Application and Operations",
+      "notes": "Forwarded client IP data is used only from explicitly trusted proxy addresses."
+    },
+    {
+      "requirement_id": "V16.2.2",
+      "status": "Partial",
+      "evidence": "security.js and analytics.js ISO timestamps; Windows time synchronization remains an operational control",
+      "control_owner": "Application and Windows host",
+      "notes": "Application timestamps are UTC ISO strings, but host clock synchronization needs operational evidence."
+    },
+    {
+      "requirement_id": "V16.3.3",
+      "status": "Partial",
+      "evidence": "security.js security-event recording; test/security.test.js failed-login and recovery events",
+      "control_owner": "Application and Operations",
+      "notes": "Authentication events are recorded, but comprehensive bypass-event coverage and centralized alerting are not proven."
+    }
+  ]
+}

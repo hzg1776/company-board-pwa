@@ -8809,6 +8809,18 @@ body {
   align-self: end;
 }
 
+.clipboard-fallback-input {
+  position: fixed;
+  top: -9999px;
+  opacity: 0;
+}
+
+.authenticator-qr-code {
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+}
+
 @media (max-width: 720px) {
   .auth-shell,
   .admin-auth-shell,

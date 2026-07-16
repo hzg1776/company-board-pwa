@@ -773,9 +773,7 @@ async function copyText(text) {
     const textarea = document.createElement("textarea");
     textarea.value = text;
     textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.top = "-9999px";
-    textarea.style.opacity = "0";
+    textarea.className = "clipboard-fallback-input";
     document.body.appendChild(textarea);
     textarea.select();
 
@@ -1091,7 +1089,8 @@ function renderHrSummaryStatCard({ value, label, tab, filter = "" }) {
     <button
       class="stat-card hr-stat-button"
       type="button"
-      onclick="window.openHrSummaryTarget && window.openHrSummaryTarget('${escapeHtml(tab)}', '${escapeHtml(filter)}')"
+      data-hr-summary-tab="${escapeHtml(tab)}"
+      data-hr-summary-filter="${escapeHtml(filter)}"
       aria-label="${escapeHtml(`${label}. ${actionLabel}`)}"
     >
       <strong>${escapeHtml(value)}</strong>
@@ -3065,7 +3064,7 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
       ${showEnrollment ? `
         <div class="auth-recovery-stack">
           <div class="invite-summary">
-            <div class="invite-summary-row">${setup.details.qrCodeDataUrl ? `<img src="${escapeHtml(setup.details.qrCodeDataUrl)}" alt="Authenticator QR code" style="max-width:220px;width:100%;height:auto;">` : ""}</div>
+            <div class="invite-summary-row">${setup.details.qrCodeDataUrl ? `<img class="authenticator-qr-code" src="${escapeHtml(setup.details.qrCodeDataUrl)}" alt="Authenticator QR code">` : ""}</div>
             <div class="invite-summary-row">${escapeHtml(setup.details.manualEntryKey || "")}</div>
           </div>
           <form class="auth-form" data-admin-mfa-verify-form data-admin-route="${escapeHtml(normalizedRoute)}">
@@ -4734,8 +4733,6 @@ function openHrSummaryTarget(tab, filter = "") {
   render();
 }
 
-window.openHrSummaryTarget = openHrSummaryTarget;
-
 function clearMessageSoon() {
   window.setTimeout(() => {
     setMessage("");
@@ -5883,6 +5880,7 @@ document.addEventListener("click", async (event) => {
   const openAuthRecoveryButton = target.closest("[data-open-auth-recovery]");
   const closeAuthRecoveryButton = target.closest("[data-close-auth-recovery]");
   const tabButton = target.closest("[data-tab]");
+  const hrSummaryButton = target.closest("[data-hr-summary-tab]");
   const copyWebmasterBriefButton = target.closest("[data-copy-webmaster-brief]");
   const copyWebmasterJsonButton = target.closest("[data-copy-webmaster-json]");
   const copyEmployeeBatchCredentialsButton = target.closest("[data-copy-employee-batch-credentials]");
@@ -5936,6 +5934,15 @@ document.addEventListener("click", async (event) => {
       activeWebmasterTab = tabButton.dataset.tab || "overview";
     }
     render();
+    return;
+  }
+
+  if (hrSummaryButton) {
+    event.preventDefault();
+    openHrSummaryTarget(
+      String(hrSummaryButton.dataset.hrSummaryTab || "feed"),
+      String(hrSummaryButton.dataset.hrSummaryFilter || "")
+    );
     return;
   }
 
