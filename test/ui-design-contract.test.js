@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -234,7 +235,7 @@ test("global operational layout prevents clipping and mobile overflow", async ()
 
   assert.equal(
     getDeclarationValue(rootBody, "--ui-font-family"),
-    "Arial, sans-serif"
+    "\"Roboto\", Arial, sans-serif"
   );
   assert.equal(getDeclarationValue(rootBody, "--ui-card-padding"), "10px");
   assert.equal(getDeclarationValue(rootBody, "--ui-control-min-height"), "36px");
@@ -574,6 +575,34 @@ test("stylesheet does not request remote fonts blocked by the app CSP", async ()
   assert.doesNotMatch(css, /@import\s+url\(["']?https:\/\/fonts\.googleapis\.com/i);
   assert.doesNotMatch(css, /fonts\.googleapis\.com/i);
   assert.doesNotMatch(css, /fonts\.gstatic\.com/i);
+});
+
+test("site uses locally hosted Roboto at an enlarged root scale", async () => {
+  const css = await loadStylesheet();
+  const rootBody = getLastSelectorBody(css, ":root");
+  const htmlBody = getLastSelectorBody(css, "html");
+  const robotoFontPath = path.join(
+    process.cwd(),
+    "public",
+    "assets",
+    "roboto-latin-variable.woff2"
+  );
+
+  assert.equal(
+    getDeclarationValue(rootBody, "--ui-font-family"),
+    "\"Roboto\", Arial, sans-serif"
+  );
+  assert.equal(getDeclarationValue(rootBody, "--ui-base-font-size"), "18px");
+  assert.equal(getDeclarationValue(htmlBody, "font-size"), "var(--ui-base-font-size)");
+  assert.match(css, /(?:^|\r?\n)body\s*\{[^}]*font-size:\s*1rem;/s);
+  assert.match(
+    css,
+    /@font-face\s*\{[^}]*font-family:\s*"Roboto";[^}]*font-weight:\s*100 900;[^}]*font-display:\s*swap;[^}]*url\("\/assets\/roboto-latin-variable\.woff2\?v=20260716"\)/s
+  );
+  assert.doesNotMatch(css, /ui-monospace|SFMono-Regular|Consolas/);
+  assert.equal(existsSync(robotoFontPath), true);
+  const robotoFont = await readFile(robotoFontPath);
+  assert.ok(robotoFont.length > 10_000);
 });
 
 test("launcher login buttons use compact navigation sizing", async () => {
