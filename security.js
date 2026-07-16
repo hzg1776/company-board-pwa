@@ -990,6 +990,23 @@ function findAdminUserOrThrow(users = [], adminUserId = "") {
   return adminUser;
 }
 
+function createNotFoundError(message) {
+  const error = new Error(message);
+  error.statusCode = 404;
+  return error;
+}
+
+function findAdminUserForDeletionOrThrow(users = [], adminUserId = "") {
+  const targetId = cleanText(adminUserId, 80);
+  const adminUser = findAdminUserById(users, targetId);
+
+  if (!adminUser) {
+    throw createNotFoundError("Admin account not found.");
+  }
+
+  return adminUser;
+}
+
 function upsertEmergencyHrRecoveryAccount(data, passwordSalt, passwordHash, changedAt, lastLoginAt = "") {
   const existingRecoveryUser = findAdminUsersByUsername(data.adminUsers, EMERGENCY_HR_USERNAME)[0]
     || data.adminUsers.find((user) => isAdminRecoveryOnly(user) && adminUserHasRole(user, "hr"))
@@ -1633,6 +1650,31 @@ function requireItManagedAdminTarget(data, req = {}, adminUserId = "") {
   };
 }
 
+function assertAdminDeletionAllowed(data, {
+  managerUser = {},
+  targetUser = {},
+  actor = "hr"
+} = {}) {
+  if (targetUser.id === managerUser.id) {
+    throw new Error(
+      actor === "it"
+        ? "You cannot delete your own IT account while signed in."
+        : "You cannot delete your own admin account while signed in."
+    );
+  }
+
+  const projectedUsers = data.adminUsers.filter((adminUser) => adminUser.id !== targetUser.id);
+
+  for (const role of ["it", "hr"]) {
+    if (
+      countActiveAdminUsersWithRole([targetUser], role) > 0 &&
+      countActiveAdminUsersWithRole(projectedUsers, role) === 0
+    ) {
+      throw new Error(`At least one active ${role.toUpperCase()} admin is required.`);
+    }
+  }
+}
+
 function accessCookieNamesForRole(role = "") {
   const cookieNames = accessCookieNames();
   return role === "it"
@@ -1735,6 +1777,58 @@ function clearRoleLoginGuards(data, actor, accountKey = "", sourceIp = "") {
 function clearAdminIdentityGuards(data, username, sourceIp = "") {
   clearRoleLoginGuards(data, "hr", username, sourceIp);
   clearRoleLoginGuards(data, "webmaster", username, sourceIp);
+}
+
+function removeAccountLoginGuards(data, actor, username) {
+  const loginGuards = ensureLoginGuards(data);
+  const bucket = loginGuardBucketForActor(loginGuards, actor);
+  const accountKey = normalizeUsername(username);
+
+  if (!accountKey) {
+    return 0;
+  }
+
+  const originalLength = bucket.byAccount.length;
+  bucket.byAccount = bucket.byAccount.filter((entry) => entry.key !== accountKey);
+  return Math.max(0, originalLength - bucket.byAccount.length);
+}
+
+function removeAdminLoginGuards(data, adminUser = {}) {
+  return ["hr", "webmaster", "it"]
+    .reduce((removed, actor) => removed + removeAccountLoginGuards(data, actor, adminUser.username), 0);
+}
+
+function anonymizeSecurityEvents(data, {
+  employeeId = "",
+  username = "",
+  includeEmployeeEvents = true
+} = {}) {
+  const normalizedEmployeeId = cleanText(employeeId, 80);
+  const normalizedUsername = normalizeUsername(username);
+  let changed = 0;
+
+  data.securityEvents = (Array.isArray(data.securityEvents) ? data.securityEvents : []).map((event) => {
+    const matchesEmployee = Boolean(normalizedEmployeeId) && event.employeeId === normalizedEmployeeId;
+    const employeeEvent = event.actor === "employee" || Boolean(event.employeeId);
+    const matchesAccount = (
+      Boolean(normalizedUsername) &&
+      event.accountKey === normalizedUsername &&
+      (includeEmployeeEvents || !employeeEvent)
+    );
+
+    if (!matchesEmployee && !matchesAccount) {
+      return event;
+    }
+
+    changed += 1;
+    return {
+      ...event,
+      employeeId: matchesEmployee ? "" : event.employeeId,
+      accountKey: matchesAccount ? "deleted-account" : event.accountKey
+    };
+  });
+
+  return changed;
 }
 
 export { normalizeSecurityState };
@@ -3936,6 +4030,165 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     }));
   }
 
+  function requireEmployeeDeletionTarget(data, req = {}, employeeId = "") {
+    const hrManager = requireHrManagerAccess(data, req);
+    const targetId = cleanText(employeeId, 80);
+    const employee = data.employees.find((entry) => entry.id === targetId);
+
+    if (!employee) {
+      throw createNotFoundError("Employee not found.");
+    }
+
+    const linkedAdminUser = data.adminUsers.find((adminUser) => (
+      adminUser.username === employee.username &&
+      isHrManagedAdminUser(adminUser) &&
+      adminUserHasRole(adminUser, "hr")
+    )) || null;
+
+    if (linkedAdminUser) {
+      assertAdminDeletionAllowed(data, {
+        managerUser: hrManager.adminUser,
+        targetUser: linkedAdminUser,
+        actor: "hr"
+      });
+    }
+
+    return {
+      hrManager,
+      employee,
+      linkedAdminUser
+    };
+  }
+
+  async function previewEmployeeDeletion(req = {}, employeeId = "") {
+    const data = await readSecurityState();
+    const { employee, linkedAdminUser } = requireEmployeeDeletionTarget(data, req, employeeId);
+
+    return {
+      employee: {
+        id: employee.id,
+        name: employee.name,
+        username: employee.username
+      },
+      linkedAdminUserId: linkedAdminUser?.id || ""
+    };
+  }
+
+  async function deleteEmployeeAccount(req = {}, employeeId = "") {
+    return updateData((data) => {
+      const { employee, linkedAdminUser } = requireEmployeeDeletionTarget(data, req, employeeId);
+      const employeeSessionsBefore = data.employeeSessions.length;
+      const adminSessionsBefore = data.adminSessions.length;
+
+      data.employees = data.employees.filter((entry) => entry.id !== employee.id);
+      data.employeeSessions = data.employeeSessions.filter((session) => session.employeeId !== employee.id);
+
+      if (linkedAdminUser) {
+        data.adminUsers = data.adminUsers.filter((adminUser) => adminUser.id !== linkedAdminUser.id);
+        data.adminSessions = data.adminSessions.filter((session) => session.adminUserId !== linkedAdminUser.id);
+      }
+
+      let loginGuardsRemoved = removeAccountLoginGuards(data, "employee", employee.username);
+      if (linkedAdminUser) {
+        loginGuardsRemoved += removeAdminLoginGuards(data, linkedAdminUser);
+      }
+
+      const securityEventsAnonymized = anonymizeSecurityEvents(data, {
+        employeeId: employee.id,
+        username: employee.username
+      });
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "employee_deleted",
+        actor: "hr",
+        accountKey: "deleted-account",
+        sourceIp: normalizeSecurityKey(""),
+        outcome: "success",
+        detail: "employee-account-and-linked-data-removed"
+      }));
+
+      return {
+        ok: true,
+        employeeId: employee.id,
+        username: employee.username,
+        employeeSessionsRemoved: Math.max(0, employeeSessionsBefore - data.employeeSessions.length),
+        adminUsersRemoved: linkedAdminUser ? 1 : 0,
+        adminSessionsRemoved: Math.max(0, adminSessionsBefore - data.adminSessions.length),
+        loginGuardsRemoved,
+        securityEventsAnonymized
+      };
+    }).then(({ result, snapshot }) => ({
+      ...result,
+      snapshot
+    }));
+  }
+
+  async function deleteManagedAdminUser(req = {}, adminUserId, {
+    actor = "hr",
+    userAgent = "",
+    clientIp = ""
+  } = {}) {
+    return updateData((data) => {
+      const manager = actor === "it"
+        ? requireItManagerAccess(data, req)
+        : requireHrManagerAccess(data, req);
+      const targetUser = findAdminUserForDeletionOrThrow(data.adminUsers, adminUserId);
+
+      if (actor === "hr" && !isHrManagedAdminUser(targetUser)) {
+        throw new Error("HR cannot manage webmaster accounts.");
+      }
+
+      assertAdminDeletionAllowed(data, {
+        managerUser: manager.adminUser,
+        targetUser,
+        actor
+      });
+
+      const sessionsBefore = data.adminSessions.length;
+      data.adminUsers = data.adminUsers.filter((adminUser) => adminUser.id !== targetUser.id);
+      data.adminSessions = data.adminSessions.filter((session) => session.adminUserId !== targetUser.id);
+      const loginGuardsRemoved = removeAdminLoginGuards(data, targetUser);
+      const securityEventsAnonymized = anonymizeSecurityEvents(data, {
+        username: targetUser.username,
+        includeEmployeeEvents: false
+      });
+      appendSecurityEvent(data, createSecurityEvent({
+        type: actor === "it" ? "admin_deleted_by_it" : "admin_deleted_by_hr",
+        actor,
+        accountKey: "deleted-account",
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: `role:${targetUser.roles[0] || "unknown"}; account-removed`,
+        userAgent
+      }));
+
+      return {
+        ok: true,
+        adminUserId: targetUser.id,
+        username: targetUser.username,
+        sessionsRemoved: Math.max(0, sessionsBefore - data.adminSessions.length),
+        loginGuardsRemoved,
+        securityEventsAnonymized
+      };
+    }).then(({ result, snapshot }) => ({
+      ...result,
+      snapshot
+    }));
+  }
+
+  async function deleteAdminUser(req = {}, adminUserId, options = {}) {
+    return deleteManagedAdminUser(req, adminUserId, {
+      ...options,
+      actor: "hr"
+    });
+  }
+
+  async function deleteItAdminUser(req = {}, adminUserId, options = {}) {
+    return deleteManagedAdminUser(req, adminUserId, {
+      ...options,
+      actor: "it"
+    });
+  }
+
   async function createEmployeeAccount({
     name,
     username,
@@ -4872,6 +5125,10 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     revokeAdminUserSessions,
     revokeWebmasterAdminUserSessions,
     revokeItAdminUserSessions,
+    previewEmployeeDeletion,
+    deleteEmployeeAccount,
+    deleteAdminUser,
+    deleteItAdminUser,
     listEmployees,
     createEmployeeAccount,
     createEmployeeAccountsBatch,

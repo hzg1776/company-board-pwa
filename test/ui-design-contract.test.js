@@ -1363,3 +1363,61 @@ test("client app keeps employee weather and alert setup surfaces wired", async (
   assert.doesNotMatch(app, /employee-status-strip/);
   assert.match(app, /data-weather-form/);
 });
+
+test("HR and IT account directories expose confirmed destructive deletion controls", async () => {
+  const [app, css] = await Promise.all([
+    loadClientApp(),
+    loadStylesheet()
+  ]);
+  const employeeRenderer = app.match(
+    /function renderEmployeeDirectoryRow\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
+  )?.[0] || "";
+  const adminRenderer = app.match(
+    /function renderAdminDirectoryRow\(adminUser, scope = "hr"\) \{[\s\S]*?\n\}\n\nfunction renderAdminDirectoryTable/
+  )?.[0] || "";
+  const deleteEmployeeHandler = app.match(
+    /async function handleDeleteEmployeeSubmit\(event\) \{[\s\S]*?\n\}\n\n/
+  )?.[0] || "";
+  const deleteAdminHandler = app.match(
+    /async function handleDeleteAdminSubmit\(event\) \{[\s\S]*?\n\}\n\n/
+  )?.[0] || "";
+  const hrSettingsRenderer = app.match(
+    /function renderAdminSettingsPanel\(\) \{[\s\S]*?\n\}\n\nfunction renderWebmasterSettingsPanel/
+  )?.[0] || "";
+  const dangerButtonBody = getLastSelectorBody(css, ".ghost-button.danger");
+  const adminDeleteFormBody = getLastSelectorBody(css, ".admin-delete-account-form");
+  const adminDeleteButtonBody = getLastSelectorBody(css, ".admin-delete-account-form .ghost-button");
+
+  assert.match(employeeRenderer, /data-delete-employee-form/);
+  assert.match(employeeRenderer, /Delete Account/);
+  assert.match(employeeRenderer, /class="ghost-button danger"/);
+
+  assert.match(adminRenderer, /scopeValue !== "webmaster"/);
+  assert.match(adminRenderer, /data-delete-admin-form/);
+  assert.match(adminRenderer, /Delete Account/);
+  assert.match(adminRenderer, /isCurrentUser \? " disabled" : ""/);
+  assert.match(
+    adminRenderer,
+    /data-update-admin-profile-form[\s\S]*?data-delete-admin-form[\s\S]*?<\/td>\s*<td>\$\{renderAdminRoleCell/
+  );
+  assert.match(hrSettingsRenderer, /renderAdminAccountsPanel\("hr"\)/);
+
+  assert.match(deleteEmployeeHandler, /window\.confirm/);
+  assert.match(deleteEmployeeHandler, /permanently remove/i);
+  assert.match(deleteEmployeeHandler, /credentials, sessions, and associated data/i);
+  assert.match(deleteEmployeeHandler, /\/api\/employees\/\$\{encodeURIComponent\(employeeId\)\}/);
+  assert.match(deleteEmployeeHandler, /method:\s*"DELETE"/);
+
+  assert.match(deleteAdminHandler, /window\.confirm/);
+  assert.match(deleteAdminHandler, /permanently remove/i);
+  assert.match(deleteAdminHandler, /adminApiBase\(scope\)/);
+  assert.match(deleteAdminHandler, /method:\s*"DELETE"/);
+
+  assert.match(app, /\[data-delete-employee-form\]/);
+  assert.match(app, /\[data-delete-admin-form\]/);
+  assert.equal(getDeclarationValue(dangerButtonBody, "color"), "var(--tone-danger-text) !important");
+  assert.equal(getDeclarationValue(dangerButtonBody, "background"), "var(--tone-danger-bg) !important");
+  assert.equal(getDeclarationValue(dangerButtonBody, "border-color"), "var(--tone-danger-line) !important");
+  assert.equal(getDeclarationValue(adminDeleteFormBody, "padding-right"), "8px");
+  assert.equal(getDeclarationValue(adminDeleteButtonBody, "width"), "100%");
+});

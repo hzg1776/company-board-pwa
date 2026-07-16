@@ -8922,3 +8922,25 @@ body {
     justify-self: stretch;
   }
 }
+
+.ghost-button.danger {
+  color: var(--tone-danger-text) !important;
+  background: var(--tone-danger-bg) !important;
+  border-color: var(--tone-danger-line) !important;
+}
+
+.ghost-button.danger:hover,
+.ghost-button.danger:focus-visible {
+  color: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+
+.admin-delete-account-form {
+  margin: 10px 0 0;
+  padding-right: 8px;
+}
+
+.admin-delete-account-form .ghost-button {
+  width: 100%;
+  justify-content: center;
+}

@@ -1357,6 +1357,37 @@ async function unenrollEmployeePushDevices(employeeId) {
   });
 }
 
+async function removeEmployeeArtifacts({ employeeId, username } = {}) {
+  const targetEmployeeId = cleanText(employeeId, 80);
+  const targetUsername = cleanText(username, 80).toLowerCase();
+  const pushResult = await notificationHub.updateData((data) => {
+    const originalLength = Array.isArray(data.subscriptions) ? data.subscriptions.length : 0;
+    data.subscriptions = (Array.isArray(data.subscriptions) ? data.subscriptions : [])
+      .filter((subscription) => subscription.employeeId !== targetEmployeeId);
+
+    return {
+      pushSubscriptionsRemoved: Math.max(0, originalLength - data.subscriptions.length)
+    };
+  });
+  const boardResult = await boardStore.updateData((data) => {
+    const originalLength = Array.isArray(data.acknowledgements) ? data.acknowledgements.length : 0;
+    data.acknowledgements = (Array.isArray(data.acknowledgements) ? data.acknowledgements : [])
+      .filter((acknowledgement) => (
+        acknowledgement.employeeId !== targetEmployeeId &&
+        String(acknowledgement.username || "").trim().toLowerCase() !== targetUsername
+      ));
+
+    return {
+      acknowledgementsRemoved: Math.max(0, originalLength - data.acknowledgements.length)
+    };
+  });
+
+  return {
+    ...pushResult,
+    ...boardResult
+  };
+}
+
 function scopedEmployeePushStatus(pushData, employeeId) {
   const devices = summarizeNotificationDevices({
     subscriptions: Array.isArray(pushData?.subscriptions)
@@ -2368,6 +2399,19 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const itAdminUserDeleteMatch = url.pathname.match(/^\/api\/it\/admin-users\/([^/]+)$/);
+    if (req.method === "DELETE" && itAdminUserDeleteMatch) {
+      if (!(await requireItMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(itAdminUserDeleteMatch[1]);
+      const result = await securityStore.deleteItAdminUser(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/employee/login") {
       if (!requireSameOrigin(req, res)) return;
 
@@ -2553,6 +2597,19 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const adminUserDeleteMatch = url.pathname.match(/^\/api\/admin-users\/([^/]+)$/);
+    if (req.method === "DELETE" && adminUserDeleteMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const adminUserId = decodeURIComponent(adminUserDeleteMatch[1]);
+      const result = await securityStore.deleteAdminUser(req, adminUserId, {
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/employees") {
       if (!(await requireHrAccess(req, res))) return;
 
@@ -2661,6 +2718,24 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, {
         ok: true,
         ...result
+      });
+      return;
+    }
+
+    const employeeDeleteMatch = url.pathname.match(/^\/api\/employees\/([^/]+)$/);
+    if (req.method === "DELETE" && employeeDeleteMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeeDeleteMatch[1]);
+      const preview = await securityStore.previewEmployeeDeletion(req, employeeId);
+      const artifactResult = await removeEmployeeArtifacts({
+        employeeId: preview.employee.id,
+        username: preview.employee.username
+      });
+      const deletionResult = await securityStore.deleteEmployeeAccount(req, employeeId);
+      sendJson(res, 200, {
+        ...deletionResult,
+        ...artifactResult
       });
       return;
     }
@@ -3132,4 +3207,3 @@ setInterval(() => {
 server.listen(PORT, () => {
   console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);
 });
-

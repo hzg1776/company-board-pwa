@@ -3265,6 +3265,11 @@ function renderEmployeeDirectoryRow(employee) {
             <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
             <button class="ghost-button" type="submit"${employee.hrAdmin || !employee.active ? " disabled" : ""}>${icon("users")} Add to HR</button>
           </form>
+          <form data-delete-employee-form>
+            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+            <input type="hidden" name="employeeName" value="${escapeHtml(employee.name || employee.username)}">
+            <button class="ghost-button danger" type="submit">${icon("delete")} Delete Account</button>
+          </form>
         </div>
       </td>
     </tr>
@@ -3375,6 +3380,15 @@ function renderAdminDirectoryRow(adminUser, scope = "hr") {
           </div>
           <button class="ghost-button" type="submit">${icon("check")} Save Identity</button>
         </form>
+        ${scopeValue !== "webmaster" ? `
+        <form class="admin-delete-account-form" data-delete-admin-form data-admin-scope="${escapeHtml(scopeValue)}">
+          <input type="hidden" name="adminUserId" value="${escapeHtml(adminUser.id)}">
+          <input type="hidden" name="adminName" value="${escapeHtml(adminUser.displayName || adminUser.username)}">
+          <button class="ghost-button danger" type="submit"${isCurrentUser ? " disabled" : ""}>
+            ${icon("delete")} Delete Account
+          </button>
+        </form>
+        ` : ""}
       </td>
       <td>${renderAdminRoleCell(adminUser, scope)}</td>
       <td>
@@ -4052,6 +4066,7 @@ function renderAdminSettingsPanel() {
       ${renderWeatherSettingsPanel()}
       ${state.access.hr.user?.mfa?.available ? renderAdminMfaPanel("hr") : ""}
       ${renderPrivilegedPasswordPanel("hr")}
+      ${renderAdminAccountsPanel("hr")}
     </section>
   `;
 }
@@ -5866,6 +5881,62 @@ async function handleRevokeAdminSessionsSubmit(event) {
   clearMessageSoon();
 }
 
+async function handleDeleteEmployeeSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  const employeeId = String(data.employeeId || "");
+  const employeeName = String(data.employeeName || "this employee");
+  const confirmed = window.confirm(
+    `Permanently remove ${employeeName}? This will permanently remove the account credentials, sessions, and associated data. This cannot be undone.`
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(employeeId)}`, {
+      method: "DELETE"
+    });
+    await refreshAdminData();
+    setMessage(`${employeeName}'s employee account and associated data were deleted.`, "success");
+  } catch (error) {
+    setMessage(error.message || "Could not delete the employee account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleDeleteAdminSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const adminUserId = String(data.adminUserId || "");
+  const adminName = String(data.adminName || "this admin");
+  const scope = normalizeAdminScope(form.dataset.adminScope);
+  const confirmed = window.confirm(
+    `Permanently remove ${adminName}? This will permanently remove the account credentials, sessions, and associated data. This cannot be undone.`
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await requestJson(`${adminApiBase(scope)}/${encodeURIComponent(adminUserId)}`, {
+      method: "DELETE"
+    });
+    await refreshAdminManagementScope(scope);
+    setMessage(`${adminName}'s admin account was deleted.`, "success");
+  } catch (error) {
+    setMessage(error.message || "Could not delete the admin account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 function clickedElement(event) {
   if (event.target instanceof Element) return event.target;
   return event.target?.parentElement || null;
@@ -6199,6 +6270,11 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.matches("[data-delete-admin-form]")) {
+    await handleDeleteAdminSubmit(event);
+    return;
+  }
+
   if (event.target.matches("[data-employee-access-form]")) {
     await handleEmployeeAccessSubmit(event);
     return;
@@ -6221,6 +6297,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-add-employee-hr-group-form]")) {
     await handleAddEmployeeHrGroupSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-delete-employee-form]")) {
+    await handleDeleteEmployeeSubmit(event);
     return;
   }
 

@@ -1772,6 +1772,323 @@ test("server supports IT admin governance and protects IT role boundaries", asyn
   assert.match(String(disableLastItBody.error || ""), /You cannot disable your own IT account while signed in/i);
 });
 
+test("HR employee deletion removes account records, sessions, push subscriptions, and acknowledgements", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-employee-delete-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const hrSetup = await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const hrReq = {
+    headers: {
+      cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+    }
+  };
+  const employee = await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  await provisionStore.authenticateEmployee({
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    userAgent: "employee-test"
+  });
+  const linkedHr = await provisionStore.addEmployeeToHrGroup(hrReq, employee.employee.id);
+  await provisionStore.authenticateAdmin({
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    userAgent: "linked-hr-test"
+  });
+
+  await writeFile(path.join(tempDir, "push.json"), `${JSON.stringify({
+    subscriptions: [
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/maria-phone-1",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key-1",
+          auth: "sample-auth-key-1"
+        },
+        deviceId: "maria-phone-1",
+        employeeId: employee.employee.id,
+        employeeName: employee.employee.name,
+        username: employee.employee.username,
+        authorized: true
+      },
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/maria-phone-2",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key-2",
+          auth: "sample-auth-key-2"
+        },
+        deviceId: "maria-phone-2",
+        employeeId: employee.employee.id,
+        employeeName: employee.employee.name,
+        username: employee.employee.username,
+        authorized: true
+      },
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/other-phone",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key-3",
+          auth: "sample-auth-key-3"
+        },
+        deviceId: "other-phone",
+        employeeId: "other-employee",
+        employeeName: "Other Employee",
+        username: "other.employee",
+        authorized: true
+      }
+    ]
+  }, null, 2)}\n`, "utf8");
+  await writeFile(path.join(tempDir, "board.json"), `${JSON.stringify({
+    posts: [],
+    acknowledgements: [
+      {
+        postId: "post-1",
+        employeeId: employee.employee.id,
+        employeeName: employee.employee.name,
+        username: employee.employee.username,
+        acknowledgedAt: "2026-07-16T10:00:00.000Z"
+      },
+      {
+        postId: "post-2",
+        employeeId: "legacy-maria-id",
+        employeeName: employee.employee.name,
+        username: employee.employee.username,
+        acknowledgedAt: "2026-07-16T10:01:00.000Z"
+      },
+      {
+        postId: "post-3",
+        employeeId: "other-employee",
+        employeeName: "Other Employee",
+        username: "other.employee",
+        acknowledgedAt: "2026-07-16T10:02:00.000Z"
+      }
+    ]
+  }, null, 2)}\n`, "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const hrLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(hrLogin.status, 200);
+  const hrBody = await hrLogin.json();
+  const hrCookie = readSetCookie(hrLogin);
+
+  const deleted = await fetch(`${server.baseUrl}/api/employees/${encodeURIComponent(employee.employee.id)}`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    }
+  });
+  assert.equal(deleted.status, 200);
+  const deletedBody = await deleted.json();
+  assert.equal(Boolean(deletedBody.ok), true);
+  assert.equal(Number(deletedBody.pushSubscriptionsRemoved), 2);
+  assert.equal(Number(deletedBody.acknowledgementsRemoved), 2);
+  assert.equal(Number(deletedBody.employeeSessionsRemoved), 1);
+  assert.equal(Number(deletedBody.adminUsersRemoved), 1);
+  assert.equal(Number(deletedBody.adminSessionsRemoved), 1);
+
+  const employees = await fetch(`${server.baseUrl}/api/employees`, {
+    headers: {
+      Cookie: hrCookie
+    }
+  });
+  assert.equal(employees.status, 200);
+  const employeesBody = await employees.json();
+  assert.equal(employeesBody.employees.some((entry) => entry.id === employee.employee.id), false);
+
+  const employeeLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(employeeLogin.status, 400);
+
+  const linkedHrLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(linkedHrLogin.status, 400);
+
+  const pushState = JSON.parse(await readFile(path.join(tempDir, "push.json"), "utf8"));
+  assert.equal(pushState.subscriptions.length, 1);
+  assert.equal(pushState.subscriptions[0].username, "other.employee");
+
+  const boardState = JSON.parse(await readFile(path.join(tempDir, "board.json"), "utf8"));
+  assert.equal(boardState.acknowledgements.length, 1);
+  assert.equal(boardState.acknowledgements[0].username, "other.employee");
+
+  const securityState = JSON.parse(await readFile(securityFile, "utf8"));
+  assert.equal(securityState.employees.some((entry) => entry.id === employee.employee.id), false);
+  assert.equal(securityState.adminUsers.some((entry) => entry.id === linkedHr.adminUser.id), false);
+});
+
+test("HR and IT account deletion APIs enforce scope, self-protection, and not-found responses", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-delete-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const itSetup = await provisionStore.setupItAccess({
+    username: "it.owner",
+    password: "OwnerSecret1!",
+    userAgent: "test"
+  });
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const webmasterSetup = await provisionStore.setupWebmasterAccess({
+    username: "webmaster.owner",
+    password: "WebmasterSecret1!",
+    userAgent: "test"
+  });
+  const backupHr = await provisionStore.createAdminUser({
+    displayName: "Backup HR",
+    email: "backup.hr@example.com",
+    username: "backup.hr",
+    password: "BackupManager1!",
+    roles: ["hr"]
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const unauthenticatedEmployeeDelete = await fetch(`${server.baseUrl}/api/employees/missing`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl
+    }
+  });
+  assert.equal(unauthenticatedEmployeeDelete.status, 401);
+
+  const hrLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(hrLogin.status, 200);
+  const hrBody = await hrLogin.json();
+  const hrCookie = readSetCookie(hrLogin);
+
+  const itLogin = await fetch(`${server.baseUrl}/api/it/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "it.owner",
+      password: "OwnerSecret1!"
+    })
+  });
+  assert.equal(itLogin.status, 200);
+  const itBody = await itLogin.json();
+  const itCookie = readSetCookie(itLogin);
+
+  const hrDeleteBackup = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(backupHr.adminUser.id)}`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    }
+  });
+  assert.equal(hrDeleteBackup.status, 200);
+
+  const hrDeleteWebmaster = await fetch(`${server.baseUrl}/api/admin-users/${encodeURIComponent(webmasterSetup.user.id)}`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl,
+      Cookie: hrCookie,
+      "X-CSRF-Token": hrBody.csrfToken
+    }
+  });
+  assert.equal(hrDeleteWebmaster.status, 400);
+
+  const itDeleteWebmaster = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(webmasterSetup.user.id)}`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    }
+  });
+  assert.equal(itDeleteWebmaster.status, 200);
+
+  const itDeleteSelf = await fetch(`${server.baseUrl}/api/it/admin-users/${encodeURIComponent(itSetup.user.id)}`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    }
+  });
+  assert.equal(itDeleteSelf.status, 400);
+  const itDeleteSelfBody = await itDeleteSelf.json();
+  assert.match(String(itDeleteSelfBody.error || ""), /cannot delete your own IT account/i);
+
+  const deleteMissing = await fetch(`${server.baseUrl}/api/it/admin-users/missing-admin`, {
+    method: "DELETE",
+    headers: {
+      Origin: server.baseUrl,
+      Cookie: itCookie,
+      "X-CSRF-Token": itBody.csrfToken
+    }
+  });
+  assert.equal(deleteMissing.status, 404);
+});
+
 test("server supports invite-by-email admin onboarding", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-admin-invites-"));
   const securityFile = path.join(tempDir, "security.json");

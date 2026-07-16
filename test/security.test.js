@@ -1342,3 +1342,316 @@ test("admin management blocks unsafe self-service actions for the current HR acc
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("HR employee deletion removes linked security data and anonymizes retained audit evidence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-delete-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const hrReq = {
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    };
+    const createdEmployee = await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const employeeLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "employee-test"
+    });
+    assert.ok(employeeLogin.sessionId);
+
+    const linkedHr = await store.addEmployeeToHrGroup(hrReq, createdEmployee.employee.id);
+    const linkedHrLogin = await store.authenticateAdmin({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "hr-test"
+    });
+    assert.ok(linkedHrLogin.sessionId);
+
+    await store.updateData((data) => {
+      data.loginGuards.employee.byAccount.push({
+        key: "maria.lopez",
+        failureCount: 2,
+        firstFailureAt: "2026-07-16T10:00:00.000Z",
+        lastFailureAt: "2026-07-16T10:01:00.000Z",
+        backoffUntil: "",
+        lockUntil: ""
+      });
+      data.loginGuards.hr.byAccount.push({
+        key: "maria.lopez",
+        failureCount: 1,
+        firstFailureAt: "2026-07-16T10:00:00.000Z",
+        lastFailureAt: "2026-07-16T10:00:00.000Z",
+        backoffUntil: "",
+        lockUntil: ""
+      });
+      data.loginGuards.webmaster.byAccount.push({
+        key: "maria.lopez",
+        failureCount: 1,
+        firstFailureAt: "2026-07-16T10:00:00.000Z",
+        lastFailureAt: "2026-07-16T10:00:00.000Z",
+        backoffUntil: "",
+        lockUntil: ""
+      });
+      data.loginGuards.it.byAccount.push({
+        key: "maria.lopez",
+        failureCount: 1,
+        firstFailureAt: "2026-07-16T10:00:00.000Z",
+        lastFailureAt: "2026-07-16T10:00:00.000Z",
+        backoffUntil: "",
+        lockUntil: ""
+      });
+      data.securityEvents.unshift(
+        {
+          id: "employee-delete-event",
+          createdAt: "2026-07-16T10:00:00.000Z",
+          type: "employee_push_subscribe_failed",
+          actor: "employee",
+          accountKey: "maria.lopez",
+          employeeId: createdEmployee.employee.id,
+          sourceIp: "198.51.100.20",
+          outcome: "denied",
+          detail: "test"
+        },
+        {
+          id: "linked-hr-delete-event",
+          createdAt: "2026-07-16T10:02:00.000Z",
+          type: "hr_login_failed",
+          actor: "hr",
+          accountKey: "maria.lopez",
+          sourceIp: "198.51.100.21",
+          outcome: "denied",
+          detail: "test"
+        }
+      );
+    });
+
+    const preview = await store.previewEmployeeDeletion(hrReq, createdEmployee.employee.id);
+    assert.equal(preview.employee.username, "maria.lopez");
+    assert.equal(preview.linkedAdminUserId, linkedHr.adminUser.id);
+
+    const deleted = await store.deleteEmployeeAccount(hrReq, createdEmployee.employee.id);
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.employeeSessionsRemoved, 1);
+    assert.equal(deleted.adminUsersRemoved, 1);
+    assert.equal(deleted.adminSessionsRemoved, 1);
+    assert.equal(deleted.loginGuardsRemoved, 4);
+    assert.equal(deleted.securityEventsAnonymized >= 2, true);
+
+    const state = await store.readSecurityState();
+    assert.equal(state.employees.some((entry) => entry.id === createdEmployee.employee.id), false);
+    assert.equal(state.employeeSessions.some((entry) => entry.employeeId === createdEmployee.employee.id), false);
+    assert.equal(state.adminUsers.some((entry) => entry.username === "maria.lopez"), false);
+    assert.equal(state.adminSessions.some((entry) => entry.adminUserId === linkedHr.adminUser.id), false);
+    assert.equal(state.loginGuards.employee.byAccount.some((entry) => entry.key === "maria.lopez"), false);
+    assert.equal(state.loginGuards.hr.byAccount.some((entry) => entry.key === "maria.lopez"), false);
+    assert.equal(state.loginGuards.webmaster.byAccount.some((entry) => entry.key === "maria.lopez"), false);
+    assert.equal(state.loginGuards.it.byAccount.some((entry) => entry.key === "maria.lopez"), false);
+    assert.equal(state.securityEvents.some((entry) => entry.employeeId === createdEmployee.employee.id), false);
+    assert.equal(state.securityEvents.some((entry) => entry.accountKey === "maria.lopez"), false);
+    assert.equal(state.securityEvents.some((entry) => entry.accountKey === "deleted-account"), true);
+
+    await assert.rejects(
+      store.deleteEmployeeAccount(hrReq, createdEmployee.employee.id),
+      (error) => error?.statusCode === 404 && /Employee not found/i.test(error.message)
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("HR employee deletion blocks deleting the current linked HR identity", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-delete-self-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const ownerReq = {
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    };
+    const createdEmployee = await store.createEmployeeAccount({
+      name: "Alex Rivera",
+      username: "alex.rivera",
+      password: "EmployeePass1!"
+    });
+    await store.addEmployeeToHrGroup(ownerReq, createdEmployee.employee.id);
+    const linkedLogin = await store.authenticateAdmin({
+      username: "alex.rivera",
+      password: "EmployeePass1!",
+      userAgent: "test"
+    });
+    const linkedReq = {
+      headers: {
+        cookie: `palziv_hr_auth=${linkedLogin.sessionId}`
+      }
+    };
+
+    await assert.rejects(
+      store.previewEmployeeDeletion(linkedReq, createdEmployee.employee.id),
+      /cannot delete your own admin account/i
+    );
+    await assert.rejects(
+      store.deleteEmployeeAccount(linkedReq, createdEmployee.employee.id),
+      /cannot delete your own admin account/i
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("HR and IT admin deletion enforce role boundaries and preserve same-username employees", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-admin-delete-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const itSetup = await store.setupItAccess({
+      username: "it.owner",
+      password: "OwnerSecret1!",
+      userAgent: "test"
+    });
+    const hrSetup = await store.setupAdminAccess({
+      username: "hr.owner",
+      password: "ManagerSecret1!",
+      userAgent: "test"
+    });
+    const webmasterSetup = await store.setupWebmasterAccess({
+      username: "webmaster.owner",
+      password: "WebmasterSecret1!",
+      userAgent: "test"
+    });
+    const itReq = {
+      headers: {
+        cookie: `palziv_it_auth=${itSetup.sessionId}`
+      }
+    };
+    const hrReq = {
+      headers: {
+        cookie: `palziv_hr_auth=${hrSetup.sessionId}`
+      }
+    };
+
+    const employee = await store.createEmployeeAccount({
+      name: "Operations HR",
+      username: "ops.hr",
+      password: "EmployeePass1!"
+    });
+    const linkedHr = await store.addEmployeeToHrGroup(hrReq, employee.employee.id);
+    const backupIt = await store.createItAdminUser({
+      displayName: "Backup IT",
+      email: "backup.it@example.com",
+      username: "backup.it",
+      password: "BackupOwner1!",
+      roles: ["it"]
+    });
+    await store.updateData((data) => {
+      for (const actor of ["hr", "webmaster", "it"]) {
+        data.loginGuards[actor].byAccount.push({
+          key: "ops.hr",
+          failureCount: 1,
+          firstFailureAt: "2026-07-16T10:00:00.000Z",
+          lastFailureAt: "2026-07-16T10:00:00.000Z",
+          backoffUntil: "",
+          lockUntil: ""
+        });
+      }
+      data.securityEvents.unshift(
+        {
+          id: "ops-employee-event",
+          createdAt: "2026-07-16T10:00:00.000Z",
+          type: "employee_push_subscribe_failed",
+          actor: "employee",
+          accountKey: "ops.hr",
+          employeeId: employee.employee.id,
+          sourceIp: "198.51.100.30",
+          outcome: "denied",
+          detail: "test"
+        },
+        {
+          id: "ops-admin-event",
+          createdAt: "2026-07-16T10:01:00.000Z",
+          type: "hr_login_failed",
+          actor: "hr",
+          accountKey: "ops.hr",
+          sourceIp: "198.51.100.31",
+          outcome: "denied",
+          detail: "test"
+        }
+      );
+    });
+
+    await assert.rejects(
+      store.deleteAdminUser(hrReq, hrSetup.user.id),
+      /cannot delete your own admin account/i
+    );
+    await assert.rejects(
+      store.deleteAdminUser(hrReq, webmasterSetup.user.id),
+      /HR cannot manage webmaster accounts/i
+    );
+    await assert.rejects(
+      store.deleteItAdminUser(itReq, itSetup.user.id),
+      /cannot delete your own IT account/i
+    );
+    const deletedLinkedHr = await store.deleteAdminUser(hrReq, linkedHr.adminUser.id);
+    assert.equal(deletedLinkedHr.ok, true);
+    assert.equal(deletedLinkedHr.username, "ops.hr");
+    assert.equal(deletedLinkedHr.loginGuardsRemoved, 3);
+    assert.equal(deletedLinkedHr.securityEventsAnonymized >= 2, true);
+
+    let state = await store.readSecurityState();
+    assert.equal(state.adminUsers.some((entry) => entry.id === linkedHr.adminUser.id), false);
+    assert.equal(state.employees.some((entry) => entry.id === employee.employee.id), true);
+    assert.equal(state.loginGuards.hr.byAccount.some((entry) => entry.key === "ops.hr"), false);
+    assert.equal(state.loginGuards.webmaster.byAccount.some((entry) => entry.key === "ops.hr"), false);
+    assert.equal(state.loginGuards.it.byAccount.some((entry) => entry.key === "ops.hr"), false);
+    assert.equal(state.securityEvents.find((entry) => entry.id === "ops-employee-event")?.accountKey, "ops.hr");
+    assert.equal(state.securityEvents.find((entry) => entry.id === "ops-admin-event")?.accountKey, "deleted-account");
+
+    await assert.rejects(
+      store.deleteItAdminUser(itReq, hrSetup.user.id),
+      /At least one active HR admin is required/i
+    );
+
+    const deletedWebmaster = await store.deleteItAdminUser(itReq, webmasterSetup.user.id);
+    assert.equal(deletedWebmaster.ok, true);
+    assert.equal(deletedWebmaster.username, "webmaster.owner");
+
+    const deletedBackupIt = await store.deleteItAdminUser(itReq, backupIt.adminUser.id);
+    assert.equal(deletedBackupIt.ok, true);
+
+    state = await store.readSecurityState();
+    assert.equal(state.adminUsers.some((entry) => entry.id === webmasterSetup.user.id), false);
+    assert.equal(state.adminUsers.some((entry) => entry.id === backupIt.adminUser.id), false);
+
+    await assert.rejects(
+      store.deleteItAdminUser(itReq, "missing-admin-id"),
+      (error) => error?.statusCode === 404 && /Admin account not found/i.test(error.message)
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
