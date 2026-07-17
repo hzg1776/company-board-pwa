@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -166,6 +166,42 @@ async function startEmailSink() {
     }
   };
 }
+
+test("alert retention never deletes posts that remain visible in the employee feed", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-feed-retention-"));
+  const boardFile = path.join(tempDir, "board.json");
+  await writeFile(boardFile, `${JSON.stringify({
+    posts: [
+      {
+        id: "feed-visible-alert",
+        type: "News",
+        priority: "Important",
+        deliveryTarget: "both",
+        notifyEmployees: true,
+        alertRetention: "24h",
+        title: "Keep this published update",
+        body: "This post is old, but it must remain in the employee feed until HR deletes it.",
+        audience: "All employees",
+        author: "HR",
+        createdAt: "2025-01-01T12:00:00.000Z",
+        expiresAt: ""
+      }
+    ],
+    acknowledgements: [],
+    weather: {}
+  }, null, 2)}\n`, "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const persisted = JSON.parse(await readFile(boardFile, "utf8"));
+  assert.deepEqual(persisted.posts.map((post) => post.id), ["feed-visible-alert"]);
+});
 
 test("server protects board reads and revokes disabled employees", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-managed-"));
@@ -2767,6 +2803,102 @@ test("service worker ships versioned shell assets for client cache busting", asy
 
   assert.match(text, /\/device-setup\.js\?v=/i);
   assert.match(text, /\/assets\/palziv-wordmark\.png\?v=/i);
+});
+
+test("app module versions the device setup dependency with the current asset version", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-versioned-module-"));
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const indexResponse = await fetch(`${server.baseUrl}/palzivalerts/employee`);
+  assert.equal(indexResponse.status, 200);
+  const indexHtml = await indexResponse.text();
+  const assetVersionMatch = indexHtml.match(/\/app\.js\?v=([a-zA-Z0-9._-]+)/);
+  assert.ok(assetVersionMatch);
+
+  const assetVersion = assetVersionMatch[1];
+  const appResponse = await fetch(`${server.baseUrl}/app.js?v=${encodeURIComponent(assetVersion)}`);
+  assert.equal(appResponse.status, 200);
+  const appText = await appResponse.text();
+
+  assert.match(
+    appText,
+    new RegExp(`from ["']\\./device-setup\\.js\\?v=${assetVersion}["']`)
+  );
+  assert.doesNotMatch(appText, /__ASSET_VERSION__/);
+});
+
+test("generated asset version rotates across server deployments", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-deployment-version-"));
+  const firstPort = await findFreePort();
+  const firstServer = await startServer(tempDir, firstPort);
+
+  const readAssetVersion = async (server) => {
+    const response = await fetch(`${server.baseUrl}/palzivalerts`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const match = html.match(/\/app\.js\?v=([a-zA-Z0-9._-]+)/);
+    assert.ok(match);
+    return match[1];
+  };
+
+  const firstVersion = await readAssetVersion(firstServer);
+  await stopServer(firstServer);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const secondPort = await findFreePort();
+  const secondServer = await startServer(tempDir, secondPort);
+  t.after(async () => {
+    await stopServer(secondServer);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const secondVersion = await readAssetVersion(secondServer);
+  assert.notEqual(secondVersion, firstVersion);
+});
+
+test("device setup changes rotate the generated asset version", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-device-version-"));
+  const publicDir = path.join(tempDir, "public");
+  const deviceSetupPath = path.join(publicDir, "device-setup.js");
+  await mkdir(publicDir, { recursive: true });
+  await writeFile(path.join(publicDir, "index.html"), '<script type="module" src="/app.js?v=__ASSET_VERSION__"></script>\n', "utf8");
+  await writeFile(path.join(publicDir, "app.js"), 'import "./device-setup.js?v=__ASSET_VERSION__";\n', "utf8");
+  await writeFile(path.join(publicDir, "styles.css"), "body {}\n", "utf8");
+  await writeFile(path.join(publicDir, "sw.js"), "self.__version = '__ASSET_VERSION__';\n", "utf8");
+  await writeFile(path.join(publicDir, "sw-routing.js"), "self.__routing = true;\n", "utf8");
+  await writeFile(deviceSetupPath, "export const version = 1;\n", "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    PUBLIC_DIR: publicDir
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const readAssetVersion = async () => {
+    const response = await fetch(`${server.baseUrl}/palzivalerts/employee`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const match = html.match(/\/app\.js\?v=([a-zA-Z0-9._-]+)/);
+    assert.ok(match);
+    return match[1];
+  };
+
+  const firstVersion = await readAssetVersion();
+  const futureTimestamp = new Date(Date.now() + 5_000);
+  await utimes(deviceSetupPath, futureTimestamp, futureTimestamp);
+  const secondVersion = await readAssetVersion();
+
+  assert.notEqual(secondVersion, firstVersion);
 });
 
 test("server restricts diagnostics to privileged sessions and rejects cross-site client telemetry", async (t) => {

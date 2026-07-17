@@ -306,6 +306,31 @@ test("employee password reset does not alter protected composite admin credentia
   }
 });
 
+test("employee password reset clears the password reset required status", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-password-ready-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+
+    const created = await store.createEmployeeAccount({
+      name: "Password Reset Employee",
+      username: "password.reset",
+      password: "EmployeePass1!",
+      passwordResetRequired: true
+    });
+
+    const reset = await store.resetEmployeePassword(created.employee.id, "EmployeePass2!");
+    assert.equal(Boolean(reset.employee.passwordResetRequired), false);
+
+    const employees = await store.listEmployees();
+    assert.equal(Boolean(employees[0]?.passwordResetRequired), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("legacy webmaster records normalize to the default webmaster username", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-webmaster-legacy-"));
   const dataFile = path.join(tempDir, "security.json");
