@@ -72,7 +72,7 @@ const SECURITY_HEADERS = Object.freeze({
     "form-action 'self'",
     "img-src 'self' data:",
     "manifest-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' https://static.cloudflareinsights.com",
     "style-src 'self'",
     "connect-src 'self'",
     "worker-src 'self'"
