@@ -4992,6 +4992,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       const nextPassword = createPasswordHash(password);
       employee.passwordSalt = nextPassword.salt;
       employee.passwordHash = nextPassword.hash;
+      employee.passwordResetRequired = false;
       employee.updatedAt = nowIso();
       employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
 

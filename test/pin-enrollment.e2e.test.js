@@ -467,7 +467,7 @@ async function provisionManagedAccess(tempDir, options = {}) {
 const chromePath = await findChromeExecutable();
 
 test(
-  "employee setup submits the push path when the browser omits submitter metadata",
+  "employee setup hides the subscribe prompt on Pixel and Samsung after push enrollment",
   {
     skip: chromePath ? false : "Chrome executable not found.",
     timeout: 120_000
@@ -502,6 +502,13 @@ test(
 
     const session = await createPageSession(connection);
     const appOrigin = `http://127.0.0.1:${serverPort}`;
+    const pixelUserAgent = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36";
+    const samsungUserAgent = "Mozilla/5.0 (Linux; Android 14; SAMSUNG SM-S921U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36";
+
+    await session.send("Network.setUserAgentOverride", {
+      userAgent: pixelUserAgent,
+      platform: "Android"
+    });
 
     await navigate(session, `${appOrigin}/palzivalerts/employee`);
     await waitForCondition(session, "document.readyState === 'complete'");
@@ -584,6 +591,11 @@ test(
       "Network.requestWillBeSent",
       (message) => String(message.params?.request?.url || "").includes("/api/push/config")
     );
+    const subscribeReloadPromise = session.waitForEvent(
+      "Page.loadEventFired",
+      () => true,
+      30_000
+    );
 
     await evaluateExpression(session, `
       (() => {
@@ -608,6 +620,56 @@ test(
 
     const pushConfigRequest = await pushConfigRequestPromise;
     assert.ok(String(pushConfigRequest.params.request.url).includes("/api/push/config"));
+    await subscribeReloadPromise;
+    await waitForCondition(
+      session,
+      "document.readyState === 'complete' && new URL(window.location.href).searchParams.has('subscribed')"
+    );
+
+    await waitForCondition(
+      session,
+      "Boolean(document.querySelector('[aria-label=\"Latest updates feed\"]')) && !document.querySelector('.employee-subscription-banner') && !document.querySelector('.employee-subscribe-button')",
+      30_000
+    );
+
+    const pixelReadyState = await evaluateExpression(session, `
+      ({
+        userAgent: navigator.userAgent,
+        hasSubscribeBanner: Boolean(document.querySelector('.employee-subscription-banner')),
+        hasSubscribeButton: Boolean(document.querySelector('.employee-subscribe-button')),
+        hasEmployeeFeed: Boolean(document.querySelector('[aria-label="Latest updates feed"]'))
+      })
+    `);
+
+    assert.match(pixelReadyState.userAgent, /Pixel 8 Pro/);
+    assert.equal(pixelReadyState.hasSubscribeBanner, false);
+    assert.equal(pixelReadyState.hasSubscribeButton, false);
+    assert.equal(pixelReadyState.hasEmployeeFeed, true);
+
+    await session.send("Network.setUserAgentOverride", {
+      userAgent: samsungUserAgent,
+      platform: "Android"
+    });
+    await navigate(session, `${appOrigin}/palzivalerts/employee`);
+    await waitForCondition(session, "Boolean(document.querySelector('[aria-label=\"Latest updates feed\"]'))");
+    await waitForCondition(
+      session,
+      "!document.querySelector('.employee-subscription-banner') && !document.querySelector('.employee-subscribe-button')"
+    );
+
+    const samsungReadyState = await evaluateExpression(session, `
+      ({
+        userAgent: navigator.userAgent,
+        hasSubscribeBanner: Boolean(document.querySelector('.employee-subscription-banner')),
+        hasSubscribeButton: Boolean(document.querySelector('.employee-subscribe-button')),
+        hasEmployeeFeed: Boolean(document.querySelector('[aria-label="Latest updates feed"]'))
+      })
+    `);
+
+    assert.match(samsungReadyState.userAgent, /SamsungBrowser\/25\.0/);
+    assert.equal(samsungReadyState.hasSubscribeBanner, false);
+    assert.equal(samsungReadyState.hasSubscribeButton, false);
+    assert.equal(samsungReadyState.hasEmployeeFeed, true);
 
     const pageText = await evaluateExpression(session, "document.body.innerText");
     assert.ok(!String(pageText).includes("Access PIN"));

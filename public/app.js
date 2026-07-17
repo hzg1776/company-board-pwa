@@ -2,7 +2,7 @@ import {
   requiresStandaloneForPush,
   resolveDeviceSetupAction,
   resolveDeviceSetupSecondaryAction
-} from "./device-setup.js";
+} from "./device-setup.js?v=__ASSET_VERSION__";
 
 const DEFAULT_SITE_CONFIG = {
   name: "Communications and Alert Center",

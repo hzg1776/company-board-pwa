@@ -30,6 +30,7 @@ const LOCAL_RUNTIME_ROOT = path.join(__dirname, "runtime");
 const LOCAL_RUNTIME_DATA_DIR = path.join(LOCAL_RUNTIME_ROOT, "data");
 const BOARD_SEED_FILE = path.join(__dirname, "data", "board.seed.json");
 const INDEX_HTML_TEMPLATE_PATH = path.join(PUBLIC_DIR, "index.html");
+const APP_SCRIPT_TEMPLATE_PATH = path.join(PUBLIC_DIR, "app.js");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
 const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
 const APP_BASE_PATH = "/palzivalerts";
@@ -119,7 +120,8 @@ function parseBoolean(value) {
 
 const siteConfig = readSiteConfig();
 const ASSET_VERSION_PATHS = [
-  path.join(PUBLIC_DIR, "app.js"),
+  APP_SCRIPT_TEMPLATE_PATH,
+  path.join(PUBLIC_DIR, "device-setup.js"),
   path.join(PUBLIC_DIR, "styles.css"),
   INDEX_HTML_TEMPLATE_PATH,
   SERVICE_WORKER_TEMPLATE_PATH,
@@ -521,6 +523,10 @@ function pruneOldAlertPosts(posts, now = Date.now()) {
       return true;
     }
 
+    if (String(post.deliveryTarget || "feed").toLowerCase() !== "alert") {
+      return true;
+    }
+
     const retentionMode = allowedAlertRetention.has(post?.alertRetention)
       ? post.alertRetention
       : "720h";
@@ -720,7 +726,10 @@ async function resolveAssetVersion() {
 
   try {
     const stats = await Promise.all(ASSET_VERSION_PATHS.map((filePath) => stat(filePath)));
-    return Math.round(Math.max(...stats.map((fileStat) => fileStat.mtimeMs))).toString(36);
+    return Math.round(Math.max(
+      new Date(SERVER_STARTED_AT).getTime(),
+      ...stats.map((fileStat) => fileStat.mtimeMs)
+    )).toString(36);
   } catch {
     return "dev";
   }
@@ -746,6 +755,12 @@ async function renderAppConfig() {
     ...siteConfig,
     assetVersion
   })};\n`;
+}
+
+async function renderAppScript() {
+  const assetVersion = await resolveAssetVersion();
+  const appScriptTemplate = await readFile(APP_SCRIPT_TEMPLATE_PATH, "utf8");
+  return appScriptTemplate.replaceAll("__ASSET_VERSION__", assetVersion);
 }
 
 async function renderServiceWorker() {
@@ -810,6 +825,15 @@ async function sendAppConfig(res) {
     "Cache-Control": "no-store"
   });
   res.end(await renderAppConfig());
+}
+
+async function sendAppScript(res) {
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    "Content-Type": "text/javascript; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(await renderAppScript());
 }
 
 function sendManifest(res) {
@@ -3169,6 +3193,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/app-config.js") {
     await sendAppConfig(res);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/app.js") {
+    await sendAppScript(res);
     return;
   }
 
