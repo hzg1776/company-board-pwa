@@ -3000,7 +3000,7 @@ test("server sends baseline security headers on app shell and static assets", as
   const csp = shell.headers.get("content-security-policy") || "";
   assert.match(csp, /frame-ancestors 'none'/);
   assert.match(csp, /base-uri 'none'/);
-  assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /script-src 'self' https:\/\/static\.cloudflareinsights\.com(?:;|$)/);
   assert.match(csp, /style-src 'self'/);
   assert.doesNotMatch(csp, /'unsafe-inline'/);
   assert.equal(shell.headers.get("x-frame-options"), "DENY");
