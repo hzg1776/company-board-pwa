@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 export LC_ALL=C
 umask 077
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR
 
 SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname -- "$SCRIPT_PATH")"
@@ -39,9 +41,14 @@ CHECKSUM_FINAL="$REPORT_FINAL.sha256"
   printf 'ERROR: readiness output already exists for this timestamp and hostname.\n' >&2
   exit 4
 }
+command -v -- sha256sum >/dev/null 2>&1 || {
+  printf 'ERROR: sha256sum is required to create the readiness checksum.\n' >&2
+  exit 5
+}
 
 REPORT_TEMP=""
 CHECKSUM_TEMP=""
+OUTPUT_COMPLETE=0
 
 cleanup() {
   local temporary_path
@@ -50,6 +57,13 @@ cleanup() {
       rm -f -- "$temporary_path" || true
     fi
   done
+  if [[ "$OUTPUT_COMPLETE" -ne 1 ]]; then
+    for temporary_path in "$REPORT_FINAL" "$CHECKSUM_FINAL"; do
+      if [[ "$temporary_path" == "$FROM_DIR"/debian-readiness-*.txt* && "$(dirname -- "$temporary_path")" == "$FROM_DIR" ]]; then
+        rm -f -- "$temporary_path" || true
+      fi
+    done
+  fi
 }
 trap cleanup EXIT
 
@@ -168,10 +182,10 @@ CHECKSUM_TEMP="$(mktemp --tmpdir="$FROM_DIR" ".debian-readiness.XXXXXXXX.tmp")"
   run_safe "github.com DNS" getent ahosts github.com
   run_safe "api.open-meteo.com DNS" getent ahosts api.open-meteo.com
   run_safe "updates.cloudflare.com DNS" getent ahosts updates.cloudflare.com
-  run_safe "nodejs.org HTTPS" curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://nodejs.org
-  run_safe "github.com HTTPS" curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://github.com
-  run_safe "api.open-meteo.com HTTPS" curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://api.open-meteo.com
-  run_safe "updates.cloudflare.com HTTPS" curl --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://updates.cloudflare.com
+  run_safe "nodejs.org HTTPS" curl --disable --noproxy '*' --proto =https --proto-redir =https --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://nodejs.org
+  run_safe "github.com HTTPS" curl --disable --noproxy '*' --proto =https --proto-redir =https --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://github.com
+  run_safe "api.open-meteo.com HTTPS" curl --disable --noproxy '*' --proto =https --proto-redir =https --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://api.open-meteo.com
+  run_safe "updates.cloudflare.com HTTPS" curl --disable --noproxy '*' --proto =https --proto-redir =https --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://updates.cloudflare.com
 } > "$REPORT_TEMP"
 
 mv -- "$REPORT_TEMP" "$REPORT_FINAL"
@@ -183,6 +197,7 @@ REPORT_TEMP=""
 ) > "$CHECKSUM_TEMP"
 mv -- "$CHECKSUM_TEMP" "$CHECKSUM_FINAL"
 CHECKSUM_TEMP=""
+OUTPUT_COMPLETE=1
 
 printf 'Report: %s\n' "$REPORT_FINAL"
 printf 'Checksum: %s\n' "$CHECKSUM_FINAL"

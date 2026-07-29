@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -228,6 +228,136 @@ test("Debian collector fails without leaving partial files when FROM-DEBIAN is i
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /FROM-DEBIAN.*directory/i);
     assert.deepEqual((await readdir(path.join(root, "TO-DEBIAN"))).sort(), ["collect-debian-readiness.sh"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Debian collector fixes curl transport state for approved outbound probes", async () => {
+  const script = await readFile(
+    new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url),
+    "utf8"
+  );
+  const curlCalls = script.match(/^\s*run_safe "[^"]+ HTTPS" curl .+$/gm) || [];
+
+  assert.equal(curlCalls.length, 4);
+  for (const call of curlCalls) {
+    assert.match(call, /curl --disable --noproxy '\*' --proto =https --proto-redir =https/);
+  }
+  assert.match(script, /unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy/);
+  assert.match(script, /unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR/);
+});
+
+test("Debian collector contains hostile curl config and proxy state", {
+  skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
+}, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-curl-containment-"));
+  try {
+    const fromDir = path.join(root, "FROM-DEBIAN");
+    const toDir = path.join(root, "TO-DEBIAN");
+    const binDir = path.join(root, "bin");
+    const curlHome = path.join(root, "hostile-curl-home");
+    const outsideArtifact = path.join(root, "hostile-output.txt");
+    await mkdir(toDir);
+    await mkdir(fromDir);
+    await mkdir(binDir);
+    await mkdir(curlHome);
+    await writeFile(path.join(curlHome, ".curlrc"), [
+      `output = "${outsideArtifact}"`,
+      "url = \"file:///etc/hostname\"",
+      "header = \"Authorization: Bearer hostile-curlrc-token\""
+    ].join("\n"));
+    const collector = path.join(toDir, "collect-debian-readiness.sh");
+    await copyFile(new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url), collector);
+    const fakeCurl = path.join(binDir, "curl");
+    await writeFile(fakeCurl, `#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  printf 'curl test version\\n'
+  exit 0
+fi
+if [[ "\${1:-}" != "--disable" || "\${2:-}" != "--noproxy" || "\${3:-}" != "*" || "\${4:-}" != "--proto" || "\${5:-}" != "=https" || "\${6:-}" != "--proto-redir" || "\${7:-}" != "=https" ]]; then
+  printf 'hostile curl config was not disabled\\n' >&2
+  printf 'hostile curl config was not disabled\\n' > "$HOSTILE_OUTPUT"
+  exit 91
+fi
+for variable_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR; do
+  if [[ -v "\$variable_name" ]]; then
+    printf 'hostile curl environment survived: %s\\n' "\$variable_name" >&2
+    printf 'hostile curl environment survived\\n' > "$HOSTILE_OUTPUT"
+    exit 92
+  fi
+done
+printf 'http-status=204\\n'
+`);
+    await chmod(fakeCurl, 0o700);
+    const result = await run("bash", [collector, "--usb-root", root], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+        HOME: curlHome,
+        CURL_HOME: curlHome,
+        XDG_CONFIG_HOME: curlHome,
+        HTTP_PROXY: "http://127.0.0.1:9",
+        HTTPS_PROXY: "http://127.0.0.1:9",
+        ALL_PROXY: "http://127.0.0.1:9",
+        http_proxy: "http://127.0.0.1:9",
+        https_proxy: "http://127.0.0.1:9",
+        all_proxy: "http://127.0.0.1:9",
+        CURL_CA_BUNDLE: "/nonexistent/hostile-ca.pem",
+        SSL_CERT_FILE: "/nonexistent/hostile-cert.pem",
+        SSL_CERT_DIR: "/nonexistent/hostile-cert-dir",
+        HOSTILE_OUTPUT: outsideArtifact
+      }
+    });
+    assert.equal(result.code, 0, result.stderr);
+    await assert.rejects(readFile(outsideArtifact));
+    const returned = await readdir(fromDir);
+    const reportName = returned.find((name) => name.endsWith(".txt"));
+    assert.ok(reportName);
+    const report = await readFile(path.join(fromDir, reportName), "utf8");
+    assert.doesNotMatch(report, /hostile-curlrc-token|hostile curl/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Debian collector removes its final report when checksum creation fails", {
+  skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
+}, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-checksum-cleanup-"));
+  try {
+    const fromDir = path.join(root, "FROM-DEBIAN");
+    const toDir = path.join(root, "TO-DEBIAN");
+    const binDir = path.join(root, "bin");
+    await mkdir(toDir);
+    await mkdir(fromDir);
+    await mkdir(binDir);
+    const collector = path.join(toDir, "collect-debian-readiness.sh");
+    await copyFile(new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url), collector);
+    const fakeSha256sum = path.join(binDir, "sha256sum");
+    await writeFile(fakeSha256sum, `#!/usr/bin/env bash
+if [[ "\${2:-}" == debian-readiness-*.txt ]]; then
+  printf 'forced checksum failure after report publication\\n' >&2
+  exit 93
+fi
+exec /usr/bin/sha256sum "$@"
+`);
+    const fakeCurl = path.join(binDir, "curl");
+    await writeFile(fakeCurl, `#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  printf 'curl test version\\n'
+else
+  printf 'http-status=204\\n'
+fi
+`);
+    await chmod(fakeSha256sum, 0o700);
+    await chmod(fakeCurl, 0o700);
+    const result = await run("bash", [collector, "--usb-root", root], {
+      env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH}` }
+    });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /forced checksum failure/i);
+    assert.deepEqual(await readdir(fromDir), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
