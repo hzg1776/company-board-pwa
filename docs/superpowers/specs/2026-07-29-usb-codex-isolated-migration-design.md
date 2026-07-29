@@ -52,7 +52,7 @@ The USB is FAT32 with approximately 29 GB available. No individual artifact may 
 2. The user physically moves the USB to the Proxmox server and attaches it to the Debian VM.
 3. The user identifies the USB partition locally and mounts it with `nodev`, `nosuid`, and `noexec` where practical.
 4. The user verifies the SHA-256 manifest before running the collector through an explicit `bash` command.
-5. The collector performs read-only inspection of Debian and writes one timestamped report under `FROM-DEBIAN`.
+5. The collector performs read-only inspection of Debian, writes one timestamped report under `FROM-DEBIAN`, and creates a SHA-256 sidecar for that report.
 6. The user unmounts the USB and physically returns it to the laptop.
 7. Codex reads only the returned report and produces a readiness assessment.
 8. A deployment bundle is prepared only after the inventory is reviewed and the migration implementation is ready.
@@ -105,7 +105,8 @@ File and directory names may be reported only when they cannot expose credential
 - Missing optional commands are reported as unavailable rather than causing partial silent output.
 - Commands that need elevation report that fact; the collector does not request or capture a password.
 - The collector fails safely if the USB return directory is not writable.
-- A partially written report is clearly marked incomplete or removed before exit.
+- The collector writes to a temporary report, atomically renames it only after collection completes, and removes the temporary file on failure.
+- The returned-report checksum is created only after the final report exists.
 - The collector does not retry by changing permissions, packages, services, firewall rules, or network configuration.
 
 ## Verification
