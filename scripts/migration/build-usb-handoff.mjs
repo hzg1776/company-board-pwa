@@ -1,14 +1,16 @@
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import {
-  copyFile,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   rename,
   rm
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   assertFat32CompatibleSize,
   assertPathWithin,
@@ -31,6 +33,7 @@ const CHILD_DIRECTORIES = Object.freeze([
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), "..", "..");
+const execFileAsync = promisify(execFile);
 
 async function requireDirectory(directoryPath, label) {
   const metadata = await lstat(directoryPath);
@@ -59,6 +62,133 @@ async function removeValidatedStaging(usbRoot, stagingPath) {
   await rm(staging, { recursive: true, force: true });
 }
 
+function sourceIdentityMatches(approved, candidate) {
+  return (
+    (approved.dev === 0 || candidate.dev === 0 || approved.dev === candidate.dev)
+    && approved.ino === candidate.ino
+    && approved.size === candidate.size
+    && approved.mtimeMs === candidate.mtimeMs
+    && approved.ctimeMs === candidate.ctimeMs
+  );
+}
+
+async function copyApprovedSource(approvedSource, destinationPath) {
+  let sourceHandle;
+  let destinationHandle;
+  try {
+    const noFollow = constants.O_NOFOLLOW ?? 0;
+    try {
+      sourceHandle = await open(approvedSource.path, constants.O_RDONLY | noFollow);
+    } catch (error) {
+      throw new Error(
+        `Transfer source changed during handoff build: ${approvedSource.relativePath}`,
+        { cause: error }
+      );
+    }
+    const openedMetadata = await sourceHandle.stat();
+    if (
+      !openedMetadata.isFile()
+      || !sourceIdentityMatches(approvedSource.metadata, openedMetadata)
+    ) {
+      throw new Error(`Transfer source changed during handoff build: ${approvedSource.relativePath}`);
+    }
+
+    destinationHandle = await open(destinationPath, "wx");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let position = 0;
+    while (true) {
+      const { bytesRead } = await sourceHandle.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) break;
+      let bytesWritten = 0;
+      while (bytesWritten < bytesRead) {
+        const result = await destinationHandle.write(
+          buffer,
+          bytesWritten,
+          bytesRead - bytesWritten,
+          position + bytesWritten
+        );
+        bytesWritten += result.bytesWritten;
+      }
+      position += bytesRead;
+    }
+
+    let currentMetadata;
+    try {
+      currentMetadata = await lstat(approvedSource.path);
+    } catch (error) {
+      throw new Error(
+        `Transfer source changed during handoff build: ${approvedSource.relativePath}`,
+        { cause: error }
+      );
+    }
+    if (
+      currentMetadata.isSymbolicLink()
+      || !currentMetadata.isFile()
+      || !sourceIdentityMatches(approvedSource.metadata, currentMetadata)
+    ) {
+      throw new Error(`Transfer source changed during handoff build: ${approvedSource.relativePath}`);
+    }
+  } finally {
+    await destinationHandle?.close();
+    await sourceHandle?.close();
+  }
+}
+
+export async function publishStagingNoClobber({
+  usbRoot,
+  stagingPath,
+  handoffRoot
+}) {
+  const root = path.resolve(usbRoot);
+  const staging = assertPathWithin(root, stagingPath);
+  const handoff = assertPathWithin(root, handoffRoot);
+  if (
+    path.dirname(staging) !== root
+    || !path.basename(staging).startsWith(`${HANDOFF_NAME}.partial-`)
+    || path.dirname(handoff) !== root
+    || path.basename(handoff) !== HANDOFF_NAME
+  ) {
+    throw new Error("Refusing to publish invalid USB handoff paths.");
+  }
+
+  if (process.platform === "win32") {
+    try {
+      await rename(staging, handoff);
+      return;
+    } catch (error) {
+      if (await pathExists(handoff)) {
+        throw new Error(`${HANDOFF_NAME} already exists; this builder will not overwrite it.`);
+      }
+      throw error;
+    }
+  }
+
+  if (process.platform !== "linux") {
+    throw new Error(`Atomic no-clobber publication is unsupported on ${process.platform}.`);
+  }
+  const moveArguments = [
+    "--no-clobber",
+    "--no-target-directory",
+    "--",
+    staging,
+    handoff
+  ];
+  try {
+    await execFileAsync("mv", moveArguments, { windowsHide: true });
+  } catch (error) {
+    if (await pathExists(staging) && await pathExists(handoff)) {
+      throw new Error(`${HANDOFF_NAME} already exists; this builder will not overwrite it.`);
+    }
+    throw error;
+  }
+  if (await pathExists(staging)) {
+    if (await pathExists(handoff)) {
+      throw new Error(`${HANDOFF_NAME} already exists; this builder will not overwrite it.`);
+    }
+    throw new Error(`No-clobber publication did not move the staged handoff: ${staging}`);
+  }
+}
+
 export async function buildUsbHandoff({
   usbRoot,
   sourceRoot = repositoryRoot
@@ -70,6 +200,7 @@ export async function buildUsbHandoff({
   const root = path.resolve(usbRoot);
   const source = path.resolve(sourceRoot);
   await requireDirectory(root, "USB root");
+  await requireDirectory(source, "Source root");
 
   const handoffRoot = assertPathWithin(root, path.join(root, HANDOFF_NAME));
   if (await pathExists(handoffRoot)) {
@@ -85,25 +216,38 @@ export async function buildUsbHandoff({
       await mkdir(path.join(stagingPath, relativeDirectory));
     }
 
-    const outboundPaths = [];
+    const approvedSources = [];
     for (const [sourceRelativePath, destinationRelativePath] of TRANSFER_FILES) {
-      const sourcePath = path.join(source, ...sourceRelativePath.split("/"));
-      const destinationPath = assertPathWithin(
-        stagingPath,
-        path.join(stagingPath, ...destinationRelativePath.split("/"))
+      const sourcePath = assertPathWithin(
+        source,
+        path.join(source, ...sourceRelativePath.split("/"))
       );
       const sourceMetadata = await lstat(sourcePath);
       if (sourceMetadata.isSymbolicLink() || !sourceMetadata.isFile()) {
         throw new Error(`Transfer source is not a regular file: ${sourceRelativePath}`);
       }
       assertFat32CompatibleSize(sourceMetadata.size, sourceRelativePath);
-      await copyFile(sourcePath, destinationPath, constants.COPYFILE_EXCL);
+      approvedSources.push({
+        path: sourcePath,
+        relativePath: sourceRelativePath,
+        destinationRelativePath,
+        metadata: sourceMetadata
+      });
+    }
+
+    const outboundPaths = [];
+    for (const approvedSource of approvedSources) {
+      const destinationPath = assertPathWithin(
+        stagingPath,
+        path.join(stagingPath, ...approvedSource.destinationRelativePath.split("/"))
+      );
+      await copyApprovedSource(approvedSource, destinationPath);
       const copiedMetadata = await lstat(destinationPath);
       if (!copiedMetadata.isFile() || copiedMetadata.isSymbolicLink()) {
-        throw new Error(`Copied artifact is not a regular file: ${destinationRelativePath}`);
+        throw new Error(`Copied artifact is not a regular file: ${approvedSource.destinationRelativePath}`);
       }
-      assertFat32CompatibleSize(copiedMetadata.size, destinationRelativePath);
-      outboundPaths.push(destinationRelativePath);
+      assertFat32CompatibleSize(copiedMetadata.size, approvedSource.destinationRelativePath);
+      outboundPaths.push(approvedSource.destinationRelativePath);
     }
 
     const stagingManifestPath = path.join(stagingPath, "CHECKSUMS", "TO-DEBIAN.sha256");
@@ -117,10 +261,7 @@ export async function buildUsbHandoff({
       manifestPath: stagingManifestPath
     });
 
-    if (await pathExists(handoffRoot)) {
-      throw new Error(`${HANDOFF_NAME} already exists; this builder will not overwrite it.`);
-    }
-    await rename(stagingPath, handoffRoot);
+    await publishStagingNoClobber({ usbRoot: root, stagingPath, handoffRoot });
     stagingPath = undefined;
 
     return {

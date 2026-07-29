@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -47,6 +59,24 @@ async function waitForFile(filePath) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+async function waitForStagingFile(usbRoot, relativePath) {
+  for (let attempt = 0; attempt < 2000; attempt += 1) {
+    const stagingName = (await readdir(usbRoot))
+      .find((name) => name.startsWith("Project-A-Migration.partial-"));
+    if (stagingName) {
+      const candidate = path.join(usbRoot, stagingName, ...relativePath.split("/"));
+      try {
+        await lstat(candidate);
+        return candidate;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error(`Timed out waiting for staging file ${relativePath}`);
 }
 
 test("USB path checks reject escape and FAT32-incompatible files", () => {
@@ -513,6 +543,66 @@ test("USB builder refuses to overwrite an existing handoff", async () => {
     assert.deepEqual(await readdir(usbRoot), ["Project-A-Migration"]);
   } finally {
     await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("USB publication refuses an empty destination appearing at publish time", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-publish-race-"));
+  const stagingPath = path.join(usbRoot, "Project-A-Migration.partial-test");
+  const handoffRoot = path.join(usbRoot, "Project-A-Migration");
+  try {
+    await mkdir(stagingPath);
+    await writeFile(path.join(stagingPath, "staged.txt"), "staged\n");
+    await mkdir(handoffRoot);
+    const { publishStagingNoClobber } = await import("../scripts/migration/build-usb-handoff.mjs");
+    await assert.rejects(
+      publishStagingNoClobber({ usbRoot, stagingPath, handoffRoot }),
+      /already exists.*will not overwrite/i
+    );
+    assert.deepEqual(await readdir(handoffRoot), []);
+    assert.deepEqual(await readdir(stagingPath), ["staged.txt"]);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("USB builder rejects a source replaced between approval and copy", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-source-race-"));
+  const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-source-"));
+  const secretRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-secret-"));
+  try {
+    const deployDirectory = path.join(sourceRoot, "deploy", "usb-migration");
+    const migrationDirectory = path.join(sourceRoot, "scripts", "migration");
+    await mkdir(deployDirectory, { recursive: true });
+    await mkdir(migrationDirectory, { recursive: true });
+    await writeFile(
+      path.join(deployDirectory, "README-FIRST.txt"),
+      Buffer.alloc(64 * 1024 * 1024, 0x52)
+    );
+    await writeFile(
+      path.join(deployDirectory, "ISOLATION-BOUNDARY.txt"),
+      Buffer.alloc(64 * 1024 * 1024, 0x49)
+    );
+    const collectorPath = path.join(migrationDirectory, "collect-debian-readiness.sh");
+    await writeFile(collectorPath, "#!/usr/bin/env bash\nprintf 'approved\\n'\n");
+    const secretPath = path.join(secretRoot, "private-token.txt");
+    await writeFile(secretPath, "API_TOKEN=must-never-be-published\n");
+
+    const { buildUsbHandoff } = await import("../scripts/migration/build-usb-handoff.mjs");
+    const build = buildUsbHandoff({ usbRoot, sourceRoot });
+    await waitForStagingFile(usbRoot, "ISOLATION-BOUNDARY.txt");
+    await rename(collectorPath, `${collectorPath}.approved`);
+    await copyFile(secretPath, collectorPath);
+
+    await assert.rejects(
+      build,
+      /source.*(?:changed|symbolic link)/i
+    );
+    assert.deepEqual(await readdir(usbRoot), []);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+    await rm(sourceRoot, { recursive: true, force: true });
+    await rm(secretRoot, { recursive: true, force: true });
   }
 });
 
