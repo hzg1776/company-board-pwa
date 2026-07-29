@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const FAT32_MAX_FILE_BYTES = 4_294_967_294;
@@ -43,6 +43,13 @@ export function assertFat32CompatibleSize(size, label) {
 }
 
 export async function sha256File(filePath) {
+  const metadata = await lstat(filePath);
+  if (metadata.isSymbolicLink()) {
+    throw new Error(`Symbolic links are not allowed in USB handoff paths: ${filePath}`);
+  }
+  if (!metadata.isFile()) {
+    throw new Error(`SHA-256 source is not a file: ${filePath}`);
+  }
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) {
     hash.update(chunk);
@@ -69,26 +76,64 @@ function manifestPathToHostPath(rootPath, relativePath) {
   );
 }
 
-export async function writeSha256Manifest({ rootPath, relativePaths, manifestPath }) {
+async function assertNoSymlinkInPath(rootPath, candidatePath) {
   const root = path.resolve(rootPath);
-  const finalPath = assertPathWithin(root, manifestPath);
-  const partialPath = assertPathWithin(root, `${finalPath}.partial`);
+  const candidate = assertPathWithin(root, candidatePath);
+  const relative = path.relative(root, candidate);
+  const segments = relative ? relative.split(path.sep) : [];
+  let current = root;
+
+  for (const segment of [null, ...segments]) {
+    if (segment) current = path.join(current, segment);
+    try {
+      const metadata = await lstat(current);
+      if (metadata.isSymbolicLink()) {
+        throw new Error(`Symbolic links are not allowed in USB handoff paths: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT" && current !== root) return candidate;
+      throw error;
+    }
+  }
+  return candidate;
+}
+
+function assertArtifactSizeWithinLimit(size, label, limit) {
+  assertFat32CompatibleSize(size, label);
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > FAT32_MAX_FILE_BYTES || size > limit) {
+    throw new Error(`${label} is not compatible with the FAT32 single-file limit`);
+  }
+}
+
+export async function writeSha256Manifest({
+  rootPath,
+  relativePaths,
+  manifestPath,
+  maxArtifactBytes = FAT32_MAX_FILE_BYTES
+}) {
+  const root = path.resolve(rootPath);
+  const finalPath = await assertNoSymlinkInPath(root, assertPathWithin(root, manifestPath));
+  const partialPath = await assertNoSymlinkInPath(root, assertPathWithin(root, `${finalPath}.partial`));
   const paths = [...new Set(relativePaths.map(normalizeManifestPath))].sort();
   const records = [];
 
   for (const relativePath of paths) {
-    const filePath = manifestPathToHostPath(root, relativePath);
-    const metadata = await stat(filePath);
+    const filePath = await assertNoSymlinkInPath(root, manifestPathToHostPath(root, relativePath));
+    const metadata = await lstat(filePath);
     if (!metadata.isFile()) throw new Error(`Manifest source is not a file: ${relativePath}`);
     assertFat32CompatibleSize(metadata.size, relativePath);
     records.push({ path: relativePath, sha256: await sha256File(filePath) });
   }
 
+  const manifest = `${records.map((entry) => `${entry.sha256}  ${entry.path}`).join("\n")}\n`;
+  assertArtifactSizeWithinLimit(Buffer.byteLength(manifest), manifestPath, maxArtifactBytes);
   await mkdir(path.dirname(finalPath), { recursive: true });
+  await assertNoSymlinkInPath(root, finalPath);
+  await assertNoSymlinkInPath(root, partialPath);
   try {
     await writeFile(
       partialPath,
-      `${records.map((entry) => `${entry.sha256}  ${entry.path}`).join("\n")}\n`,
+      manifest,
       { flag: "wx" }
     );
     await rename(partialPath, finalPath);
@@ -101,7 +146,7 @@ export async function writeSha256Manifest({ rootPath, relativePaths, manifestPat
 
 export async function verifySha256Manifest({ rootPath, manifestPath }) {
   const root = path.resolve(rootPath);
-  const raw = await readFile(assertPathWithin(root, manifestPath), "utf8");
+  const raw = await readFile(await assertNoSymlinkInPath(root, assertPathWithin(root, manifestPath)), "utf8");
   const lines = raw.split(/\r?\n/).filter(Boolean);
   const seen = new Set();
   const records = [];
@@ -111,8 +156,8 @@ export async function verifySha256Manifest({ rootPath, manifestPath }) {
     const relativePath = normalizeManifestPath(match[2]);
     if (seen.has(relativePath)) throw new Error(`Duplicate manifest path: ${relativePath}`);
     seen.add(relativePath);
-    const filePath = manifestPathToHostPath(root, relativePath);
-    const metadata = await stat(filePath);
+    const filePath = await assertNoSymlinkInPath(root, manifestPathToHostPath(root, relativePath));
+    const metadata = await lstat(filePath);
     if (!metadata.isFile()) throw new Error(`Manifest entry is not a file: ${relativePath}`);
     assertFat32CompatibleSize(metadata.size, relativePath);
     const actual = await sha256File(filePath);

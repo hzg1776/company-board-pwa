@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -61,6 +61,66 @@ test("manifest verification rejects absolute and parent-traversal entries", asyn
       verifySha256Manifest({ rootPath: root, manifestPath }),
       /unsafe manifest path/i
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("manifest writing rejects a symlinked source directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-symlink-source-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-outside-"));
+  try {
+    await writeFile(path.join(outside, "collector.sh"), "#!/usr/bin/env bash\n");
+    await symlink(outside, path.join(root, "TO-DEBIAN"), "junction");
+    await assert.rejects(
+      writeSha256Manifest({
+        rootPath: root,
+        relativePaths: ["TO-DEBIAN/collector.sh"],
+        manifestPath: path.join(root, "CHECKSUMS", "TO-DEBIAN.sha256")
+      }),
+      /symbolic link/i
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("manifest writing rejects a symlinked destination directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-symlink-destination-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-outside-"));
+  try {
+    await writeFile(path.join(root, "README-FIRST.txt"), "read this\n");
+    await symlink(outside, path.join(root, "CHECKSUMS"), "junction");
+    await assert.rejects(
+      writeSha256Manifest({
+        rootPath: root,
+        relativePaths: ["README-FIRST.txt"],
+        manifestPath: path.join(root, "CHECKSUMS", "TO-DEBIAN.sha256")
+      }),
+      /symbolic link/i
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("manifest writing rejects generated output above the FAT32 artifact limit", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-manifest-size-"));
+  try {
+    await writeFile(path.join(root, "README-FIRST.txt"), "");
+    const manifestPath = path.join(root, "CHECKSUMS", "TO-DEBIAN.sha256");
+    await assert.rejects(
+      writeSha256Manifest({
+        rootPath: root,
+        relativePaths: ["README-FIRST.txt"],
+        manifestPath,
+        maxArtifactBytes: 64
+      }),
+      /FAT32/i
+    );
+    await assert.rejects(readFile(manifestPath));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
