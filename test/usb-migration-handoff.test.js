@@ -456,3 +456,118 @@ test("Debian collector cleanup recognizes its FAT32-compatible output reservatio
   assert.match(script, /if ! mkdir -- "\$RESERVATION_DIR"/);
   assert.match(script, /rmdir -- "\$RESERVATION_DIR"/);
 });
+
+test("USB builder creates the exact handoff atomically with valid hashes", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-build-"));
+  try {
+    const result = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    assert.deepEqual((await readdir(handoff)).sort(), [
+      "CHECKSUMS",
+      "FROM-DEBIAN",
+      "ISOLATION-BOUNDARY.txt",
+      "README-FIRST.txt",
+      "SECRETS-ENCRYPTED",
+      "TO-DEBIAN"
+    ]);
+    assert.deepEqual(await readdir(path.join(handoff, "FROM-DEBIAN")), []);
+    assert.deepEqual(await readdir(path.join(handoff, "SECRETS-ENCRYPTED")), []);
+    assert.deepEqual(await readdir(path.join(handoff, "TO-DEBIAN")), [
+      "collect-debian-readiness.sh"
+    ]);
+    assert.deepEqual(await readdir(path.join(handoff, "CHECKSUMS")), [
+      "TO-DEBIAN.sha256"
+    ]);
+    const verified = await verifySha256Manifest({
+      rootPath: handoff,
+      manifestPath: path.join(handoff, "CHECKSUMS", "TO-DEBIAN.sha256")
+    });
+    assert.deepEqual(verified.map((entry) => entry.path), [
+      "ISOLATION-BOUNDARY.txt",
+      "README-FIRST.txt",
+      "TO-DEBIAN/collect-debian-readiness.sh"
+    ]);
+    assert.equal((await readdir(usbRoot)).some((name) => name.includes(".partial-")), false);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("USB builder refuses to overwrite an existing handoff", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-existing-"));
+  try {
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    await mkdir(handoff);
+    await writeFile(path.join(handoff, "keep.txt"), "preserve\n");
+    const result = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /already exists.*will not overwrite/i);
+    assert.equal(await readFile(path.join(handoff, "keep.txt"), "utf8"), "preserve\n");
+    assert.deepEqual(await readdir(usbRoot), ["Project-A-Migration"]);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("USB builder cleans only its staging directory after a failed build", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-failed-build-"));
+  const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-missing-source-"));
+  try {
+    await writeFile(path.join(usbRoot, "operator-file.txt"), "preserve\n");
+    const { buildUsbHandoff } = await import("../scripts/migration/build-usb-handoff.mjs");
+    await assert.rejects(
+      buildUsbHandoff({ usbRoot, sourceRoot }),
+      /README-FIRST\.txt/
+    );
+    assert.deepEqual(await readdir(usbRoot), ["operator-file.txt"]);
+    assert.equal(await readFile(path.join(usbRoot, "operator-file.txt"), "utf8"), "preserve\n");
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+    await rm(sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test("USB instructions preserve the approved operator and isolation boundary", async () => {
+  const readme = await readFile(new URL("../deploy/usb-migration/README-FIRST.txt", import.meta.url), "utf8");
+  const boundary = await readFile(new URL("../deploy/usb-migration/ISOLATION-BOUNDARY.txt", import.meta.url), "utf8");
+  const wrapper = await readFile(new URL("../scripts/migration/prepare-usb-handoff.ps1", import.meta.url), "utf8");
+
+  assert.match(readme, /mount -o nodev,nosuid,noexec/);
+  assert.match(readme, /sha256sum --check CHECKSUMS\/TO-DEBIAN\.sha256/);
+  assert.match(readme, /bash TO-DEBIAN\/collect-debian-readiness\.sh/);
+  assert.match(readme, /umount/);
+  assert.match(readme, /verify-usb-handoff\.mjs.*--mode returned/);
+  assert.match(boundary, /Codex has no remote access/i);
+  assert.match(boundary, /Debian remains internet-connected/i);
+  assert.match(boundary, /never.*passwords.*private SSH keys.*tokens/i);
+  assert.match(wrapper, /Win32_LogicalDisk/);
+  assert.match(wrapper, /DriveType\s*-ne\s*2/);
+  assert.match(wrapper, /FileSystem\s*-ne\s*['"]FAT32['"]/);
+  assert.doesNotMatch(wrapper, /Remove-Item[^\n]*Project-A-Migration/);
+});
+
+test("PowerShell wrapper rejects a network destination before drive inspection", {
+  skip: process.platform !== "win32" ? "PowerShell wrapper check runs on Windows." : false
+}, async () => {
+  const wrapperPath = path.resolve("scripts/migration/prepare-usb-handoff.ps1");
+  const result = await run(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy", "Bypass",
+      "-File", wrapperPath,
+      "-UsbDrive", "\\\\server\\share"
+    ]
+  );
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /ValidatePattern|validation script|does not match/i);
+  assert.doesNotMatch(result.stderr, /Win32_LogicalDisk|Get-CimInstance/i);
+});

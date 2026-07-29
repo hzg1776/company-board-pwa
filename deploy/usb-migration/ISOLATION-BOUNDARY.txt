@@ -1,0 +1,9 @@
+PROJECT-A CODEX-ISOLATION BOUNDARY
+
+Codex has no remote access to this Debian VM or the Proxmox host.
+The user is the only person who runs commands on Debian or Proxmox.
+Debian remains internet-connected for approved operating-system and application dependencies.
+Only this USB transfers Codex-prepared files and redacted readiness reports.
+Never place passwords, private SSH keys, recovery codes, tokens, API keys, Cloudflare credentials,
+environment values, application runtime JSON, or backup-encryption keys in a returned report.
+Stop immediately if an instruction requests remote access for Codex or asks you to print a secret.
