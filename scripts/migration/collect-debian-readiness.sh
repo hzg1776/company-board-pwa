@@ -3,7 +3,7 @@ set -Eeuo pipefail
 export LC_ALL=C
 umask 077
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
-unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR
+unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE
 
 SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname -- "$SCRIPT_PATH")"
@@ -48,21 +48,30 @@ command -v -- sha256sum >/dev/null 2>&1 || {
 
 REPORT_TEMP=""
 CHECKSUM_TEMP=""
+RESERVATION_DIR="$FROM_DIR/.debian-readiness-$TIMESTAMP-$SAFE_HOSTNAME.lock"
+RESERVATION_OWNED=0
 OUTPUT_COMPLETE=0
 
 cleanup() {
   local temporary_path
+  local reservation_owned=0
+  if [[ "$RESERVATION_OWNED" -eq 1 && -d "$RESERVATION_DIR" && ! -L "$RESERVATION_DIR" && "$(dirname -- "$RESERVATION_DIR")" == "$FROM_DIR" ]]; then
+    reservation_owned=1
+  fi
   for temporary_path in "$REPORT_TEMP" "$CHECKSUM_TEMP"; do
     if [[ -n "$temporary_path" && "$temporary_path" == "$FROM_DIR"/.debian-readiness.*.tmp && "$(dirname -- "$temporary_path")" == "$FROM_DIR" ]]; then
       rm -f -- "$temporary_path" || true
     fi
   done
-  if [[ "$OUTPUT_COMPLETE" -ne 1 ]]; then
+  if [[ "$reservation_owned" -eq 1 && "$OUTPUT_COMPLETE" -ne 1 ]]; then
     for temporary_path in "$REPORT_FINAL" "$CHECKSUM_FINAL"; do
       if [[ "$temporary_path" == "$FROM_DIR"/debian-readiness-*.txt* && "$(dirname -- "$temporary_path")" == "$FROM_DIR" ]]; then
         rm -f -- "$temporary_path" || true
       fi
     done
+  fi
+  if [[ "$reservation_owned" -eq 1 ]]; then
+    rmdir -- "$RESERVATION_DIR" || true
   fi
 }
 trap cleanup EXIT
@@ -112,6 +121,11 @@ account_names() {
   getent "$source" 2>&1 | awk -F: '{print $1}' || printf 'status: unavailable-or-permission-required\n'
 }
 
+if ! mkdir -- "$RESERVATION_DIR" 2>/dev/null; then
+  printf 'ERROR: readiness output is already reserved by another collector.\n' >&2
+  exit 4
+fi
+RESERVATION_OWNED=1
 REPORT_TEMP="$(mktemp --tmpdir="$FROM_DIR" ".debian-readiness.XXXXXXXX.tmp")"
 CHECKSUM_TEMP="$(mktemp --tmpdir="$FROM_DIR" ".debian-readiness.XXXXXXXX.tmp")"
 
@@ -188,6 +202,10 @@ CHECKSUM_TEMP="$(mktemp --tmpdir="$FROM_DIR" ".debian-readiness.XXXXXXXX.tmp")"
   run_safe "updates.cloudflare.com HTTPS" curl --disable --noproxy '*' --proto =https --proto-redir =https --silent --show-error --output /dev/null --connect-timeout 5 --max-time 10 --write-out 'http-status=%{http_code}\n' https://updates.cloudflare.com
 } > "$REPORT_TEMP"
 
+[[ -d "$RESERVATION_DIR" && ! -L "$RESERVATION_DIR" ]] || {
+  printf 'ERROR: readiness output reservation changed unexpectedly.\n' >&2
+  exit 4
+}
 mv -- "$REPORT_TEMP" "$REPORT_FINAL"
 REPORT_TEMP=""
 
@@ -197,6 +215,8 @@ REPORT_TEMP=""
 ) > "$CHECKSUM_TEMP"
 mv -- "$CHECKSUM_TEMP" "$CHECKSUM_FINAL"
 CHECKSUM_TEMP=""
+rmdir -- "$RESERVATION_DIR"
+RESERVATION_OWNED=0
 OUTPUT_COMPLETE=1
 
 printf 'Report: %s\n' "$REPORT_FINAL"

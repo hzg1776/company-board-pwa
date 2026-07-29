@@ -36,6 +36,19 @@ function run(command, args, options = {}) {
   });
 }
 
+async function waitForFile(filePath) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      await readFile(filePath);
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
 test("USB path checks reject escape and FAT32-incompatible files", () => {
   const root = path.resolve(os.tmpdir(), "project-a-usb-root");
   assert.equal(assertPathWithin(root, path.join(root, "FROM-DEBIAN", "report.txt")), path.join(root, "FROM-DEBIAN", "report.txt"));
@@ -245,7 +258,7 @@ test("Debian collector fixes curl transport state for approved outbound probes",
     assert.match(call, /curl --disable --noproxy '\*' --proto =https --proto-redir =https/);
   }
   assert.match(script, /unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy/);
-  assert.match(script, /unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR/);
+  assert.match(script, /unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE/);
 });
 
 test("Debian collector contains hostile curl config and proxy state", {
@@ -280,7 +293,11 @@ if [[ "\${1:-}" != "--disable" || "\${2:-}" != "--noproxy" || "\${3:-}" != "*" |
   printf 'hostile curl config was not disabled\\n' > "$HOSTILE_OUTPUT"
   exit 91
 fi
-for variable_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR; do
+if [[ -v SSLKEYLOGFILE ]]; then
+  printf 'tls-key-log-secret\\n' > "$SSLKEYLOGFILE"
+  exit 93
+fi
+for variable_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE; do
   if [[ -v "\$variable_name" ]]; then
     printf 'hostile curl environment survived: %s\\n' "\$variable_name" >&2
     printf 'hostile curl environment survived\\n' > "$HOSTILE_OUTPUT"
@@ -290,6 +307,7 @@ done
 printf 'http-status=204\\n'
 `);
     await chmod(fakeCurl, 0o700);
+    const tlsKeyLog = path.join(root, "hostile-tls-keys.log");
     const result = await run("bash", [collector, "--usb-root", root], {
       env: {
         ...process.env,
@@ -306,11 +324,13 @@ printf 'http-status=204\\n'
         CURL_CA_BUNDLE: "/nonexistent/hostile-ca.pem",
         SSL_CERT_FILE: "/nonexistent/hostile-cert.pem",
         SSL_CERT_DIR: "/nonexistent/hostile-cert-dir",
+        SSLKEYLOGFILE: tlsKeyLog,
         HOSTILE_OUTPUT: outsideArtifact
       }
     });
     assert.equal(result.code, 0, result.stderr);
     await assert.rejects(readFile(outsideArtifact));
+    await assert.rejects(readFile(tlsKeyLog));
     const returned = await readdir(fromDir);
     const reportName = returned.find((name) => name.endsWith(".txt"));
     assert.ok(reportName);
@@ -361,4 +381,78 @@ fi
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Debian collector does not let a concurrent same-second failure delete the completed pair", {
+  skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
+}, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-concurrent-output-"));
+  try {
+    const fromDir = path.join(root, "FROM-DEBIAN");
+    const toDir = path.join(root, "TO-DEBIAN");
+    const binDir = path.join(root, "bin");
+    const syncDir = path.join(root, "sync");
+    await mkdir(toDir);
+    await mkdir(fromDir);
+    await mkdir(binDir);
+    await mkdir(syncDir);
+    const collector = path.join(toDir, "collect-debian-readiness.sh");
+    await copyFile(new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url), collector);
+    await writeFile(path.join(binDir, "date"), "#!/usr/bin/env bash\nprintf '20260729T120000Z\\n'\n");
+    await writeFile(path.join(binDir, "hostname"), "#!/usr/bin/env bash\nprintf 'same-host\\n'\n");
+    await writeFile(path.join(binDir, "curl"), `#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  printf 'curl test version\\n'
+else
+  printf 'http-status=204\\n'
+fi
+`);
+    await writeFile(path.join(binDir, "sha256sum"), `#!/usr/bin/env bash
+if [[ "\${2:-}" == debian-readiness-*.txt && "\${COLLECTOR_MODE:-}" == "success" ]]; then
+  : > "$SYNC_DIR/success-checksum-started"
+  while [[ ! -e "$SYNC_DIR/release-success" ]]; do
+    sleep 0.01
+  done
+fi
+exec /usr/bin/sha256sum "$@"
+`);
+    await Promise.all([
+      chmod(path.join(binDir, "date"), 0o700),
+      chmod(path.join(binDir, "hostname"), 0o700),
+      chmod(path.join(binDir, "curl"), 0o700),
+      chmod(path.join(binDir, "sha256sum"), 0o700)
+    ]);
+    const environment = {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+      SYNC_DIR: syncDir
+    };
+    const successfulRun = run("bash", [collector, "--usb-root", root], {
+      env: { ...environment, COLLECTOR_MODE: "success" }
+    });
+    await waitForFile(path.join(syncDir, "success-checksum-started"));
+    const failedRun = await run("bash", [collector, "--usb-root", root], {
+      env: { ...environment, COLLECTOR_MODE: "failure" }
+    });
+    assert.notEqual(failedRun.code, 0);
+    await writeFile(path.join(syncDir, "release-success"), "release\n");
+    const success = await successfulRun;
+    assert.equal(success.code, 0, success.stderr);
+    const returned = (await readdir(fromDir)).sort();
+    const reportName = "debian-readiness-20260729T120000Z-same-host.txt";
+    assert.deepEqual(returned, [reportName, `${reportName}.sha256`]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Debian collector cleanup recognizes its FAT32-compatible output reservation", async () => {
+  const script = await readFile(
+    new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(script, /RESERVATION_DIR="\$FROM_DIR\/\.debian-readiness-\$TIMESTAMP-\$SAFE_HOSTNAME\.lock"/);
+  assert.match(script, /if ! mkdir -- "\$RESERVATION_DIR"/);
+  assert.match(script, /rmdir -- "\$RESERVATION_DIR"/);
 });
