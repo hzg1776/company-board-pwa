@@ -7,6 +7,7 @@ import {
   lstat,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   readdir,
   rename,
@@ -790,7 +791,7 @@ const RETURN_FAILURE_CASES = [
   },
   {
     name: "unsafe filename inside sidecar",
-    expected: /unsafe manifest path/i,
+    expected: /returned checksum sidecar is invalid/i,
     arrange: async (returnDir, reportName) => {
       const reportPath = path.join(returnDir, reportName);
       await writeFile(reportPath, "safe\n");
@@ -802,7 +803,7 @@ const RETURN_FAILURE_CASES = [
   },
   {
     name: "sidecar containing two entries",
-    expected: /does not name only/i,
+    expected: /returned checksum sidecar is invalid/i,
     arrange: async (returnDir, reportName) => {
       const otherName = "debian-readiness-20260729T170000Z-palziv-prod.txt";
       const reportPath = path.join(returnDir, reportName);
@@ -825,7 +826,7 @@ const RETURN_FAILURE_CASES = [
   },
   {
     name: "valid-looking report directory",
-    expected: /not a file|checksum/i,
+    expected: /not a regular file/i,
     arrange: async (returnDir, reportName) => {
       await mkdir(path.join(returnDir, reportName));
       await writeFile(
@@ -998,4 +999,274 @@ test("handoff verifier CLI rejects relative roots and unsupported arguments", as
   ]);
   assert.notEqual(unsupported.code, 0);
   assert.match(unsupported.stderr, /usage|unsupported/i);
+});
+
+test("stable report verification rejects a basename replaced after approval and open", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-report-race-"));
+  let reportHandle;
+  try {
+    const pathSentinel = "must-never-be-echoed-filesystem-path";
+    const reportName =
+      `debian-readiness-20260730T120000Z-${pathSentinel}.txt`;
+    const reportPath = path.join(root, reportName);
+    const approvedPath = path.join(root, `${reportName}.approved`);
+    const approvedContents = "approved readiness report\n";
+    await writeFile(reportPath, approvedContents);
+    const approvedMetadata = await lstat(reportPath, { bigint: true });
+    reportHandle = await open(reportPath, "r");
+
+    await rename(reportPath, approvedPath);
+    await writeFile(reportPath, "replacement report that must not be screened\n");
+
+    const { readStableOpenedReport } = await import(
+      "../scripts/migration/verify-usb-handoff.mjs"
+    );
+    await assert.rejects(
+      readStableOpenedReport({
+        handle: reportHandle,
+        reportPath,
+        approvedMetadata,
+        expectedSha256: createHash("sha256").update(approvedContents).digest("hex")
+      }),
+      /report changed during verification/i
+    );
+
+    await rm(reportPath);
+    await assert.rejects(
+      readStableOpenedReport({
+        handle: reportHandle,
+        reportPath,
+        approvedMetadata,
+        expectedSha256: createHash("sha256").update(approvedContents).digest("hex")
+      }),
+      (error) => {
+        assert.match(error.message, /report changed during verification/i);
+        assert.doesNotMatch(error.message, new RegExp(pathSentinel, "i"));
+        return true;
+      }
+    );
+  } finally {
+    await reportHandle?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function assertAncestorLinkRejected(linkType) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-ancestor-link-"));
+  try {
+    const usbRoot = path.join(root, "actual-usb");
+    const aliasRoot = path.join(root, "aliased-usb");
+    await mkdir(usbRoot);
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    await symlink(usbRoot, aliasRoot, linkType);
+
+    const result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", path.join(aliasRoot, "Project-A-Migration"),
+      "--mode", "outbound"
+    ]);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /ancestor.*(?:symbolic link|junction)/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("handoff verification rejects a Windows ancestor junction", {
+  skip: process.platform !== "win32" ? "Windows junction check runs on Windows." : false
+}, async () => {
+  await assertAncestorLinkRejected("junction");
+});
+
+test("handoff verification rejects a POSIX ancestor symbolic link", {
+  skip: process.platform === "win32" ? "POSIX symbolic-link check runs outside Windows." : false
+}, async () => {
+  await assertAncestorLinkRejected("dir");
+});
+
+test("returned verification never echoes attacker-controlled media text", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-safe-errors-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    const returnDir = path.join(handoff, "FROM-DEBIAN");
+    const { verifyUsbHandoff } = await import(
+      "../scripts/migration/verify-usb-handoff.mjs"
+    );
+
+    const assertApiFailure = async (expectedMessage, sentinel) => {
+      await assert.rejects(
+        verifyUsbHandoff({ handoffRoot: handoff, mode: "returned" }),
+        (error) => {
+          assert.equal(error.message, expectedMessage);
+          assert.doesNotMatch(error.message, new RegExp(sentinel, "i"));
+          return true;
+        }
+      );
+    };
+    const assertCliFailure = async (expectedStderr, sentinel) => {
+      const result = await run(process.execPath, [
+        "scripts/migration/verify-usb-handoff.mjs",
+        "--handoff-root", handoff,
+        "--mode", "returned"
+      ]);
+      assert.equal(result.code, 1);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, `${expectedStderr}\n`);
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(sentinel, "i"));
+    };
+
+    const filenameSentinel = "must-never-be-echoed-filename";
+    await writeFile(
+      path.join(returnDir, `RESEND_API_KEY=${filenameSentinel}`),
+      "hostile filename\n"
+    );
+    await assertApiFailure("Unexpected return file.", filenameSentinel);
+    await assertCliFailure("Unexpected return file.", filenameSentinel);
+    await rm(path.join(returnDir, `RESEND_API_KEY=${filenameSentinel}`));
+
+    const reportName = "debian-readiness-20260730T120000Z-palziv-prod.txt";
+    const reportPath = path.join(returnDir, reportName);
+    const manifestSentinel = "must-never-be-echoed-manifest";
+    await writeFile(reportPath, "safe report\n");
+    await writeFile(
+      `${reportPath}.sha256`,
+      `${await sha256File(reportPath)}  ../${manifestSentinel}\n`
+    );
+    await assertApiFailure("Returned checksum sidecar is invalid.", manifestSentinel);
+    await assertCliFailure("Returned checksum sidecar is invalid.", manifestSentinel);
+    await rm(reportPath);
+    await rm(`${reportPath}.sha256`);
+
+    const pathSentinel = "must-never-be-echoed-path";
+    const hostileReportName =
+      `debian-readiness-20260730T130000Z-${pathSentinel}.txt`;
+    await mkdir(path.join(returnDir, hostileReportName));
+    await writeFile(
+      path.join(returnDir, `${hostileReportName}.sha256`),
+      `${"0".repeat(64)}  ${hostileReportName}\n`
+    );
+    await assertApiFailure("Returned entry is not a regular file.", pathSentinel);
+    await assertCliFailure("Returned entry is not a regular file.", pathSentinel);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("handoff verification rejects oversized checksum text before loading it", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-checksum-bound-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    const manifestPath = path.join(handoff, "CHECKSUMS", "TO-DEBIAN.sha256");
+    const approvedManifest = await readFile(manifestPath);
+
+    await writeFile(manifestPath, Buffer.alloc(1025, 0x61));
+    let result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "Inbound checksum manifest is too large.\n");
+
+    await writeFile(manifestPath, approvedManifest);
+    const reportName = "debian-readiness-20260730T120000Z-palziv-prod.txt";
+    const reportPath = path.join(handoff, "FROM-DEBIAN", reportName);
+    await writeFile(reportPath, "safe report\n");
+    await writeFile(`${reportPath}.sha256`, Buffer.alloc(1025, 0x62));
+    result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "returned"
+    ]);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "Returned checksum sidecar is too large.\n");
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("handoff verifier CLI enforces the complete deterministic argument contract", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-cli-contract-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    const verifier = "scripts/migration/verify-usb-handoff.mjs";
+    const usage =
+      "Usage: node scripts/migration/verify-usb-handoff.mjs --handoff-root <absolute path> --mode outbound|returned\n";
+
+    const reversed = await run(process.execPath, [
+      verifier,
+      "--mode", "outbound",
+      "--handoff-root", handoff
+    ]);
+    assert.equal(reversed.code, 0, reversed.stderr);
+    assert.equal(reversed.stderr, "");
+    assert.equal(JSON.parse(reversed.stdout).mode, "outbound");
+
+    const failures = [
+      {
+        name: "duplicate named options",
+        args: ["--mode", "outbound", "--mode", "returned"],
+        stderr: usage
+      },
+      {
+        name: "missing option token",
+        args: ["--handoff-root", handoff, "--mode"],
+        stderr: usage
+      },
+      {
+        name: "missing option value before another option",
+        args: ["--handoff-root", "--mode", "--mode", "outbound"],
+        stderr: usage
+      },
+      {
+        name: "invalid mode",
+        args: ["--handoff-root", handoff, "--mode", "invalid"],
+        stderr: "--mode must be outbound or returned\n"
+      },
+      {
+        name: "hostile unsupported option",
+        args: [
+          "--handoff-root", handoff,
+          "--RESEND_API_KEY=must-never-be-echoed", "outbound"
+        ],
+        stderr: usage
+      }
+    ];
+
+    for (const scenario of failures) {
+      const result = await run(process.execPath, [verifier, ...scenario.args]);
+      assert.equal(result.code, 1, scenario.name);
+      assert.equal(result.stdout, "", scenario.name);
+      assert.equal(result.stderr, scenario.stderr, scenario.name);
+      assert.doesNotMatch(
+        `${result.stdout}${result.stderr}`,
+        /must-never-be-echoed/i,
+        scenario.name
+      );
+    }
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
 });
