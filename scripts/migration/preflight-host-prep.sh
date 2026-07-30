@@ -49,6 +49,11 @@ HOST_PREP_MAPPED_PATH=""
 HOST_PREP_MAPPED_TEXT=""
 HOST_PREP_PATH_STATE=""
 HOST_PREP_CLASSIFICATION=""
+HOST_PREP_STAGE_ROOT_RESULT=""
+HOST_PREP_MANIFEST_FINGERPRINT_RESULT=""
+HOST_PREP_CLASSIFICATION_RESULT=""
+HOST_PREP_SAFETY_RESULT=""
+HOST_PREP_ACCOUNT_STATE=""
 HOST_PREP_STAGE=""
 HOST_PREP_MANIFEST=""
 HOST_PREP_TOKEN=""
@@ -60,6 +65,13 @@ HOST_PREP_BOUNDED_TRUNCATED=0
 HOST_PREP_BOUNDED_MALFORMED=0
 HOST_PREP_BOUNDED_READER_STATUS=125
 declare -A HOST_PREP_FIXTURE_COMPONENT_STATES=()
+
+host_prep_require_current_shell() {
+  if (( BASH_SUBSHELL != 0 )) || [[ "$BASHPID" != "$$" ]]; then
+    printf 'host-prep: rejected stateful subshell\n' >&2
+    return 1
+  fi
+}
 
 host_prep_emit_summary() {
   local ok="$1"
@@ -386,6 +398,8 @@ host_prep_stage_root() {
   local stage
   local stage_base
 
+  HOST_PREP_STAGE_ROOT_RESULT=""
+  host_prep_require_current_shell || return 1
   host_prep_initialize_environment || return 1
   lexical_source=$(/usr/bin/realpath -s -- "$HOST_PREP_SCRIPT_SOURCE" 2>/dev/null) || return 1
   canonical_source=$(/usr/bin/readlink -e -- "$HOST_PREP_SCRIPT_SOURCE" 2>/dev/null) || return 1
@@ -412,6 +426,7 @@ host_prep_stage_root() {
     [[ "$HOST_PREP_TEST_COMMAND_BIN/" != "$stage/"* ]] || return 1
     host_prep_revalidate_fixture_boundaries || return 1
   fi
+  HOST_PREP_STAGE_ROOT_RESULT="$stage"
   printf '%s\n' "$stage"
 }
 
@@ -580,8 +595,15 @@ host_prep_verify_manifest() {
 
 host_prep_manifest_fingerprint() {
   local stage
-  stage=$(host_prep_stage_root) || return 1
-  host_prep_verify_manifest "$stage"
+  local fingerprint
+
+  HOST_PREP_MANIFEST_FINGERPRINT_RESULT=""
+  host_prep_require_current_shell || return 1
+  host_prep_stage_root >/dev/null || return 1
+  stage="$HOST_PREP_STAGE_ROOT_RESULT"
+  fingerprint=$(host_prep_verify_manifest "$stage") || return 1
+  HOST_PREP_MANIFEST_FINGERPRINT_RESULT="$fingerprint"
+  printf '%s\n' "$fingerprint"
 }
 
 host_prep_remove_stale_token() {
@@ -698,6 +720,8 @@ host_prep_verify_safety_state() {
   local qemu_service="qemu-guest-agent.service"
   local time_service="systemd-timesyncd.service"
 
+  HOST_PREP_SAFETY_RESULT=""
+  host_prep_require_current_shell || return 1
   host_prep_initialize_environment || return 1
   host_prep_read_os_release || return 1
   host_prep_run_observer_bounded 64 uname -m || return 1
@@ -764,7 +788,8 @@ host_prep_verify_safety_state() {
   host_prep_run_observer_bounded 256 ss -H -ltn 'sport = :3116' || return 1
   [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
     "$HOST_PREP_BOUNDED_TRUNCATED" -eq 0 &&
-    -z "$HOST_PREP_BOUNDED_OUTPUT" ]]
+    -z "$HOST_PREP_BOUNDED_OUTPUT" ]] || return 1
+  HOST_PREP_SAFETY_RESULT="safe"
 }
 
 host_prep_path_state() {
@@ -797,12 +822,13 @@ host_prep_get_account_state() {
   local passwd_status
   local group_status
 
+  HOST_PREP_ACCOUNT_STATE="conflict"
   host_prep_run_observer_bounded "$HOST_PREP_MAX_COMMAND_OUTPUT" getent passwd palziv ||
     return 1
   passwd_output="$HOST_PREP_BOUNDED_OUTPUT"
   passwd_status="$HOST_PREP_BOUNDED_STATUS"
   (( HOST_PREP_BOUNDED_TRUNCATED == 0 )) || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
     return 0
   }
   host_prep_run_observer_bounded "$HOST_PREP_MAX_COMMAND_OUTPUT" getent group palziv ||
@@ -810,7 +836,7 @@ host_prep_get_account_state() {
   group_output="$HOST_PREP_BOUNDED_OUTPUT"
   group_status="$HOST_PREP_BOUNDED_STATUS"
   (( HOST_PREP_BOUNDED_TRUNCATED == 0 )) || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
     return 0
   }
 
@@ -818,24 +844,25 @@ host_prep_get_account_state() {
     -z "$group_output" &&
     "$passwd_status" -eq 2 &&
     "$group_status" -eq 2 ]]; then
-    printf '%s\n' absent
+    HOST_PREP_ACCOUNT_STATE="absent"
+    printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
     return 0
   fi
   [[ "$passwd_status" -eq 0 && "$group_status" -eq 0 ]] || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
     return 0
   }
   [[ "$passwd_output" != *$'\r'* &&
     "$group_output" != *$'\r'* &&
     "$passwd_output" == *$'\n' &&
     "$group_output" == *$'\n' ]] || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
     return 0
   }
   passwd_entry="${passwd_output%$'\n'}"
   group_entry="${group_output%$'\n'}"
   [[ "$passwd_entry" != *$'\n'* && "$group_entry" != *$'\n'* ]] || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
     return 0
   }
 
@@ -861,10 +888,9 @@ host_prep_get_account_state() {
     "$group_id" -lt 1000 &&
     -z "$group_members" &&
     -z "${group_extra-}" ]]; then
-    printf '%s\n' exact
-  else
-    printf '%s\n' conflict
+    HOST_PREP_ACCOUNT_STATE="exact"
   fi
+  printf '%s\n' "$HOST_PREP_ACCOUNT_STATE"
 }
 
 host_prep_capture_path_identity() {
@@ -918,6 +944,19 @@ host_prep_capture_node_chain() {
   HOST_PREP_NODE_EXECUTABLE_PATH="$node_path"
 }
 
+host_prep_node_chain_matches() {
+  local expected_name="$1"
+  local index
+  local -a current=()
+  local -n expected_reference="$expected_name"
+
+  host_prep_capture_node_chain current || return 1
+  (( ${#expected_reference[@]} == ${#current[@]} )) || return 1
+  for (( index = 0; index < ${#expected_reference[@]}; index += 1 )); do
+    [[ "${expected_reference[index]}" == "${current[index]}" ]] || return 1
+  done
+}
+
 host_prep_observer_exact_line() {
   local expected="$1"
   local maximum="$2"
@@ -937,7 +976,6 @@ host_prep_node_is_exact() {
   local link_after
   local link_target
   local -a chain_before=()
-  local -a chain_after=()
 
   host_prep_capture_node_chain chain_before || return 1
   version_path="$HOST_PREP_NODE_VERSION_PATH"
@@ -950,11 +988,18 @@ host_prep_node_is_exact() {
     return 1
   host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$version_path" ||
     return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$bin_path" ||
     return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$node_path" ||
     return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path" || return 1
+  host_prep_node_chain_matches chain_before || return 1
+  link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
+    return 1
+  [[ "$link_before" == "$link_after" ]] || return 1
   link_target=$(/usr/bin/readlink -- "$link_path" 2>/dev/null) || return 1
   [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]] || return 1
 
@@ -962,8 +1007,7 @@ host_prep_node_is_exact() {
   [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
     "$HOST_PREP_BOUNDED_OUTPUT" == "$HOST_PREP_NODE_VERSION"$'\n' ]] || return 1
 
-  host_prep_capture_node_chain chain_after || return 1
-  [[ "${chain_before[*]}" == "${chain_after[*]}" ]] || return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_system_path "$HOST_PREP_NODE_LINK" 1 >/dev/null || return 1
   [[ "$HOST_PREP_MAPPED_PATH" == "$link_path" && -L "$link_path" ]] || return 1
   link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
@@ -973,11 +1017,20 @@ host_prep_node_is_exact() {
   [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]] || return 1
   host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$version_path" ||
     return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$bin_path" ||
     return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$node_path" ||
     return 1
-  host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path"
+  host_prep_node_chain_matches chain_before || return 1
+  host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path" || return 1
+  host_prep_node_chain_matches chain_before || return 1
+  link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
+    return 1
+  [[ "$link_before" == "$link_after" ]] || return 1
+  link_target=$(/usr/bin/readlink -- "$link_path" 2>/dev/null) || return 1
+  [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]]
 }
 
 host_prep_directory_children_are_exact() {
@@ -1053,30 +1106,34 @@ host_prep_classify() {
     "/var/backups/palziv"
     "/etc/palziv"
   )
+  HOST_PREP_CLASSIFICATION_RESULT=""
+  host_prep_require_current_shell || return 1
   HOST_PREP_CLASSIFICATION="conflict"
+  HOST_PREP_CLASSIFICATION_RESULT="$HOST_PREP_CLASSIFICATION"
 
   host_prep_initialize_environment || {
-    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
     return 0
   }
   host_prep_path_state "$HOST_PREP_NODE_DIRECTORY" >/dev/null || {
-    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
     return 0
   }
   node_directory_state="$HOST_PREP_PATH_STATE"
   host_prep_path_state "$HOST_PREP_NODE_LINK" >/dev/null || {
-    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
     return 0
   }
   node_link_state="$HOST_PREP_PATH_STATE"
-  account_state=$(host_prep_get_account_state) || {
-    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+  host_prep_get_account_state >/dev/null || {
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
     return 0
   }
+  account_state="$HOST_PREP_ACCOUNT_STATE"
 
   for absolute_path in "${directories[@]}"; do
     host_prep_path_state "$absolute_path" >/dev/null || {
-      printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+      printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
       return 0
     }
     directory_state="$HOST_PREP_PATH_STATE"
@@ -1088,7 +1145,8 @@ host_prep_classify() {
     "$account_state" == "absent" &&
     "$all_directories_absent" -eq 1 ]]; then
     HOST_PREP_CLASSIFICATION="clean"
-    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+    HOST_PREP_CLASSIFICATION_RESULT="$HOST_PREP_CLASSIFICATION"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
     return 0
   fi
 
@@ -1098,11 +1156,12 @@ host_prep_classify() {
     host_prep_node_is_exact &&
     host_prep_directories_are_exact; then
     HOST_PREP_CLASSIFICATION="already-prepared"
-    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+    HOST_PREP_CLASSIFICATION_RESULT="$HOST_PREP_CLASSIFICATION"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
     return 0
   fi
 
-  printf '%s\n' "$HOST_PREP_CLASSIFICATION"
+  printf '%s\n' "$HOST_PREP_CLASSIFICATION_RESULT"
 }
 
 host_prep_report_ufw_state() {
@@ -1190,6 +1249,7 @@ host_prep_preflight_main() {
   local final_fingerprint
   local classification
   local final_classification
+  local replay_classification
 
   # Supported production launcher:
   # /usr/bin/env -i HOME="$HOME" PATH="/usr/sbin:/usr/bin:/sbin:/bin" /bin/bash -p TO-DEBIAN/preflight-host-prep.sh
@@ -1200,10 +1260,11 @@ host_prep_preflight_main() {
     host_prep_fail_main fixture-routing
     return 1
   }
-  HOST_PREP_STAGE=$(host_prep_stage_root) || {
+  host_prep_stage_root >/dev/null || {
     host_prep_fail_main stage-path
     return 1
   }
+  HOST_PREP_STAGE="$HOST_PREP_STAGE_ROOT_RESULT"
   HOST_PREP_MANIFEST="$HOST_PREP_STAGE/$HOST_PREP_MANIFEST_RELATIVE"
   HOST_PREP_TOKEN="$HOST_PREP_STAGE/$HOST_PREP_TOKEN_NAME"
 
@@ -1219,10 +1280,11 @@ host_prep_preflight_main() {
     host_prep_fail_main arguments
     return 1
   }
-  fingerprint=$(host_prep_verify_manifest "$HOST_PREP_STAGE") || {
+  host_prep_manifest_fingerprint >/dev/null || {
     host_prep_fail_main manifest
     return 1
   }
+  fingerprint="$HOST_PREP_MANIFEST_FINGERPRINT_RESULT"
   host_prep_verify_safety_state || {
     host_prep_fail_main baseline
     return 1
@@ -1231,7 +1293,7 @@ host_prep_preflight_main() {
     host_prep_fail_main classification
     return 1
   }
-  classification="$HOST_PREP_CLASSIFICATION"
+  classification="$HOST_PREP_CLASSIFICATION_RESULT"
   host_prep_report_ufw_state
   [[ "$classification" == "clean" || "$classification" == "already-prepared" ]] || {
     host_prep_fail_main classification
@@ -1242,7 +1304,7 @@ host_prep_preflight_main() {
     host_prep_fail_main final-classification
     return 1
   }
-  final_classification="$HOST_PREP_CLASSIFICATION"
+  final_classification="$HOST_PREP_CLASSIFICATION_RESULT"
   [[ "$final_classification" == "$classification" &&
     ( "$final_classification" == "clean" || "$final_classification" == "already-prepared" ) ]] ||
     {
@@ -1253,10 +1315,27 @@ host_prep_preflight_main() {
     host_prep_fail_main final-baseline
     return 1
   }
-  final_fingerprint=$(host_prep_verify_manifest "$HOST_PREP_STAGE") || {
+  host_prep_classify >/dev/null || {
+    host_prep_fail_main final-classification
+    return 1
+  }
+  replay_classification="$HOST_PREP_CLASSIFICATION_RESULT"
+  [[ "$replay_classification" == "$classification" &&
+    "$replay_classification" == "$final_classification" &&
+    ( "$replay_classification" == "clean" || "$replay_classification" == "already-prepared" ) ]] ||
+    {
+      host_prep_fail_main final-classification
+      return 1
+    }
+  host_prep_verify_safety_state || {
+    host_prep_fail_main final-baseline
+    return 1
+  }
+  host_prep_manifest_fingerprint >/dev/null || {
     host_prep_fail_main final-manifest
     return 1
   }
+  final_fingerprint="$HOST_PREP_MANIFEST_FINGERPRINT_RESULT"
   [[ "$fingerprint" == "$final_fingerprint" ]] || {
     host_prep_fail_main manifest-race
     return 1

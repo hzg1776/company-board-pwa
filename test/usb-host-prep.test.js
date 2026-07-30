@@ -1161,6 +1161,128 @@ test(
         await rm(fixture.base, { recursive: true, force: true });
       }
     });
+
+    await t.test("Node replacement during a pre-execution metadata observer is rejected before execution", async () => {
+      const fixture = await createHostPrepFixture({ prepared: true });
+      try {
+        const nodePath = path.join(
+          fixture.root,
+          "opt",
+          "node-v24.18.0-linux-x64",
+          "bin",
+          "node"
+        );
+        const replacementNode = path.join(fixture.base, "observer-replacement-node");
+        const observerMarker = path.join(fixture.base, "pre-execution-stat-mutated");
+        const executionMarker = path.join(fixture.base, "pre-execution-replacement-ran");
+        await writeExecutable(
+          replacementNode,
+          `: > ${shellSingleQuote(executionMarker)}\nprintf '%s\\n' v24.18.0\n`
+        );
+        await writeExecutable(
+          path.join(fixture.bin, "stat"),
+          `case "\${1-}:\${2-}" in
+  -c:%U:%G)
+    case "\${3-}" in
+      */opt/node) printf '%s\\n' root:root ;;
+      *) exit 95 ;;
+    esac
+    ;;
+  -Lc:%U:%G:%a)
+    case "\${3-}" in
+      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin) printf '%s\\n' root:root:755 ;;
+      */opt/node-v24.18.0-linux-x64/bin/node)
+        printf '%s\\n' root:root:755
+        if [ ! -e ${shellSingleQuote(observerMarker)} ]; then
+          : > ${shellSingleQuote(observerMarker)}
+          /usr/bin/cp ${shellSingleQuote(replacementNode)} ${shellSingleQuote(nodePath)}
+        fi
+        ;;
+      *) exit 94 ;;
+    esac
+    ;;
+  *) exit 96 ;;
+esac
+`
+        );
+
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        await lstat(observerMarker);
+        await assert.rejects(lstat(executionMarker), { code: "ENOENT" });
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("Node replacement during the final metadata observer is rejected", async () => {
+      const fixture = await createHostPrepFixture({ prepared: true });
+      try {
+        const nodePath = path.join(
+          fixture.root,
+          "opt",
+          "node-v24.18.0-linux-x64",
+          "bin",
+          "node"
+        );
+        const replacementNode = path.join(fixture.base, "final-observer-replacement-node");
+        const observerCount = path.join(fixture.base, "node-link-stat-count");
+        const observerMarker = path.join(fixture.base, "final-stat-mutated");
+        const executionMarker = path.join(fixture.base, "final-observer-replacement-ran");
+        await writeExecutable(
+          replacementNode,
+          `: > ${shellSingleQuote(executionMarker)}\nprintf '%s\\n' v24.18.0\n`
+        );
+        await writeExecutable(
+          path.join(fixture.bin, "stat"),
+          `case "\${1-}:\${2-}" in
+  -c:%U:%G)
+    case "\${3-}" in
+      */opt/node)
+        count=0
+        if [ -f ${shellSingleQuote(observerCount)} ]; then
+          read -r count < ${shellSingleQuote(observerCount)}
+        fi
+        count=$((count + 1))
+        printf '%s\\n' "$count" > ${shellSingleQuote(observerCount)}
+        printf '%s\\n' root:root
+        if [ "$count" -eq 2 ]; then
+          : > ${shellSingleQuote(observerMarker)}
+          /usr/bin/cp ${shellSingleQuote(replacementNode)} ${shellSingleQuote(nodePath)}
+        fi
+        ;;
+      *) exit 95 ;;
+    esac
+    ;;
+  -Lc:%U:%G:%a)
+    case "\${3-}" in
+      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin|*/opt/node-v24.18.0-linux-x64/bin/node) printf '%s\\n' root:root:755 ;;
+      */opt/palziv|*/opt/palziv/releases|*/var/backups/palziv|*/etc/palziv) printf '%s\\n' root:palziv:750 ;;
+      */var/lib/palziv|*/var/lib/palziv/data) printf '%s\\n' palziv:palziv:700 ;;
+      *) exit 94 ;;
+    esac
+    ;;
+  *) exit 96 ;;
+esac
+`
+        );
+
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        await lstat(observerMarker);
+        await assert.rejects(lstat(executionMarker), { code: "ENOENT" });
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
   }
 );
 
@@ -1333,6 +1455,83 @@ exit 2
 fi
 `
         );
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(
+          result.stderr,
+          "host-prep: ufw=inactive\nhost-prep: failed step=final-baseline\n"
+        );
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("owned host state changes during the first final safety replay", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const unameCount = path.join(fixture.base, "uname-call-count");
+        const ownedPath = path.join(fixture.root, "etc", "palziv");
+        await writeExecutable(
+          path.join(fixture.bin, "uname"),
+          `count=0
+if [ -f ${shellSingleQuote(unameCount)} ]; then
+  read -r count < ${shellSingleQuote(unameCount)}
+fi
+count=$((count + 1))
+printf '%s\\n' "$count" > ${shellSingleQuote(unameCount)}
+if [ "$count" -eq 2 ]; then
+  /usr/bin/mkdir ${shellSingleQuote(ownedPath)}
+fi
+printf '%s\\n' x86_64
+`
+        );
+
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(
+          result.stderr,
+          "host-prep: ufw=inactive\nhost-prep: failed step=final-classification\n"
+        );
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("baseline listener changes during the following classification replay", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const getentCount = path.join(fixture.base, "getent-call-count");
+        const listenerMarker = path.join(fixture.base, "listener-during-third-classification");
+        await writeExecutable(
+          path.join(fixture.bin, "getent"),
+          `count=0
+if [ -f ${shellSingleQuote(getentCount)} ]; then
+  read -r count < ${shellSingleQuote(getentCount)}
+fi
+count=$((count + 1))
+printf '%s\\n' "$count" > ${shellSingleQuote(getentCount)}
+if [ "$count" -ge 5 ]; then
+  : > ${shellSingleQuote(listenerMarker)}
+fi
+exit 2
+`
+        );
+        await writeExecutable(
+          path.join(fixture.bin, "ss"),
+          `if [ -e ${shellSingleQuote(listenerMarker)} ]; then
+  printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:3116'
+fi
+`
+        );
+
         const result = await runHostPrepScript(fixture);
         assertBoundedPreflightFailure(result);
         assert.equal(
@@ -1532,11 +1731,15 @@ test(
     try {
       const command = [
         ". \"$1\"",
-        "stage=$(host_prep_stage_root)",
-        "fingerprint=$(host_prep_manifest_fingerprint)",
-        "classification=$(host_prep_classify)",
+        "host_prep_stage_root >/dev/null",
+        "stage=$HOST_PREP_STAGE_ROOT_RESULT",
+        "host_prep_manifest_fingerprint >/dev/null",
+        "fingerprint=$HOST_PREP_MANIFEST_FINGERPRINT_RESULT",
+        "host_prep_classify >/dev/null",
+        "classification=$HOST_PREP_CLASSIFICATION_RESULT",
         "host_prep_verify_safety_state",
-        "printf '%s\\n%s\\n%s\\n' \"$stage\" \"$fingerprint\" \"$classification\""
+        "safety=$HOST_PREP_SAFETY_RESULT",
+        "printf '%s\\n%s\\n%s\\n%s\\n' \"$stage\" \"$fingerprint\" \"$classification\" \"$safety\""
       ].join("\n");
       const result = await execFile("/usr/bin/env", [
         "-i",
@@ -1560,7 +1763,7 @@ test(
       );
       assert.equal(
         result.stdout,
-        `${fixture.stage}\n${createHash("sha256").update(manifest).digest("hex")}\nclean\n`
+        `${fixture.stage}\n${createHash("sha256").update(manifest).digest("hex")}\nclean\nsafe\n`
       );
       assert.equal(result.stderr, "");
       await assert.rejects(
@@ -1570,5 +1773,90 @@ test(
     } finally {
       await rm(fixture.base, { recursive: true, force: true });
     }
+  }
+);
+
+test(
+  "host prep sourced stateful functions fail closed in subshells and retain current-shell pins",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("command substitutions cannot masquerade as valid stateful results", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const command = [
+          ". \"$1\"",
+          "for function_name in host_prep_stage_root host_prep_manifest_fingerprint host_prep_classify host_prep_verify_safety_state; do",
+          "  result=$($function_name 2>&1) && exit 80",
+          "  test \"$result\" = 'host-prep: rejected stateful subshell'",
+          "done",
+          "test -z \"$HOST_PREP_STAGE_ROOT_RESULT\"",
+          "test -z \"$HOST_PREP_MANIFEST_FINGERPRINT_RESULT\"",
+          "test -z \"$HOST_PREP_CLASSIFICATION_RESULT\"",
+          "test -z \"$HOST_PREP_SAFETY_RESULT\"",
+          "printf '%s\\n' rejected"
+        ].join("\n");
+        const result = await execFile("/usr/bin/env", [
+          "-i",
+          `HOME=${os.homedir()}`,
+          "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+          "PALZIV_HOST_PREP_TEST_MODE=1",
+          `PALZIV_HOST_PREP_TEST_ROOT=${fixture.root}`,
+          `PALZIV_HOST_PREP_TEST_BIN=${fixture.bin}`,
+          "/bin/bash",
+          "-p",
+          "-c",
+          command,
+          "bash",
+          fixture.scriptPath
+        ], {
+          timeout: 15_000,
+          maxBuffer: 1024 * 1024
+        });
+        assert.equal(result.stdout, "rejected\n");
+        assert.equal(result.stderr, "");
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("classification pins persist into a direct safety call", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const mappedEtc = path.join(fixture.root, "etc");
+        const originalEtc = path.join(fixture.root, "etc-before-sourced-replacement");
+        const command = [
+          ". \"$1\"",
+          "host_prep_stage_root >/dev/null",
+          "host_prep_manifest_fingerprint >/dev/null",
+          "host_prep_classify >/dev/null",
+          `/usr/bin/mv ${shellSingleQuote(mappedEtc)} ${shellSingleQuote(originalEtc)}`,
+          `/usr/bin/cp -a ${shellSingleQuote(originalEtc)} ${shellSingleQuote(mappedEtc)}`,
+          "if host_prep_verify_safety_state; then exit 81; fi",
+          "test -z \"$HOST_PREP_SAFETY_RESULT\"",
+          "printf '%s\\n' pinned"
+        ].join("\n");
+        const result = await execFile("/usr/bin/env", [
+          "-i",
+          `HOME=${os.homedir()}`,
+          "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+          "PALZIV_HOST_PREP_TEST_MODE=1",
+          `PALZIV_HOST_PREP_TEST_ROOT=${fixture.root}`,
+          `PALZIV_HOST_PREP_TEST_BIN=${fixture.bin}`,
+          "/bin/bash",
+          "-p",
+          "-c",
+          command,
+          "bash",
+          fixture.scriptPath
+        ], {
+          timeout: 15_000,
+          maxBuffer: 1024 * 1024
+        });
+        assert.equal(result.stdout, "pinned\n");
+        assert.equal(result.stderr, "");
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
   }
 );
