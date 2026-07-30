@@ -129,6 +129,7 @@ async function createReadmeMountHarness(scenario = {}) {
   const device = path.join(deviceDir, "usb-partition");
   const mountPoint = path.join(root, "mount");
   const handoffDir = path.join(mountPoint, "Project-A-Migration");
+  const symlinkDestination = path.join(root, "mount-symlink-destination");
   const ttyInput = path.join(root, "tty-input");
   const stateFile = path.join(root, "mounted.state");
   const logFile = path.join(root, "commands.log");
@@ -138,7 +139,16 @@ async function createReadmeMountHarness(scenario = {}) {
   await mkdir(deviceDir);
   await writeFile(device, "test-only partition placeholder\n");
   await writeFile(ttyInput, `${device}\n`);
-  if (scenario.handoffExists !== false) {
+  if (scenario.mountPointSymlink) {
+    await mkdir(symlinkDestination);
+    await writeFile(
+      path.join(symlinkDestination, "operator-file.txt"),
+      "preserve symlink destination\n"
+    );
+    await symlink(symlinkDestination, mountPoint, "dir");
+  } else if (scenario.mountPointFile) {
+    await writeFile(mountPoint, "preserve non-directory mountpoint\n");
+  } else if (scenario.handoffExists !== false) {
     await mkdir(path.join(handoffDir, "CHECKSUMS"), { recursive: true });
     await mkdir(path.join(handoffDir, "TO-DEBIAN"), { recursive: true });
     await writeFile(
@@ -161,6 +171,9 @@ if [[ "\${FAKE_MOUNT_FAIL:-0}" == "1" ]]; then
   exit 71
 fi
 : > ${shellQuote(stateFile)}
+if [[ "\${FAKE_SIGNAL_AFTER_MOUNT:-0}" == "1" ]]; then
+  kill -TERM "$PPID"
+fi
 `);
   await writeExecutable(path.join(fakeBin, "umount"), `#!/bin/bash
 printf 'umount:%s\\n' "$*" >> ${shellQuote(logFile)}
@@ -252,6 +265,7 @@ fi
       ...process.env,
       FAKE_STALE_MOUNT: scenario.staleMount ? "1" : "0",
       FAKE_MOUNT_FAIL: scenario.mountFails ? "1" : "0",
+      FAKE_SIGNAL_AFTER_MOUNT: scenario.signalAfterMount ? "1" : "0",
       FAKE_DEVICE_FSTYPE: scenario.deviceFsType || "vfat",
       FAKE_MOUNT_SOURCE: scenario.mountedSource || device,
       FAKE_MOUNT_FSTYPE: scenario.mountedFsType || "vfat",
@@ -273,8 +287,10 @@ fi
     cleanup: () => rm(root, { recursive: true, force: true }),
     device,
     log,
+    mountPoint,
     result,
-    stateFile
+    stateFile,
+    symlinkDestination
   };
 }
 
@@ -985,6 +1001,46 @@ test("USB instructions define a clean fail-closed mount and collector flow", asy
   assert.doesNotMatch(readme, /rm\s+-[^\n]*\s+\.debian-readiness-\*/i);
 });
 
+test("USB instructions reject redirected mountpoints and track mount attempts before mounting", async () => {
+  const readme = await readFile(
+    new URL("../deploy/usb-migration/README-FIRST.txt", import.meta.url),
+    "utf8"
+  );
+  const script = extractReadmeDebianScript(readme);
+  const mkdirIndex = script.indexOf('sudo mkdir -p -- "$MOUNT_POINT"');
+  const mountIndex = script.indexOf(
+    'sudo mount -t vfat -o "$REQUESTED_OPTIONS" -- "$USB_DEVICE" "$MOUNT_POINT"'
+  );
+  const attemptIndex = script.indexOf("MOUNT_ATTEMPTED=1");
+
+  assert.notEqual(mkdirIndex, -1);
+  assert.notEqual(mountIndex, -1);
+  assert.notEqual(attemptIndex, -1);
+  assert.match(
+    script.slice(0, mkdirIndex),
+    /\[\[ ! -L "\$MOUNT_POINT" \]\][\s\S]*\[\[ ! -e "\$MOUNT_POINT" \|\| -d "\$MOUNT_POINT" \]\]/
+  );
+  assert.equal(
+    script.match(/^require_literal_mount_directory$/gm)?.length,
+    2,
+    "mountpoint must be validated after mkdir and immediately before mount"
+  );
+  assert.match(
+    script,
+    /require_literal_mount_directory\(\)[\s\S]*\[\[ -d "\$MOUNT_POINT" && ! -L "\$MOUNT_POINT" \]\][\s\S]*readlink -e -- "\$MOUNT_POINT"[\s\S]*== "\$MOUNT_POINT"/
+  );
+  assert.ok(attemptIndex < mountIndex);
+  assert.equal(
+    script.slice(attemptIndex, mountIndex).trim(),
+    "MOUNT_ATTEMPTED=1",
+    "only the mount-attempt state assignment may occur between final validation and mount"
+  );
+  assert.match(
+    script,
+    /cleanup\(\)[\s\S]*\[\[ "\$MOUNT_ATTEMPTED" -eq 1 \]\][\s\S]*findmnt[^\n]+SOURCE/
+  );
+});
+
 test("README clean collector launcher ignores inherited Bash startup and PATH state", {
   skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
 }, async () => {
@@ -1050,6 +1106,34 @@ exit 91
 });
 
 const README_MOUNT_FAILURE_CASES = [
+  {
+    name: "an unmounted symbolic-link target",
+    scenario: { mountPointSymlink: true },
+    expected: /symbolic link/i,
+    included: [],
+    excluded: [
+      "sudo:mkdir",
+      "mount:",
+      "checksum:",
+      "collector",
+      "sync",
+      "umount:"
+    ]
+  },
+  {
+    name: "an existing non-directory target",
+    scenario: { mountPointFile: true },
+    expected: /not a directory/i,
+    included: [],
+    excluded: [
+      "sudo:mkdir",
+      "mount:",
+      "checksum:",
+      "collector",
+      "sync",
+      "umount:"
+    ]
+  },
   {
     name: "an already-mounted target",
     scenario: { staleMount: true },
@@ -1137,11 +1221,45 @@ for (const failureCase of README_MOUNT_FAILURE_CASES) {
           "explicit unmount failure should trigger one bounded cleanup retry"
         );
       }
+      if (failureCase.scenario.mountPointSymlink) {
+        assert.deepEqual(
+          await readdir(harness.symlinkDestination),
+          ["operator-file.txt"]
+        );
+        assert.equal(
+          await readFile(
+            path.join(harness.symlinkDestination, "operator-file.txt"),
+            "utf8"
+          ),
+          "preserve symlink destination\n"
+        );
+      }
+      if (failureCase.scenario.mountPointFile) {
+        assert.equal(
+          await readFile(harness.mountPoint, "utf8"),
+          "preserve non-directory mountpoint\n"
+        );
+      }
     } finally {
       await harness.cleanup();
     }
   });
 }
+
+test("README cleanup unmounts a verified source when signaled after mount success", {
+  skip: process.platform === "win32" ? "Mount-block behavior runs on a POSIX host." : false
+}, async () => {
+  const harness = await createReadmeMountHarness({ signalAfterMount: true });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.match(harness.log, /^mount:/m);
+    assert.equal(harness.log.match(/^umount:/gm)?.length, 1);
+    assert.doesNotMatch(harness.log, /checksum:|collector|sync/);
+    await assert.rejects(readFile(harness.stateFile));
+  } finally {
+    await harness.cleanup();
+  }
+});
 
 test("PowerShell wrapper rejects a network destination before drive inspection", {
   skip: process.platform !== "win32" ? "PowerShell wrapper check runs on Windows." : false

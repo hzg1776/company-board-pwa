@@ -74,6 +74,7 @@ umask 077
 
 readonly MOUNT_POINT='/mnt/project-a-usb'
 readonly HANDOFF_DIR="$MOUNT_POINT/Project-A-Migration"
+MOUNT_ATTEMPTED=0
 MOUNTED=0
 USB_DEVICE=''
 EFFECTIVE_OPTIONS=''
@@ -90,19 +91,36 @@ option_present() {
   esac
 }
 
+require_literal_mount_directory() {
+  local canonical_mount_point=''
+  [[ -d "$MOUNT_POINT" && ! -L "$MOUNT_POINT" ]] ||
+    stop 'the USB mountpoint must be a real directory, not a symbolic link.'
+  canonical_mount_point="$(readlink -e -- "$MOUNT_POINT")" ||
+    stop 'the USB mountpoint could not be canonicalized.'
+  [[ "$canonical_mount_point" == "$MOUNT_POINT" ]] ||
+    stop 'the USB mountpoint canonical path does not match the approved literal path.'
+}
+
 cleanup() {
   local exit_status=$?
+  local cleanup_mount_point=''
   local cleanup_source=''
   trap - EXIT HUP INT TERM
   set +e
   cd /
-  if [[ "$MOUNTED" -eq 1 ]]; then
-    cleanup_source="$(findmnt -rn --mountpoint "$MOUNT_POINT" -o SOURCE)"
-    if [[ -n "$cleanup_source" ]]; then
-      cleanup_source="$(readlink -e -- "$cleanup_source")"
+  if [[ "$MOUNT_ATTEMPTED" -eq 1 ]]; then
+    if [[ -d "$MOUNT_POINT" && ! -L "$MOUNT_POINT" ]]; then
+      cleanup_mount_point="$(readlink -e -- "$MOUNT_POINT")"
+    fi
+    if [[ "$cleanup_mount_point" == "$MOUNT_POINT" ]]; then
+      cleanup_source="$(findmnt -rn --mountpoint "$MOUNT_POINT" -o SOURCE)"
+      if [[ -n "$cleanup_source" ]]; then
+        cleanup_source="$(readlink -e -- "$cleanup_source")"
+      fi
     fi
     if [[ -n "$USB_DEVICE" && "$cleanup_source" == "$USB_DEVICE" ]]; then
       if sudo umount -- "$MOUNT_POINT"; then
+        MOUNT_ATTEMPTED=0
         MOUNTED=0
       else
         printf 'STOP: automatic USB unmount failed; do not remove the device.\n' >&2
@@ -147,8 +165,13 @@ case "$FINDMNT_STATUS" in
   *) stop 'the USB mount target state could not be verified.' ;;
 esac
 
+[[ ! -L "$MOUNT_POINT" ]] ||
+  stop 'the USB mountpoint is a symbolic link.'
+[[ ! -e "$MOUNT_POINT" || -d "$MOUNT_POINT" ]] ||
+  stop 'the USB mountpoint exists but is not a directory.'
 sudo mkdir -p -- "$MOUNT_POINT" ||
   stop 'the USB mount directory could not be created.'
+require_literal_mount_directory
 FINDMNT_STATUS=0
 findmnt -rn --mountpoint "$MOUNT_POINT" >/dev/null 2>&1 ||
   FINDMNT_STATUS=$?
@@ -164,6 +187,8 @@ readonly OPERATOR_UID OPERATOR_GID
 REQUESTED_OPTIONS="nodev,nosuid,noexec,uid=$OPERATOR_UID,gid=$OPERATOR_GID,umask=077"
 readonly REQUESTED_OPTIONS
 
+require_literal_mount_directory
+MOUNT_ATTEMPTED=1
 sudo mount -t vfat -o "$REQUESTED_OPTIONS" -- "$USB_DEVICE" "$MOUNT_POINT" ||
   stop 'the vfat USB mount failed.'
 MOUNTED=1
@@ -205,6 +230,7 @@ sha256sum --check CHECKSUMS/TO-DEBIAN.sha256 ||
 sync || stop 'sync failed.'
 cd / || stop 'could not leave the USB handoff directory.'
 if sudo umount -- "$MOUNT_POINT"; then
+  MOUNT_ATTEMPTED=0
   MOUNTED=0
 else
   stop 'USB unmount failed; do not remove the device.'
