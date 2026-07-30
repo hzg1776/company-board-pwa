@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+readonly SYSTEM_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH="$SYSTEM_PATH"
 export LC_ALL=C
-umask 077
+unset BASH_ENV ENV CDPATH
+unset LD_PRELOAD LD_LIBRARY_PATH
+unset NODE_OPTIONS NODE_PATH
+unset NPM_CONFIG_USERCONFIG npm_config_userconfig NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig
+unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_CACHE npm_config_cache
+unset NPM_CONFIG_SCRIPT_SHELL npm_config_script_shell NPM_CONFIG_NODE_OPTIONS npm_config_node_options
+unset NPM_CONFIG_INIT_MODULE npm_config_init_module
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 unset CURL_HOME XDG_CONFIG_HOME CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE
+hash -r
+umask 077
 
 SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname -- "$SCRIPT_PATH")"

@@ -28,6 +28,9 @@ import {
   writeSha256Manifest
 } from "../scripts/migration/usb-handoff-lib.mjs";
 
+const COLLECTOR_SYSTEM_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -78,6 +81,201 @@ async function waitForStagingFile(usbRoot, relativePath) {
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw new Error(`Timed out waiting for staging file ${relativePath}`);
+}
+
+function replaceRequired(source, expected, replacement) {
+  assert.equal(
+    source.split(expected).length,
+    2,
+    `Expected exactly one test transformation target: ${expected}`
+  );
+  return source.replace(expected, replacement);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+async function writeExecutable(filePath, contents) {
+  await writeFile(filePath, contents);
+  await chmod(filePath, 0o700);
+}
+
+async function copyCollectorWithFixedTestPath(destination, fixedPath) {
+  const source = await readFile(
+    new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url),
+    "utf8"
+  );
+  const transformed = replaceRequired(
+    source,
+    `readonly SYSTEM_PATH='${COLLECTOR_SYSTEM_PATH}'`,
+    `readonly SYSTEM_PATH=${shellQuote(fixedPath)}`
+  );
+  await writeFile(destination, transformed);
+}
+
+function extractReadmeDebianScript(readme) {
+  const match = readme.match(
+    /<<'PROJECT_A_USB_MOUNT'\r?\n([\s\S]*?)\r?\nPROJECT_A_USB_MOUNT/
+  );
+  assert.ok(match, "README copy-ready Debian heredoc was not found");
+  return match[1];
+}
+
+async function createReadmeMountHarness(scenario = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-mount-block-"));
+  const fakeBin = path.join(root, "bin");
+  const deviceDir = path.join(root, "devices");
+  const device = path.join(deviceDir, "usb-partition");
+  const mountPoint = path.join(root, "mount");
+  const handoffDir = path.join(mountPoint, "Project-A-Migration");
+  const ttyInput = path.join(root, "tty-input");
+  const stateFile = path.join(root, "mounted.state");
+  const logFile = path.join(root, "commands.log");
+  const scriptPath = path.join(root, "mount-block.sh");
+
+  await mkdir(fakeBin);
+  await mkdir(deviceDir);
+  await writeFile(device, "test-only partition placeholder\n");
+  await writeFile(ttyInput, `${device}\n`);
+  if (scenario.handoffExists !== false) {
+    await mkdir(path.join(handoffDir, "CHECKSUMS"), { recursive: true });
+    await mkdir(path.join(handoffDir, "TO-DEBIAN"), { recursive: true });
+    await writeFile(
+      path.join(handoffDir, "CHECKSUMS", "TO-DEBIAN.sha256"),
+      `${"0".repeat(64)}  README-FIRST.txt\n`
+    );
+    await writeFile(
+      path.join(handoffDir, "TO-DEBIAN", "collect-debian-readiness.sh"),
+      `printf 'collector\\n' >> ${shellQuote(logFile)}\n`
+    );
+  }
+
+  await writeExecutable(path.join(fakeBin, "sudo"), `#!/bin/bash
+printf 'sudo:%s\\n' "$*" >> ${shellQuote(logFile)}
+exec "$@"
+`);
+  await writeExecutable(path.join(fakeBin, "mount"), `#!/bin/bash
+printf 'mount:%s\\n' "$*" >> ${shellQuote(logFile)}
+if [[ "\${FAKE_MOUNT_FAIL:-0}" == "1" ]]; then
+  exit 71
+fi
+: > ${shellQuote(stateFile)}
+`);
+  await writeExecutable(path.join(fakeBin, "umount"), `#!/bin/bash
+printf 'umount:%s\\n' "$*" >> ${shellQuote(logFile)}
+if [[ "\${FAKE_UMOUNT_FAIL:-0}" == "1" ]]; then
+  exit 72
+fi
+rm -f -- ${shellQuote(stateFile)}
+`);
+  await writeExecutable(path.join(fakeBin, "findmnt"), `#!/bin/bash
+field=''
+previous=''
+for argument in "$@"; do
+  if [[ "$previous" == "-o" ]]; then
+    field="$argument"
+  fi
+  previous="$argument"
+done
+if [[ -z "$field" ]]; then
+  if [[ "\${FAKE_STALE_MOUNT:-0}" == "1" || -e ${shellQuote(stateFile)} ]]; then
+    exit 0
+  fi
+  exit 1
+fi
+[[ -e ${shellQuote(stateFile)} ]] || exit 1
+case "$field" in
+  SOURCE) printf '%s\\n' "\${FAKE_MOUNT_SOURCE:-${device}}" ;;
+  FSTYPE) printf '%s\\n' "\${FAKE_MOUNT_FSTYPE:-vfat}" ;;
+  OPTIONS) printf '%s\\n' "\${FAKE_MOUNT_OPTIONS:-rw,nodev,nosuid,noexec,uid=1001,gid=1002,umask=0077}" ;;
+  *) exit 73 ;;
+esac
+`);
+  await writeExecutable(path.join(fakeBin, "lsblk"), `#!/bin/bash
+case " $* " in
+  *" TYPE "*) printf 'part\\n' ;;
+  *" FSTYPE "*) printf '%s\\n' "\${FAKE_DEVICE_FSTYPE:-vfat}" ;;
+  *) printf 'usb-partition vfat\\n' ;;
+esac
+`);
+  await writeExecutable(path.join(fakeBin, "id"), `#!/bin/bash
+case "\${1:-}" in
+  -u) printf '1001\\n' ;;
+  -g) printf '1002\\n' ;;
+  *) exit 74 ;;
+esac
+`);
+  await writeExecutable(path.join(fakeBin, "sha256sum"), `#!/bin/bash
+printf 'checksum:%s\\n' "$*" >> ${shellQuote(logFile)}
+if [[ "\${FAKE_CHECKSUM_FAIL:-0}" == "1" ]]; then
+  exit 75
+fi
+`);
+  await writeExecutable(path.join(fakeBin, "sync"), `#!/bin/bash
+printf 'sync\\n' >> ${shellQuote(logFile)}
+if [[ "\${FAKE_SYNC_FAIL:-0}" == "1" ]]; then
+  exit 76
+fi
+`);
+
+  const readme = await readFile(
+    new URL("../deploy/usb-migration/README-FIRST.txt", import.meta.url),
+    "utf8"
+  );
+  let script = extractReadmeDebianScript(readme);
+  script = replaceRequired(
+    script,
+    `readonly SYSTEM_PATH='${COLLECTOR_SYSTEM_PATH}'`,
+    `readonly SYSTEM_PATH=${shellQuote(`${fakeBin}:/usr/bin:/bin`)}`
+  );
+  script = replaceRequired(
+    script,
+    "readonly MOUNT_POINT='/mnt/project-a-usb'",
+    `readonly MOUNT_POINT=${shellQuote(mountPoint)}`
+  );
+  script = replaceRequired(script, "< /dev/tty", `< ${shellQuote(ttyInput)}`);
+  script = replaceRequired(
+    script,
+    '[[ "$USB_DEVICE" == /dev/* ]]',
+    `[[ "$USB_DEVICE" == ${shellQuote(deviceDir)}/* ]]`
+  );
+  script = replaceRequired(
+    script,
+    '[[ -b "$USB_DEVICE" ]]',
+    '[[ -e "$USB_DEVICE" ]]'
+  );
+  await writeFile(scriptPath, script);
+
+  const result = await run("/bin/bash", ["--noprofile", "--norc", scriptPath], {
+    env: {
+      ...process.env,
+      FAKE_STALE_MOUNT: scenario.staleMount ? "1" : "0",
+      FAKE_MOUNT_FAIL: scenario.mountFails ? "1" : "0",
+      FAKE_DEVICE_FSTYPE: scenario.deviceFsType || "vfat",
+      FAKE_MOUNT_SOURCE: scenario.mountedSource || device,
+      FAKE_MOUNT_FSTYPE: scenario.mountedFsType || "vfat",
+      FAKE_MOUNT_OPTIONS:
+        scenario.mountOptions ||
+        "rw,nodev,nosuid,noexec,uid=1001,gid=1002,umask=0077",
+      FAKE_CHECKSUM_FAIL: scenario.checksumFails ? "1" : "0",
+      FAKE_SYNC_FAIL: scenario.syncFails ? "1" : "0",
+      FAKE_UMOUNT_FAIL: scenario.unmountFails ? "1" : "0"
+    }
+  });
+  let log = "";
+  try {
+    log = await readFile(logFile, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return {
+    cleanup: () => rm(root, { recursive: true, force: true }),
+    device,
+    log,
+    result,
+    stateFile
+  };
 }
 
 test("USB path checks reject escape and FAT32-incompatible files", () => {
@@ -231,6 +429,92 @@ test("Debian collector has a fixed read-only inspection contract", async () => {
   assert.doesNotMatch(script, /(?:\bprintenv\b|^\s*env(?:\s|$)|systemctl\s+cat|systemctl\s+show[^\n]*ExecStart|^\s*ps(?:\s|$))/m);
 });
 
+test("Debian collector replaces inherited command and startup resolution before external commands", async () => {
+  const script = await readFile(
+    new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url),
+    "utf8"
+  );
+  const firstExternalCommand = script.indexOf('SCRIPT_PATH="$(readlink -f --');
+  assert.notEqual(firstExternalCommand, -1);
+  const fixedEnvironment = script.slice(0, firstExternalCommand);
+
+  assert.match(
+    fixedEnvironment,
+    new RegExp(
+      `readonly SYSTEM_PATH='${COLLECTOR_SYSTEM_PATH.replaceAll("/", "\\/")}'`
+    )
+  );
+  assert.match(fixedEnvironment, /export PATH="\$SYSTEM_PATH"/);
+  assert.match(fixedEnvironment, /export LC_ALL=C/);
+  assert.match(fixedEnvironment, /unset BASH_ENV ENV CDPATH/);
+  assert.match(fixedEnvironment, /unset LD_PRELOAD LD_LIBRARY_PATH/);
+  assert.match(fixedEnvironment, /unset NODE_OPTIONS NODE_PATH/);
+  assert.match(
+    fixedEnvironment,
+    /unset NPM_CONFIG_USERCONFIG npm_config_userconfig NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig/
+  );
+  assert.match(
+    fixedEnvironment,
+    /unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_CACHE npm_config_cache/
+  );
+  assert.match(
+    fixedEnvironment,
+    /unset NPM_CONFIG_SCRIPT_SHELL npm_config_script_shell NPM_CONFIG_NODE_OPTIONS npm_config_node_options/
+  );
+  assert.match(fixedEnvironment, /hash -r/);
+  assert.doesNotMatch(script, /(?:TEST|OVERRIDE|HOSTILE)_[A-Z_]*PATH/);
+  assert.doesNotMatch(script, /\$\{[A-Z_]*(?:TEST|OVERRIDE)[A-Z_]*:-/);
+});
+
+test("Debian collector ignores an inherited hostile PATH executable", {
+  skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
+}, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-hostile-path-"));
+  try {
+    const fromDir = path.join(root, "FROM-DEBIAN");
+    const toDir = path.join(root, "TO-DEBIAN");
+    const hostileBin = path.join(root, "hostile-bin");
+    const sentinel = path.join(root, "hostile-path-executed");
+    await mkdir(fromDir);
+    await mkdir(toDir);
+    await mkdir(hostileBin);
+    const collector = path.join(toDir, "collect-debian-readiness.sh");
+    await copyFile(
+      new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url),
+      collector
+    );
+    await writeExecutable(path.join(hostileBin, "hostname"), `#!/bin/bash
+printf 'HOSTILE_PATH_SECRET\\n'
+: > ${shellQuote(sentinel)}
+`);
+
+    const result = await run(
+      "/bin/bash",
+      ["--noprofile", "--norc", collector, "--usb-root", root],
+      {
+        env: {
+          ...process.env,
+          PATH: `${hostileBin}:${COLLECTOR_SYSTEM_PATH}`,
+          ENV: path.join(root, "hostile-env"),
+          CDPATH: hostileBin,
+          NODE_OPTIONS: "--require=/nonexistent/hostile-node-startup.cjs",
+          NPM_CONFIG_USERCONFIG: path.join(root, "hostile-npmrc")
+        }
+      }
+    );
+    assert.equal(result.code, 0, result.stderr);
+    await assert.rejects(readFile(sentinel));
+    const reportName = (await readdir(fromDir)).find((name) =>
+      name.endsWith(".txt")
+    );
+    assert.ok(reportName);
+    const report = await readFile(path.join(fromDir, reportName), "utf8");
+    assert.doesNotMatch(report, /HOSTILE_PATH_SECRET/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Debian collector writes only a redacted report and sidecar under FROM-DEBIAN", {
   skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
 }, async () => {
@@ -312,7 +596,10 @@ test("Debian collector contains hostile curl config and proxy state", {
       "header = \"Authorization: Bearer hostile-curlrc-token\""
     ].join("\n"));
     const collector = path.join(toDir, "collect-debian-readiness.sh");
-    await copyFile(new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url), collector);
+    await copyCollectorWithFixedTestPath(
+      collector,
+      `${binDir}:${COLLECTOR_SYSTEM_PATH}`
+    );
     const fakeCurl = path.join(binDir, "curl");
     await writeFile(fakeCurl, `#!/usr/bin/env bash
 if [[ "\${1:-}" == "--version" ]]; then
@@ -384,7 +671,10 @@ test("Debian collector removes its final report when checksum creation fails", {
     await mkdir(fromDir);
     await mkdir(binDir);
     const collector = path.join(toDir, "collect-debian-readiness.sh");
-    await copyFile(new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url), collector);
+    await copyCollectorWithFixedTestPath(
+      collector,
+      `${binDir}:${COLLECTOR_SYSTEM_PATH}`
+    );
     const fakeSha256sum = path.join(binDir, "sha256sum");
     await writeFile(fakeSha256sum, `#!/usr/bin/env bash
 if [[ "\${2:-}" == debian-readiness-*.txt ]]; then
@@ -428,7 +718,10 @@ test("Debian collector does not let a concurrent same-second failure delete the 
     await mkdir(binDir);
     await mkdir(syncDir);
     const collector = path.join(toDir, "collect-debian-readiness.sh");
-    await copyFile(new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url), collector);
+    await copyCollectorWithFixedTestPath(
+      collector,
+      `${binDir}:${COLLECTOR_SYSTEM_PATH}`
+    );
     await writeFile(path.join(binDir, "date"), "#!/usr/bin/env bash\nprintf '20260729T120000Z\\n'\n");
     await writeFile(path.join(binDir, "hostname"), "#!/usr/bin/env bash\nprintf 'same-host\\n'\n");
     await writeFile(path.join(binDir, "curl"), `#!/usr/bin/env bash
@@ -632,7 +925,10 @@ test("USB instructions preserve the approved operator and isolation boundary", a
 
   assert.match(readme, /mount -o nodev,nosuid,noexec/);
   assert.match(readme, /sha256sum --check CHECKSUMS\/TO-DEBIAN\.sha256/);
-  assert.match(readme, /bash TO-DEBIAN\/collect-debian-readiness\.sh/);
+  assert.match(
+    readme,
+    /\/usr\/bin\/env -i[\s\S]*\/bin\/bash --noprofile --norc\s*\\?\s*TO-DEBIAN\/collect-debian-readiness\.sh/
+  );
   assert.match(readme, /umount/);
   assert.match(readme, /verify-usb-handoff\.mjs.*--mode returned/);
   assert.match(boundary, /Codex has no remote access/i);
@@ -643,6 +939,209 @@ test("USB instructions preserve the approved operator and isolation boundary", a
   assert.match(wrapper, /FileSystem\s*-ne\s*['"]FAT32['"]/);
   assert.doesNotMatch(wrapper, /Remove-Item[^\n]*Project-A-Migration/);
 });
+
+test("USB instructions define a clean fail-closed mount and collector flow", async () => {
+  const readme = await readFile(
+    new URL("../deploy/usb-migration/README-FIRST.txt", import.meta.url),
+    "utf8"
+  );
+  const script = extractReadmeDebianScript(readme);
+
+  assert.match(
+    readme,
+    new RegExp(
+      `/usr/bin/env -i[\\\\\\s\\S]*PATH='${COLLECTOR_SYSTEM_PATH.replaceAll("/", "\\/")}'[\\\\\\s\\S]*LC_ALL=C[\\\\\\s\\S]*/bin/bash --noprofile --norc`
+    )
+  );
+  assert.match(script, /^set -Eeuo pipefail/m);
+  assert.match(script, /IFS= read -r -p [^\n]+ < \/dev\/tty/);
+  assert.match(script, /USB_DEVICE="\$\(readlink -e -- "\$USB_DEVICE"\)"/);
+  assert.match(script, /\[\[ "\$USB_DEVICE" == \/dev\/\* \]\]/);
+  assert.match(script, /\[\[ -b "\$USB_DEVICE" \]\]/);
+  assert.match(script, /lsblk[^\n]+TYPE/);
+  assert.match(script, /lsblk[^\n]+FSTYPE/);
+  assert.match(script, /findmnt[^\n]+--mountpoint[^\n]+"\$MOUNT_POINT"/);
+  assert.match(script, /mount -t vfat -o "\$REQUESTED_OPTIONS"/);
+  assert.match(script, /SOURCE/);
+  assert.match(script, /FSTYPE/);
+  assert.match(script, /OPTIONS/);
+  assert.match(script, /nodev/);
+  assert.match(script, /nosuid/);
+  assert.match(script, /noexec/);
+  assert.match(script, /uid=\$OPERATOR_UID/);
+  assert.match(script, /gid=\$OPERATOR_GID/);
+  assert.match(script, /umask=077/);
+  assert.match(script, /trap cleanup EXIT/);
+  assert.match(script, /sync/);
+  assert.match(script, /umount/);
+  assert.match(
+    script,
+    /\/usr\/bin\/env -i PATH="\$SYSTEM_PATH" LC_ALL=C \/bin\/bash --noprofile --norc/
+  );
+  assert.match(
+    readme,
+    /power loss or SIGKILL[\s\S]*\.debian-readiness-\*\.lock[\s\S]*\.tmp[\s\S]*stop and return the USB\s+for\s+inspection/i
+  );
+  assert.doesNotMatch(readme, /rm\s+-[^\n]*\s+\.debian-readiness-\*/i);
+});
+
+test("README clean collector launcher ignores inherited Bash startup and PATH state", {
+  skip: process.platform === "win32" ? "Runtime collector check runs on a POSIX host." : false
+}, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-clean-launch-"));
+  try {
+    const fromDir = path.join(root, "FROM-DEBIAN");
+    const toDir = path.join(root, "TO-DEBIAN");
+    const hostileBin = path.join(root, "hostile-bin");
+    const sentinel = path.join(root, "hostile-startup-executed");
+    const startupFile = path.join(root, "hostile-startup.sh");
+    await mkdir(fromDir);
+    await mkdir(toDir);
+    await mkdir(hostileBin);
+    const collector = path.join(toDir, "collect-debian-readiness.sh");
+    await copyFile(
+      new URL("../scripts/migration/collect-debian-readiness.sh", import.meta.url),
+      collector
+    );
+    await writeFile(
+      startupFile,
+      `printf 'HOSTILE_STARTUP_SECRET\\n'\n: > ${shellQuote(sentinel)}\n`
+    );
+    await writeExecutable(path.join(hostileBin, "bash"), `#!/bin/bash
+printf 'HOSTILE_BASH_SECRET\\n'
+: > ${shellQuote(sentinel)}
+exit 91
+`);
+
+    const result = await run(
+      "/usr/bin/env",
+      [
+        "-i",
+        `PATH=${COLLECTOR_SYSTEM_PATH}`,
+        "LC_ALL=C",
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        collector,
+        "--usb-root",
+        root
+      ],
+      {
+        env: {
+          ...process.env,
+          PATH: `${hostileBin}:${COLLECTOR_SYSTEM_PATH}`,
+          BASH_ENV: startupFile,
+          ENV: startupFile,
+          NODE_OPTIONS: "--require=/nonexistent/hostile-node-startup.cjs"
+        }
+      }
+    );
+    assert.equal(result.code, 0, result.stderr);
+    await assert.rejects(readFile(sentinel));
+    const reportName = (await readdir(fromDir)).find((name) =>
+      name.endsWith(".txt")
+    );
+    assert.ok(reportName);
+    const report = await readFile(path.join(fromDir, reportName), "utf8");
+    assert.doesNotMatch(report, /HOSTILE_(?:STARTUP|BASH)_SECRET/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const README_MOUNT_FAILURE_CASES = [
+  {
+    name: "an already-mounted target",
+    scenario: { staleMount: true },
+    expected: /already mounted/i,
+    included: [],
+    excluded: ["mount:", "checksum:", "collector", "sync", "umount:"]
+  },
+  {
+    name: "a non-vfat selected partition",
+    scenario: { deviceFsType: "ext4" },
+    expected: /filesystem.*vfat/i,
+    included: [],
+    excluded: ["mount:", "checksum:", "collector", "sync", "umount:"]
+  },
+  {
+    name: "a failed mount",
+    scenario: { mountFails: true },
+    expected: /mount/i,
+    included: ["mount:"],
+    excluded: ["checksum:", "collector", "sync", "umount:"]
+  },
+  {
+    name: "a failed handoff cd",
+    scenario: { handoffExists: false },
+    expected: /handoff directory/i,
+    included: ["mount:", "umount:"],
+    excluded: ["checksum:", "collector", "sync"]
+  },
+  {
+    name: "the wrong mounted source",
+    scenario: { mountedSource: "/wrong/source" },
+    expected: /mounted source/i,
+    included: ["mount:"],
+    excluded: ["checksum:", "collector", "sync"]
+  },
+  {
+    name: "a non-vfat effective mount",
+    scenario: { mountedFsType: "ext4" },
+    expected: /effective mounted filesystem.*vfat/i,
+    included: ["mount:", "umount:"],
+    excluded: ["checksum:", "collector", "sync"]
+  },
+  {
+    name: "missing effective mount options",
+    scenario: {
+      mountOptions: "rw,nodev,nosuid,uid=1001,gid=1002,umask=0077"
+    },
+    expected: /mount options/i,
+    included: ["mount:", "umount:"],
+    excluded: ["checksum:", "collector", "sync"]
+  },
+  {
+    name: "a failed sync",
+    scenario: { syncFails: true },
+    expected: /sync/i,
+    included: ["mount:", "checksum:", "collector", "sync", "umount:"],
+    excluded: []
+  },
+  {
+    name: "a failed explicit unmount",
+    scenario: { unmountFails: true },
+    expected: /unmount/i,
+    included: ["mount:", "checksum:", "collector", "sync", "umount:"],
+    excluded: []
+  }
+];
+
+for (const failureCase of README_MOUNT_FAILURE_CASES) {
+  test(`README mount block fails closed for ${failureCase.name}`, {
+    skip: process.platform === "win32" ? "Mount-block behavior runs on a POSIX host." : false
+  }, async () => {
+    const harness = await createReadmeMountHarness(failureCase.scenario);
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.stderr, failureCase.expected);
+      for (const marker of failureCase.included) {
+        assert.match(harness.log, new RegExp(marker));
+      }
+      for (const marker of failureCase.excluded) {
+        assert.doesNotMatch(harness.log, new RegExp(marker));
+      }
+      if (failureCase.scenario.unmountFails) {
+        assert.ok(
+          harness.log.match(/^umount:/gm)?.length >= 2,
+          "explicit unmount failure should trigger one bounded cleanup retry"
+        );
+      }
+    } finally {
+      await harness.cleanup();
+    }
+  });
+}
 
 test("PowerShell wrapper rejects a network destination before drive inspection", {
   skip: process.platform !== "win32" ? "PowerShell wrapper check runs on Windows." : false
