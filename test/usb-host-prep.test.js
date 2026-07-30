@@ -11,6 +11,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -63,6 +64,18 @@ function shellSingleQuote(value) {
 async function writeExecutable(filePath, body) {
   await writeFile(filePath, `#!/bin/sh\nset -eu\n${body}`, { mode: 0o700 });
   await chmod(filePath, 0o700);
+}
+
+function assertBoundedPreflightFailure(result) {
+  assert.notEqual(result.code, 0);
+  assert.equal(
+    result.stdout,
+    '{"ok":false,"phaseId":"debian-host-prep-v1","classification":"conflict","tokenCreated":false}\n'
+  );
+  assert.match(
+    result.stderr,
+    /^(?:host-prep: ufw=(?:active|inactive|unavailable)\n)?host-prep: failed step=[a-z-]+\n$/
+  );
 }
 
 async function snapshotFixtureTree(root) {
@@ -139,9 +152,20 @@ async function runHostPrepScript(fixture, extraEnvironment = {}) {
     PALZIV_HOST_PREP_TEST_BIN: fixture.bin,
     ...extraEnvironment
   };
+  const isolatedEnvironment = [
+    "-i",
+    `HOME=${os.homedir()}`,
+    "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+    `PALZIV_HOST_PREP_TEST_MODE=${environment.PALZIV_HOST_PREP_TEST_MODE}`,
+    `PALZIV_HOST_PREP_TEST_ROOT=${environment.PALZIV_HOST_PREP_TEST_ROOT}`,
+    `PALZIV_HOST_PREP_TEST_BIN=${environment.PALZIV_HOST_PREP_TEST_BIN}`,
+    "/bin/bash",
+    "-p",
+    fixture.scriptPath
+  ];
 
   try {
-    const result = await execFile("/bin/bash", ["-p", fixture.scriptPath], {
+    const result = await execFile("/usr/bin/env", isolatedEnvironment, {
       cwd: fixture.stage,
       env: environment,
       timeout: 15_000,
@@ -159,6 +183,58 @@ async function runHostPrepScript(fixture, extraEnvironment = {}) {
       stdout: error.stdout ?? "",
       stderr: error.stderr ?? "",
       hostileArtifacts: [hostileMarker, bashEnvMarker, curlConfigMarker, environment.SSLKEYLOGFILE]
+    };
+  }
+}
+
+async function runHostPrepWithDirectBash(fixture) {
+  const environment = {
+    HOME: os.homedir(),
+    PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+    PALZIV_HOST_PREP_TEST_MODE: "1",
+    PALZIV_HOST_PREP_TEST_ROOT: fixture.root,
+    PALZIV_HOST_PREP_TEST_BIN: fixture.bin
+  };
+  try {
+    const result = await execFile("/bin/bash", [fixture.scriptPath], {
+      cwd: fixture.stage,
+      env: environment,
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return {
+      code: error.code,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? ""
+    };
+  }
+}
+
+async function runExactProductionLauncherWithInvalidArgument(fixture, hostileEnvironment) {
+  const argumentsList = [
+    "-i",
+    `HOME=${os.homedir()}`,
+    "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+    "/bin/bash",
+    "-p",
+    fixture.scriptPath,
+    "--invalid"
+  ];
+  try {
+    const result = await execFile("/usr/bin/env", argumentsList, {
+      cwd: fixture.stage,
+      env: hostileEnvironment,
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return {
+      code: error.code,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? ""
     };
   }
 }
@@ -230,7 +306,8 @@ async function createHostPrepFixture({
       "test \"$#\" -eq 3\ntest \"$1\" = show\ntest \"$2\" = --property=NTPSynchronized\ntest \"$3\" = --value\nprintf '%s\\n' yes\n",
     systemctl: `case "\${1-}:\${2-}:\${3-}" in
   is-active:--quiet:qemu-guest-agent.service|is-active:--quiet:systemd-timesyncd.service) exit 0 ;;
-  is-active:--quiet:palziv.service|is-enabled:--quiet:palziv.service|is-active:--quiet:cloudflared.service|is-enabled:--quiet:cloudflared.service) ${activeService ? "exit 0" : "exit 3"} ;;
+  is-active:--quiet:palziv.service|is-active:--quiet:cloudflared.service) ${activeService ? "exit 0" : "exit 3"} ;;
+  is-enabled:--quiet:palziv.service|is-enabled:--quiet:cloudflared.service) ${activeService ? "exit 0" : "exit 1"} ;;
   *) exit 97 ;;
 esac
 `,
@@ -529,6 +606,7 @@ test("tree snapshots reject linked content and manifest fingerprints hash raw by
 
 test("host prep preflight has an explicit read-only contract", async () => {
   const script = await readFile(HOST_PREP_SCRIPT_URL, "utf8");
+  assert.equal(script.includes("\r"), false, "preflight must remain LF-only");
   assert.match(script, /^#!\/usr\/bin\/env bash/m);
   assert.match(script, /set -Eeuo pipefail/);
   assert.match(script, /VERSION_ID.*13/);
@@ -706,13 +784,301 @@ test(
 );
 
 test(
+  "host prep preflight invalidates safe prior receipts before fallible validation",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture();
+    try {
+      const tokenPath = path.join(fixture.stage, ".host-prep-preflight-ok");
+      await writeFile(tokenPath, '{"stale":true}\n', { mode: 0o600 });
+      await writeFile(path.join(fixture.stage, "README-FIRST.txt"), "tampered\n");
+      const result = await runHostPrepScript(fixture);
+      assertBoundedPreflightFailure(result);
+      await assert.rejects(lstat(tokenPath), { code: "ENOENT" });
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep preflight requires the isolated privileged launcher",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("ordinary Bash refuses and invalidates a safe prior receipt", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const tokenPath = path.join(fixture.stage, ".host-prep-preflight-ok");
+        await writeFile(tokenPath, '{"stale":true}\n', { mode: 0o600 });
+        const result = await runHostPrepWithDirectBash(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.match(result.stderr, /step=invocation/);
+        await assert.rejects(lstat(tokenPath), { code: "ENOENT" });
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("exact production launcher clears a hostile parent before Bash starts", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const tokenPath = path.join(fixture.stage, ".host-prep-preflight-ok");
+        const bashEnvMarker = path.join(fixture.base, "pre-start-hook-fired");
+        const bashEnvPath = path.join(fixture.base, "hostile-production-bash-env");
+        await writeFile(bashEnvPath, `: > ${shellSingleQuote(bashEnvMarker)}\n`, { mode: 0o600 });
+        await writeFile(tokenPath, '{"stale":true}\n', { mode: 0o600 });
+        const result = await runExactProductionLauncherWithInvalidArgument(fixture, {
+          ...process.env,
+          BASH_ENV: bashEnvPath,
+          ENV: bashEnvPath,
+          PATH: path.join(fixture.base, "hostile-parent-path")
+        });
+        assertBoundedPreflightFailure(result);
+        assert.match(result.stderr, /step=arguments/);
+        await assert.rejects(lstat(bashEnvMarker), { code: "ENOENT" });
+        await assert.rejects(lstat(tokenPath), { code: "ENOENT" });
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+);
+
+test(
+  "host prep preflight preserves traversal producer failures",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture();
+    const blockedDirectory = path.join(fixture.stage, "FROM-DEBIAN");
+    try {
+      await chmod(blockedDirectory, 0o000);
+      const result = await runHostPrepScript(fixture);
+      assertBoundedPreflightFailure(result);
+      await assert.rejects(
+        lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+        { code: "ENOENT" }
+      );
+    } finally {
+      await chmod(blockedDirectory, 0o700).catch(() => {});
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep preflight pins one fixture base and rejects linked or replaced fixture state",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("stage and mapped state from different fixture bases", async () => {
+      const stageFixture = await createHostPrepFixture();
+      const stateFixture = await createHostPrepFixture();
+      try {
+        const result = await runHostPrepScript(stageFixture, {
+          PALZIV_HOST_PREP_TEST_ROOT: stateFixture.root,
+          PALZIV_HOST_PREP_TEST_BIN: stateFixture.bin
+        });
+        assertBoundedPreflightFailure(result);
+        assert.match(result.stderr, /step=fixture-routing|step=stage-path/);
+      } finally {
+        await rm(stageFixture.base, { recursive: true, force: true });
+        await rm(stateFixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("linked mapped descendant", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const outsideEtc = path.join(fixture.base, "outside-etc");
+        await mkdir(outsideEtc);
+        await copyFile(path.join(fixture.root, "etc", "os-release"), path.join(outsideEtc, "os-release"));
+        await rm(path.join(fixture.root, "etc"), { recursive: true });
+        await symlink(outsideEtc, path.join(fixture.root, "etc"));
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    for (const boundary of ["root", "bin"]) {
+      await t.test(`post-initialization ${boundary} replacement`, async () => {
+        const fixture = await createHostPrepFixture();
+        try {
+          const target = fixture[boundary];
+          const oldTarget = `${target}-old`;
+          await writeExecutable(
+            path.join(fixture.bin, "uname"),
+            [
+              `/usr/bin/mv ${shellSingleQuote(target)} ${shellSingleQuote(oldTarget)}`,
+              `/usr/bin/cp -a ${shellSingleQuote(oldTarget)} ${shellSingleQuote(target)}`,
+              "printf '%s\\n' x86_64"
+            ].join("\n")
+          );
+          const result = await runHostPrepScript(fixture);
+          assertBoundedPreflightFailure(result);
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+
+    await t.test("control character in canonical stage", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const controlledStage = `${fixture.stage}\tcontrolled`;
+        await rename(fixture.stage, controlledStage);
+        fixture.stage = controlledStage;
+        fixture.scriptPath = path.join(controlledStage, "TO-DEBIAN", "preflight-host-prep.sh");
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+);
+
+test(
+  "host prep preflight enforces exact prepared directory child sets",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    const extras = [
+      ["opt parent", ["opt", "palziv", "extra"]],
+      ["release directory", ["opt", "palziv", "releases", "extra"]],
+      ["state parent", ["var", "lib", "palziv", "extra"]],
+      ["data directory", ["var", "lib", "palziv", "data", "extra"]],
+      ["backup directory", ["var", "backups", "palziv", "extra"]],
+      ["configuration directory", ["etc", "palziv", "extra"]]
+    ];
+    for (const [name, components] of extras) {
+      await t.test(name, async () => {
+        const fixture = await createHostPrepFixture({ prepared: true });
+        try {
+          await writeFile(path.join(fixture.root, ...components), "unexpected\n");
+          const result = await runHostPrepScript(fixture);
+          assertBoundedPreflightFailure(result);
+          await assert.rejects(
+            lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+            { code: "ENOENT" }
+          );
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+
+    await t.test("prepared directory traversal failure", async () => {
+      const fixture = await createHostPrepFixture({ prepared: true });
+      const blockedDirectory = path.join(fixture.root, "etc", "palziv");
+      try {
+        await chmod(blockedDirectory, 0o000);
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+      } finally {
+        await chmod(blockedDirectory, 0o700).catch(() => {});
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+);
+
+test(
+  "host prep preflight accepts only explicit quiet inactive service outcomes",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    const cases = [
+      ["wrong inactive status", "exit 1", "exit 1"],
+      ["unknown enabled status", "exit 3", "exit 2"],
+      ["command unavailable", "exit 127", "exit 1"],
+      ["noisy inactive status", "printf '%s\\n' external-noise; exit 3", "exit 1"],
+      ["multiline unknown status", "printf 'inactive\\nunknown\\n'; exit 3", "exit 1"]
+    ];
+    for (const [name, activeOutcome, enabledOutcome] of cases) {
+      await t.test(name, async () => {
+        const fixture = await createHostPrepFixture();
+        try {
+          await writeExecutable(
+            path.join(fixture.bin, "systemctl"),
+            `case "\${1-}:\${2-}:\${3-}" in
+  is-active:--quiet:qemu-guest-agent.service|is-active:--quiet:systemd-timesyncd.service) exit 0 ;;
+  is-active:--quiet:palziv.service) ${activeOutcome} ;;
+  is-enabled:--quiet:palziv.service) ${enabledOutcome} ;;
+  is-active:--quiet:cloudflared.service) exit 3 ;;
+  is-enabled:--quiet:cloudflared.service) exit 1 ;;
+  *) exit 97 ;;
+esac
+`
+          );
+          const result = await runHostPrepScript(fixture);
+          assertBoundedPreflightFailure(result);
+          assert.doesNotMatch(result.stdout + result.stderr, /external-noise|unknown/);
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+);
+
+test(
+  "host prep preflight rejects ambiguous bounded account records",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture({ prepared: true });
+    try {
+      await writeExecutable(
+        path.join(fixture.bin, "getent"),
+        `case "\${1-}:\${2-}" in
+  passwd:palziv) printf '%s\\n%s\\n' 'palziv:x:998:998::/var/lib/palziv:/usr/sbin/nologin' 'palziv:x:997:998::/var/lib/palziv:/usr/sbin/nologin' ;;
+  group:palziv) printf '%s\\n' 'palziv:x:998:' ;;
+  *) exit 2 ;;
+esac
+`
+      );
+      const result = await runHostPrepScript(fixture);
+      assertBoundedPreflightFailure(result);
+      await assert.rejects(
+        lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+        { code: "ENOENT" }
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep preflight suppresses external noise from successful observations",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture();
+    try {
+      await writeExecutable(
+        path.join(fixture.bin, "uname"),
+        "printf '%s\\n' hidden-external-noise >&2\nprintf '%s\\n' x86_64\n"
+      );
+      const result = await runHostPrepScript(fixture);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(
+        result.stdout,
+        '{"ok":true,"phaseId":"debian-host-prep-v1","classification":"clean","tokenCreated":true}\n'
+      );
+      assert.equal(result.stderr, "host-prep: ufw=inactive\n");
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
   "host prep preflight enforces every fixed Debian baseline threshold",
   { skip: process.platform !== "linux" },
   async (t) => {
     const serviceBody = (failedService) => `case "\${1-}:\${2-}:\${3-}" in
   is-active:--quiet:${failedService}) exit 3 ;;
   is-active:--quiet:qemu-guest-agent.service|is-active:--quiet:systemd-timesyncd.service) exit 0 ;;
-  is-active:--quiet:palziv.service|is-enabled:--quiet:palziv.service|is-active:--quiet:cloudflared.service|is-enabled:--quiet:cloudflared.service) exit 3 ;;
+  is-active:--quiet:palziv.service|is-active:--quiet:cloudflared.service) exit 3 ;;
+  is-enabled:--quiet:palziv.service|is-enabled:--quiet:cloudflared.service) exit 1 ;;
   *) exit 97 ;;
 esac
 `;
@@ -886,21 +1252,36 @@ test(
     try {
       const command = [
         ". \"$1\"",
-        "type host_prep_stage_root >/dev/null",
-        "type host_prep_manifest_fingerprint >/dev/null",
-        "type host_prep_classify >/dev/null",
-        "type host_prep_verify_safety_state >/dev/null"
+        "stage=$(host_prep_stage_root)",
+        "fingerprint=$(host_prep_manifest_fingerprint)",
+        "classification=$(host_prep_classify)",
+        "host_prep_verify_safety_state",
+        "printf '%s\\n%s\\n%s\\n' \"$stage\" \"$fingerprint\" \"$classification\""
       ].join("\n");
-      const result = await execFile("/bin/bash", ["-p", "-c", command, "bash", fixture.scriptPath], {
-        env: {
-          ...process.env,
-          PALZIV_HOST_PREP_TEST_MODE: "1",
-          PALZIV_HOST_PREP_TEST_ROOT: fixture.root,
-          PALZIV_HOST_PREP_TEST_BIN: fixture.bin
-        },
-        timeout: 15_000
+      const result = await execFile("/usr/bin/env", [
+        "-i",
+        `HOME=${os.homedir()}`,
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+        "PALZIV_HOST_PREP_TEST_MODE=1",
+        `PALZIV_HOST_PREP_TEST_ROOT=${fixture.root}`,
+        `PALZIV_HOST_PREP_TEST_BIN=${fixture.bin}`,
+        "/bin/bash",
+        "-p",
+        "-c",
+        command,
+        "bash",
+        fixture.scriptPath
+      ], {
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024
       });
-      assert.equal(result.stdout, "");
+      const manifest = await readFile(
+        path.join(fixture.stage, "CHECKSUMS", "PHASE-2-HOST-PREP.sha256")
+      );
+      assert.equal(
+        result.stdout,
+        `${fixture.stage}\n${createHash("sha256").update(manifest).digest("hex")}\nclean\n`
+      );
       assert.equal(result.stderr, "");
       await assert.rejects(
         lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
