@@ -661,3 +661,341 @@ test("PowerShell wrapper rejects a network destination before drive inspection",
   assert.match(result.stderr, /ValidatePattern|validation script|does not match/i);
   assert.doesNotMatch(result.stderr, /Win32_LogicalDisk|Get-CimInstance/i);
 });
+
+test("handoff verifier accepts a built outbound bundle and a safe returned report", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-verify-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+
+    const outbound = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.equal(outbound.code, 0, outbound.stderr);
+    assert.deepEqual(JSON.parse(outbound.stdout), {
+      ok: true,
+      mode: "outbound",
+      inboundFiles: 3,
+      reports: []
+    });
+
+    const reportName = "debian-readiness-20260729T160000Z-palziv-prod.txt";
+    const reportPath = path.join(handoff, "FROM-DEBIAN", reportName);
+    const reportContents = "## Collection\nHostname: palziv-prod\nNode: v24.8.0\n";
+    await writeFile(reportPath, reportContents);
+    await writeFile(
+      `${reportPath}.sha256`,
+      `${await sha256File(reportPath)}  ${reportName}\n`
+    );
+    const returned = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "returned"
+    ]);
+    assert.equal(returned.code, 0, returned.stderr);
+    const summary = JSON.parse(returned.stdout);
+    assert.deepEqual(Object.keys(summary).sort(), ["inboundFiles", "mode", "ok", "reports"]);
+    assert.equal(summary.ok, true);
+    assert.equal(summary.mode, "returned");
+    assert.equal(summary.inboundFiles, 3);
+    assert.deepEqual(summary.reports, [{
+      fileName: reportName,
+      sha256: await sha256File(reportPath)
+    }]);
+    assert.doesNotMatch(returned.stdout, /Hostname:|Node:/);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("returned verification rejects tampering and secret material without echoing values", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-secret-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    const reportName = "debian-readiness-20260729T160000Z-palziv-prod.txt";
+    const reportPath = path.join(handoff, "FROM-DEBIAN", reportName);
+    await writeFile(reportPath, "RESEND_API_KEY=must-never-be-echoed\n");
+    await writeFile(`${reportPath}.sha256`, `${await sha256File(reportPath)}  ${reportName}\n`);
+
+    const secretResult = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "returned"
+    ]);
+    assert.notEqual(secretResult.code, 0);
+    assert.equal(
+      secretResult.stderr,
+      "Potential secret material detected at line 1 (secret-assignment); do not open or share this report.\n"
+    );
+    assert.doesNotMatch(`${secretResult.stdout}${secretResult.stderr}`, /must-never-be-echoed/);
+
+    await writeFile(reportPath, "API_TOKEN=changed-after-hashing-and-never-echoed\n");
+    const tamperResult = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "returned"
+    ]);
+    assert.notEqual(tamperResult.code, 0);
+    assert.match(tamperResult.stderr, /checksum mismatch/i);
+    assert.doesNotMatch(
+      `${tamperResult.stdout}${tamperResult.stderr}`,
+      /changed-after-hashing-and-never-echoed/
+    );
+    assert.doesNotMatch(tamperResult.stderr, /potential secret material/i);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+const RETURN_FAILURE_CASES = [
+  {
+    name: "empty return directory",
+    expected: /at least one returned report/i,
+    arrange: async () => {}
+  },
+  {
+    name: "temporary return file",
+    expected: /unexpected return file/i,
+    arrange: async (returnDir) => {
+      await writeFile(path.join(returnDir, ".debian-readiness.tmp"), "partial\n");
+    }
+  },
+  {
+    name: "report without sidecar",
+    expected: /missing checksum sidecar/i,
+    arrange: async (returnDir, reportName) => {
+      await writeFile(path.join(returnDir, reportName), "safe\n");
+    }
+  },
+  {
+    name: "sidecar without report",
+    expected: /missing returned report/i,
+    arrange: async (returnDir, reportName) => {
+      await writeFile(
+        path.join(returnDir, `${reportName}.sha256`),
+        `${"0".repeat(64)}  ${reportName}\n`
+      );
+    }
+  },
+  {
+    name: "unsafe filename inside sidecar",
+    expected: /unsafe manifest path/i,
+    arrange: async (returnDir, reportName) => {
+      const reportPath = path.join(returnDir, reportName);
+      await writeFile(reportPath, "safe\n");
+      await writeFile(
+        `${reportPath}.sha256`,
+        `${await sha256File(reportPath)}  ../${reportName}\n`
+      );
+    }
+  },
+  {
+    name: "sidecar containing two entries",
+    expected: /does not name only/i,
+    arrange: async (returnDir, reportName) => {
+      const otherName = "debian-readiness-20260729T170000Z-palziv-prod.txt";
+      const reportPath = path.join(returnDir, reportName);
+      const otherPath = path.join(returnDir, otherName);
+      await writeFile(reportPath, "safe one\n");
+      await writeFile(otherPath, "safe two\n");
+      await writeFile(
+        `${reportPath}.sha256`,
+        [
+          `${await sha256File(reportPath)}  ${reportName}`,
+          `${await sha256File(otherPath)}  ${otherName}`,
+          ""
+        ].join("\n")
+      );
+      await writeFile(
+        `${otherPath}.sha256`,
+        `${await sha256File(otherPath)}  ${otherName}\n`
+      );
+    }
+  },
+  {
+    name: "valid-looking report directory",
+    expected: /not a file|checksum/i,
+    arrange: async (returnDir, reportName) => {
+      await mkdir(path.join(returnDir, reportName));
+      await writeFile(
+        path.join(returnDir, `${reportName}.sha256`),
+        `${"0".repeat(64)}  ${reportName}\n`
+      );
+    }
+  }
+];
+
+for (const scenario of RETURN_FAILURE_CASES) {
+  test(`returned verification rejects ${scenario.name}`, async () => {
+    const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-return-invalid-"));
+    try {
+      const built = await run(process.execPath, [
+        "scripts/migration/build-usb-handoff.mjs",
+        "--usb-root", usbRoot
+      ]);
+      assert.equal(built.code, 0, built.stderr);
+      const handoff = path.join(usbRoot, "Project-A-Migration");
+      const returnDir = path.join(handoff, "FROM-DEBIAN");
+      const reportName = "debian-readiness-20260729T160000Z-palziv-prod.txt";
+      await scenario.arrange(returnDir, reportName);
+      const result = await run(process.execPath, [
+        "scripts/migration/verify-usb-handoff.mjs",
+        "--handoff-root", handoff,
+        "--mode", "returned"
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, scenario.expected);
+    } finally {
+      await rm(usbRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("outbound verification requires an empty return directory", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-outbound-returned-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    await writeFile(path.join(handoff, "FROM-DEBIAN", "operator-note.txt"), "preserve\n");
+    const result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /outbound handoff already contains returned files/i);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("handoff verification requires exact entry names, types, and inbound manifest files", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-exact-tree-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+
+    await writeFile(path.join(handoff, "unexpected.txt"), "unexpected\n");
+    let result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /top-level layout/i);
+    await rm(path.join(handoff, "unexpected.txt"));
+
+    await rm(path.join(handoff, "FROM-DEBIAN"), { recursive: true });
+    await writeFile(path.join(handoff, "FROM-DEBIAN"), "not a directory\n");
+    result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /top-level layout/i);
+    await rm(path.join(handoff, "FROM-DEBIAN"));
+    await mkdir(path.join(handoff, "FROM-DEBIAN"));
+
+    const extraPath = path.join(handoff, "TO-DEBIAN", "extra.txt");
+    await writeFile(extraPath, "extra inbound file\n");
+    result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /inbound layout/i);
+
+    await rm(extraPath);
+    await writeFile(
+      path.join(handoff, "CHECKSUMS", "TO-DEBIAN.sha256"),
+      [
+        `${await sha256File(path.join(handoff, "ISOLATION-BOUNDARY.txt"))}  ISOLATION-BOUNDARY.txt`,
+        `${await sha256File(path.join(handoff, "README-FIRST.txt"))}  README-FIRST.txt`,
+        ""
+      ].join("\n")
+    );
+    result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /approved files/i);
+
+    await writeFile(path.join(handoff, "SECRETS-ENCRYPTED", "secret.bin"), "not approved\n");
+    result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /inbound layout/i);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("handoff verification rejects a symlinked return directory", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-return-symlink-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-return-outside-"));
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    await rm(path.join(handoff, "FROM-DEBIAN"), { recursive: true });
+    await symlink(outside, path.join(handoff, "FROM-DEBIAN"), "junction");
+    const result = await run(process.execPath, [
+      "scripts/migration/verify-usb-handoff.mjs",
+      "--handoff-root", handoff,
+      "--mode", "outbound"
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /top-level layout|symbolic link/i);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("handoff verifier CLI rejects relative roots and unsupported arguments", async () => {
+  const relative = await run(process.execPath, [
+    "scripts/migration/verify-usb-handoff.mjs",
+    "--handoff-root", "Project-A-Migration",
+    "--mode", "outbound"
+  ]);
+  assert.notEqual(relative.code, 0);
+  assert.match(relative.stderr, /absolute/i);
+
+  const unsupported = await run(process.execPath, [
+    "scripts/migration/verify-usb-handoff.mjs",
+    "--handoff-root", path.resolve("Project-A-Migration"),
+    "--mode", "outbound",
+    "--verbose"
+  ]);
+  assert.notEqual(unsupported.code, 0);
+  assert.match(unsupported.stderr, /usage|unsupported/i);
+});
