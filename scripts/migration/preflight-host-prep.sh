@@ -45,6 +45,10 @@ HOST_PREP_SYSTEM_ROOT="/"
 HOST_PREP_TEST_COMMAND_BIN=""
 HOST_PREP_TEST_ROOT_IDENTITY=""
 HOST_PREP_TEST_BIN_IDENTITY=""
+HOST_PREP_MAPPED_PATH=""
+HOST_PREP_MAPPED_TEXT=""
+HOST_PREP_PATH_STATE=""
+HOST_PREP_CLASSIFICATION=""
 HOST_PREP_STAGE=""
 HOST_PREP_MANIFEST=""
 HOST_PREP_TOKEN=""
@@ -53,6 +57,9 @@ HOST_PREP_SAFE_REMOVAL=""
 HOST_PREP_BOUNDED_OUTPUT=""
 HOST_PREP_BOUNDED_STATUS=125
 HOST_PREP_BOUNDED_TRUNCATED=0
+HOST_PREP_BOUNDED_MALFORMED=0
+HOST_PREP_BOUNDED_READER_STATUS=125
+declare -A HOST_PREP_FIXTURE_COMPONENT_STATES=()
 
 host_prep_emit_summary() {
   local ok="$1"
@@ -113,6 +120,46 @@ host_prep_revalidate_fixture_boundaries() {
   [[ "$bin_identity" == "$HOST_PREP_TEST_BIN_IDENTITY" ]] || return 1
 }
 
+host_prep_fixture_component_state() {
+  local candidate="$1"
+  local allow_link="$2"
+  local canonical
+  local identity
+  local link_target
+  local state
+
+  [[ "$candidate" == "$HOST_PREP_SYSTEM_ROOT/"* ]] || return 1
+  [[ ! "$candidate" =~ [[:cntrl:]] ]] || return 1
+  if [[ -L "$candidate" ]]; then
+    (( allow_link == 1 )) || return 1
+    identity=$(/usr/bin/stat -c '%d:%i:%u:%g:%f' -- "$candidate" 2>/dev/null) ||
+      return 1
+    link_target=$(/usr/bin/readlink -- "$candidate" 2>/dev/null) || return 1
+    [[ ! "$link_target" =~ [[:cntrl:]] ]] || return 1
+    state="link:$identity:$link_target"
+  elif [[ -e "$candidate" ]]; then
+    canonical=$(/usr/bin/readlink -e -- "$candidate" 2>/dev/null) || return 1
+    [[ "$canonical" == "$candidate" ]] || return 1
+    identity=$(/usr/bin/stat -c '%d:%i:%u:%g:%f' -- "$candidate" 2>/dev/null) ||
+      return 1
+    if [[ -d "$candidate" && -r "$candidate" && -x "$candidate" ]]; then
+      state="directory:$identity"
+    elif [[ -f "$candidate" && -r "$candidate" ]]; then
+      state="file:$identity"
+    else
+      return 1
+    fi
+  else
+    state="absent"
+  fi
+
+  if [[ -n "${HOST_PREP_FIXTURE_COMPONENT_STATES[$candidate]+set}" ]]; then
+    [[ "${HOST_PREP_FIXTURE_COMPONENT_STATES[$candidate]}" == "$state" ]]
+  else
+    HOST_PREP_FIXTURE_COMPONENT_STATES["$candidate"]="$state"
+  fi
+}
+
 host_prep_initialize_environment() {
   local supplied=0
   local root_base
@@ -153,11 +200,11 @@ host_prep_initialize_environment() {
 
 host_prep_validate_mapped_path() {
   local absolute_path="$1"
+  local allow_final_link="${2:-0}"
   local current="$HOST_PREP_SYSTEM_ROOT"
   local component
   local final_component
   local index
-  local canonical
   local -a components=()
 
   [[ "$absolute_path" == /* && ! "$absolute_path" =~ [[:cntrl:]] ]] || return 1
@@ -171,17 +218,18 @@ host_prep_validate_mapped_path() {
     [[ -n "$component" && "$component" != "." && "$component" != ".." ]] || return 1
     current="$current/$component"
     if [[ -L "$current" ]]; then
-      (( index == final_component )) || return 1
+      (( index == final_component && allow_final_link == 1 )) || return 1
+      host_prep_fixture_component_state "$current" 1 || return 1
       break
     fi
     if [[ -e "$current" ]]; then
-      canonical=$(/usr/bin/readlink -e -- "$current" 2>/dev/null) || return 1
-      [[ "$canonical" == "$current" ]] || return 1
+      host_prep_fixture_component_state "$current" 0 || return 1
       if (( index < final_component )); then
         [[ -d "$current" && -x "$current" ]] || return 1
       fi
     else
       [[ -d "${current%/*}" && -x "${current%/*}" ]] || return 1
+      host_prep_fixture_component_state "$current" 0 || return 1
       break
     fi
   done
@@ -192,13 +240,16 @@ host_prep_validate_mapped_path() {
 
 host_prep_system_path() {
   local absolute_path="$1"
+  local allow_final_link="${2:-0}"
+  HOST_PREP_MAPPED_PATH=""
   [[ "$absolute_path" == /* ]] || return 1
   if (( HOST_PREP_TEST_MODE == 1 )); then
-    host_prep_validate_mapped_path "$absolute_path" || return 1
-    printf '%s%s\n' "$HOST_PREP_SYSTEM_ROOT" "$absolute_path"
+    host_prep_validate_mapped_path "$absolute_path" "$allow_final_link" || return 1
+    HOST_PREP_MAPPED_PATH="$HOST_PREP_SYSTEM_ROOT$absolute_path"
   else
-    printf '%s\n' "$absolute_path"
+    HOST_PREP_MAPPED_PATH="$absolute_path"
   fi
+  printf '%s\n' "$HOST_PREP_MAPPED_PATH"
 }
 
 host_prep_observer_path() {
@@ -253,30 +304,79 @@ host_prep_observe() {
   return "$status"
 }
 
+host_prep_read_bounded_stream() {
+  local maximum="$1"
+  local output=""
+  local reader_status
+
+  HOST_PREP_BOUNDED_TRUNCATED=0
+  HOST_PREP_BOUNDED_MALFORMED=0
+  HOST_PREP_BOUNDED_READER_STATUS=125
+  if IFS= read -r -d '' -n "$((maximum + 1))" output; then
+    reader_status=0
+  else
+    reader_status=$?
+  fi
+  HOST_PREP_BOUNDED_OUTPUT="$output"
+  HOST_PREP_BOUNDED_READER_STATUS="$reader_status"
+  if (( ${#output} == maximum + 1 )); then
+    HOST_PREP_BOUNDED_TRUNCATED=1
+    return 66
+  fi
+  if (( reader_status == 0 )); then
+    HOST_PREP_BOUNDED_MALFORMED=1
+    return 65
+  fi
+  if (( reader_status != 1 || ${#output} > maximum )); then
+    HOST_PREP_BOUNDED_MALFORMED=1
+    return 67
+  fi
+}
+
 host_prep_run_observer_bounded() {
   local maximum="$1"
   local name="$2"
-  local output=""
-  local status
   local -a pipeline_status=()
   shift 2
 
   HOST_PREP_BOUNDED_OUTPUT=""
   HOST_PREP_BOUNDED_STATUS=125
   HOST_PREP_BOUNDED_TRUNCATED=0
-  if host_prep_observe "$name" "$@" 2>/dev/null | {
-    IFS= read -r -N "$((maximum + 1))" output || true
-  }; then
+  HOST_PREP_BOUNDED_MALFORMED=0
+  HOST_PREP_BOUNDED_READER_STATUS=125
+  if host_prep_observe "$name" "$@" 2>/dev/null |
+    host_prep_read_bounded_stream "$maximum"; then
     pipeline_status=("${PIPESTATUS[@]}")
   else
     pipeline_status=("${PIPESTATUS[@]}")
   fi
-  status="${pipeline_status[0]}"
-  HOST_PREP_BOUNDED_OUTPUT="$output"
-  HOST_PREP_BOUNDED_STATUS="$status"
-  if (( ${#output} > maximum )); then
-    HOST_PREP_BOUNDED_TRUNCATED=1
+  HOST_PREP_BOUNDED_STATUS="${pipeline_status[0]}"
+  (( pipeline_status[1] == 0 &&
+    HOST_PREP_BOUNDED_MALFORMED == 0 &&
+    HOST_PREP_BOUNDED_TRUNCATED == 0 ))
+}
+
+host_prep_run_path_bounded() {
+  local maximum="$1"
+  local command_path="$2"
+  local -a pipeline_status=()
+  shift 2
+
+  HOST_PREP_BOUNDED_OUTPUT=""
+  HOST_PREP_BOUNDED_STATUS=125
+  HOST_PREP_BOUNDED_TRUNCATED=0
+  HOST_PREP_BOUNDED_MALFORMED=0
+  HOST_PREP_BOUNDED_READER_STATUS=125
+  if "$command_path" "$@" 2>/dev/null |
+    host_prep_read_bounded_stream "$maximum"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
   fi
+  HOST_PREP_BOUNDED_STATUS="${pipeline_status[0]}"
+  (( pipeline_status[1] == 0 &&
+    HOST_PREP_BOUNDED_MALFORMED == 0 &&
+    HOST_PREP_BOUNDED_TRUNCATED == 0 ))
 }
 
 host_prep_stage_root() {
@@ -517,7 +617,9 @@ host_prep_read_mapped_text() {
   local size
   local contents
 
-  mapped=$(host_prep_system_path "$absolute_path") || return 1
+  HOST_PREP_MAPPED_TEXT=""
+  host_prep_system_path "$absolute_path" >/dev/null || return 1
+  mapped="$HOST_PREP_MAPPED_PATH"
   [[ -f "$mapped" && ! -L "$mapped" && -r "$mapped" ]] || return 1
   before=$(/usr/bin/stat -Lc '%d:%i:%u:%s:%Y:%Z:%f' -- "$mapped" 2>/dev/null) ||
     return 1
@@ -532,7 +634,8 @@ host_prep_read_mapped_text() {
     host_prep_revalidate_fixture_boundaries || return 1
     host_prep_validate_mapped_path "$absolute_path" || return 1
   fi
-  printf '%s' "$contents"
+  HOST_PREP_MAPPED_TEXT="$contents"
+  printf '%s' "$HOST_PREP_MAPPED_TEXT"
 }
 
 host_prep_read_os_release() {
@@ -542,7 +645,8 @@ host_prep_read_os_release() {
   local value
   local id=""
   local version_id=""
-  contents=$(host_prep_read_mapped_text "/etc/os-release" 65536) || return 1
+  host_prep_read_mapped_text "/etc/os-release" 65536 >/dev/null || return 1
+  contents="$HOST_PREP_MAPPED_TEXT"
   while IFS='=' read -r key value; do
     value="${value%\"}"
     value="${value#\"}"
@@ -611,7 +715,8 @@ host_prep_verify_safety_state() {
   [[ "$HOST_PREP_BOUNDED_OUTPUT" == "$output"$'\n' ]] || return 1
   [[ "$output" =~ ^[0-9]+$ && "$output" -ge 2 ]] || return 1
 
-  meminfo_contents=$(host_prep_read_mapped_text "/proc/meminfo" 1048576) || return 1
+  host_prep_read_mapped_text "/proc/meminfo" 1048576 >/dev/null || return 1
+  meminfo_contents="$HOST_PREP_MAPPED_TEXT"
   while read -r key value unit; do
     if [[ "$key" == "MemTotal:" ]]; then
       memory_kib="$value"
@@ -628,8 +733,12 @@ host_prep_verify_safety_state() {
   output="${HOST_PREP_BOUNDED_OUTPUT%$'\n'}"
   [[ "$HOST_PREP_BOUNDED_OUTPUT" == "$output"$'\n' && "$output" == *$'\n'* ]] ||
     return 1
-  free_bytes="${output##*$'\n'}"
-  free_bytes="${free_bytes//[[:space:]]/}"
+  local header="${output%%$'\n'*}"
+  local value_line="${output#*$'\n'}"
+  [[ "$value_line" != *$'\n'* ]] || return 1
+  [[ "$header" =~ ^[[:blank:]]*Avail[[:blank:]]*$ ]] || return 1
+  [[ "$value_line" =~ ^[[:blank:]]*([0-9]+)[[:blank:]]*$ ]] || return 1
+  free_bytes="${BASH_REMATCH[1]}"
   [[ "$free_bytes" =~ ^[0-9]+$ && "$free_bytes" -ge "$HOST_PREP_MIN_FREE_BYTES" ]] ||
     return 1
   host_prep_run_observer_bounded 64 timedatectl show --property=NTPSynchronized --value ||
@@ -661,18 +770,23 @@ host_prep_verify_safety_state() {
 host_prep_path_state() {
   local absolute_path="$1"
   local mapped
-  mapped=$(host_prep_system_path "$absolute_path") || return 1
+  local allow_final_link=0
+  HOST_PREP_PATH_STATE=""
+  [[ "$absolute_path" == "$HOST_PREP_NODE_LINK" ]] && allow_final_link=1
+  host_prep_system_path "$absolute_path" "$allow_final_link" >/dev/null || return 1
+  mapped="$HOST_PREP_MAPPED_PATH"
   if [[ -L "$mapped" ]]; then
-    printf '%s\n' link
+    HOST_PREP_PATH_STATE="link"
   elif [[ -e "$mapped" ]]; then
-    printf '%s\n' present
+    HOST_PREP_PATH_STATE="present"
   else
-    printf '%s\n' absent
+    HOST_PREP_PATH_STATE="absent"
   fi
   if (( HOST_PREP_TEST_MODE == 1 )); then
     host_prep_revalidate_fixture_boundaries || return 1
-    host_prep_validate_mapped_path "$absolute_path" || return 1
+    host_prep_validate_mapped_path "$absolute_path" "$allow_final_link" || return 1
   fi
+  printf '%s\n' "$HOST_PREP_PATH_STATE"
 }
 
 host_prep_get_account_state() {
@@ -753,40 +867,117 @@ host_prep_get_account_state() {
   fi
 }
 
+host_prep_capture_path_identity() {
+  local candidate="$1"
+  local expected_type="$2"
+  local canonical
+
+  HOST_PREP_PATH_IDENTITY=""
+  [[ "$candidate" == /* && ! "$candidate" =~ [[:cntrl:]] ]] || return 1
+  [[ ! -L "$candidate" ]] || return 1
+  canonical=$(/usr/bin/readlink -e -- "$candidate" 2>/dev/null) || return 1
+  [[ "$canonical" == "$candidate" ]] || return 1
+  if [[ "$expected_type" == "directory" ]]; then
+    [[ -d "$candidate" && -r "$candidate" && -x "$candidate" ]] || return 1
+  else
+    [[ -f "$candidate" && -r "$candidate" && -x "$candidate" ]] || return 1
+  fi
+  HOST_PREP_PATH_IDENTITY=$(
+    /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$candidate" 2>/dev/null
+  ) || return 1
+}
+
+host_prep_capture_node_chain() {
+  local identities_name="$1"
+  local specification
+  local candidate
+  local expected_type
+  local version_path
+  local bin_path
+  local node_path
+  local -n identities_reference="$identities_name"
+
+  host_prep_system_path "$HOST_PREP_NODE_DIRECTORY/bin/node" >/dev/null || return 1
+  node_path="$HOST_PREP_MAPPED_PATH"
+  bin_path="${node_path%/node}"
+  version_path="${bin_path%/bin}"
+  [[ "$version_path" == "${HOST_PREP_SYSTEM_ROOT%/}$HOST_PREP_NODE_DIRECTORY" ]] || return 1
+  identities_reference=()
+  for specification in \
+    "${HOST_PREP_SYSTEM_ROOT%/}/opt|directory" \
+    "$version_path|directory" \
+    "$bin_path|directory" \
+    "$node_path|file"; do
+    IFS='|' read -r candidate expected_type <<< "$specification"
+    [[ -n "$candidate" ]] || candidate="/"
+    host_prep_capture_path_identity "$candidate" "$expected_type" || return 1
+    identities_reference+=("$candidate:$HOST_PREP_PATH_IDENTITY")
+  done
+  HOST_PREP_NODE_VERSION_PATH="$version_path"
+  HOST_PREP_NODE_BIN_PATH="$bin_path"
+  HOST_PREP_NODE_EXECUTABLE_PATH="$node_path"
+}
+
+host_prep_observer_exact_line() {
+  local expected="$1"
+  local maximum="$2"
+  local name="$3"
+  shift 3
+  host_prep_run_observer_bounded "$maximum" "$name" "$@" || return 1
+  [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
+    "$HOST_PREP_BOUNDED_OUTPUT" == "$expected"$'\n' ]]
+}
+
 host_prep_node_is_exact() {
   local version_path
+  local bin_path
   local link_path
   local node_path
+  local link_before
+  local link_after
   local link_target
-  local node_before
-  local node_after
-  local node_output
-  version_path=$(host_prep_system_path "$HOST_PREP_NODE_DIRECTORY") || return 1
-  link_path=$(host_prep_system_path "$HOST_PREP_NODE_LINK") || return 1
-  node_path="$version_path/bin/node"
+  local -a chain_before=()
+  local -a chain_after=()
 
-  [[ -d "$version_path" && ! -L "$version_path" ]] || return 1
+  host_prep_capture_node_chain chain_before || return 1
+  version_path="$HOST_PREP_NODE_VERSION_PATH"
+  bin_path="$HOST_PREP_NODE_BIN_PATH"
+  node_path="$HOST_PREP_NODE_EXECUTABLE_PATH"
+  host_prep_system_path "$HOST_PREP_NODE_LINK" 1 >/dev/null || return 1
+  link_path="$HOST_PREP_MAPPED_PATH"
   [[ -L "$link_path" ]] || return 1
-  [[ -f "$node_path" && ! -L "$node_path" && -x "$node_path" ]] || return 1
-  [[ "$(host_prep_observe stat -Lc '%U:%G:%a' "$version_path" 2>/dev/null)" == "root:root:755" ]] ||
+  link_before=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
     return 1
-  [[ "$(host_prep_observe stat -Lc '%U:%G:%a' "$node_path" 2>/dev/null)" == "root:root:755" ]] ||
+  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$version_path" ||
     return 1
-  [[ "$(host_prep_observe stat -c '%U:%G' "$link_path" 2>/dev/null)" == "root:root" ]] ||
+  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$bin_path" ||
     return 1
+  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$node_path" ||
+    return 1
+  host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path" || return 1
   link_target=$(/usr/bin/readlink -- "$link_path" 2>/dev/null) || return 1
   [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]] || return 1
-  node_before=$(/usr/bin/stat -Lc '%d:%i:%u:%s:%Y:%Z:%f' -- "$node_path" 2>/dev/null) ||
+
+  host_prep_run_path_bounded 64 "$node_path" --version || return 1
+  [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
+    "$HOST_PREP_BOUNDED_OUTPUT" == "$HOST_PREP_NODE_VERSION"$'\n' ]] || return 1
+
+  host_prep_capture_node_chain chain_after || return 1
+  [[ "${chain_before[*]}" == "${chain_after[*]}" ]] || return 1
+  host_prep_system_path "$HOST_PREP_NODE_LINK" 1 >/dev/null || return 1
+  [[ "$HOST_PREP_MAPPED_PATH" == "$link_path" && -L "$link_path" ]] || return 1
+  link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
     return 1
-  node_output=$("$node_path" --version 2>/dev/null) || return 1
-  node_after=$(/usr/bin/stat -Lc '%d:%i:%u:%s:%Y:%Z:%f' -- "$node_path" 2>/dev/null) ||
+  [[ "$link_before" == "$link_after" ]] || return 1
+  link_target=$(/usr/bin/readlink -- "$link_path" 2>/dev/null) || return 1
+  [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]] || return 1
+  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$version_path" ||
     return 1
-  [[ "$node_before" == "$node_after" && "$node_output" == "$HOST_PREP_NODE_VERSION" ]] ||
+  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$bin_path" ||
     return 1
-  if (( HOST_PREP_TEST_MODE == 1 )); then
-    host_prep_revalidate_fixture_boundaries || return 1
-    host_prep_validate_mapped_path "$HOST_PREP_NODE_DIRECTORY/bin/node" || return 1
-  fi
+  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$node_path" ||
+    return 1
+  host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path"
 }
 
 host_prep_directory_children_are_exact() {
@@ -798,7 +989,8 @@ host_prep_directory_children_are_exact() {
   local -a child_names=()
   local -a child_types=()
 
-  mapped=$(host_prep_system_path "$absolute_path") || return 1
+  host_prep_system_path "$absolute_path" >/dev/null || return 1
+  mapped="$HOST_PREP_MAPPED_PATH"
   [[ -d "$mapped" && ! -L "$mapped" && -r "$mapped" && -x "$mapped" ]] || return 1
   before=$(/usr/bin/stat -Lc '%d:%i:%u:%s:%Y:%Z:%f' -- "$mapped" 2>/dev/null) ||
     return 1
@@ -826,7 +1018,6 @@ host_prep_directories_are_exact() {
   local expected
   local allowed_child
   local mapped
-  local actual
   local -a specifications=(
     "/opt/palziv|root:palziv:750|releases"
     "/opt/palziv/releases|root:palziv:750|"
@@ -838,10 +1029,11 @@ host_prep_directories_are_exact() {
 
   for specification in "${specifications[@]}"; do
     IFS='|' read -r absolute_path expected allowed_child <<< "$specification"
-    mapped=$(host_prep_system_path "$absolute_path") || return 1
+    host_prep_system_path "$absolute_path" >/dev/null || return 1
+    mapped="$HOST_PREP_MAPPED_PATH"
     [[ -d "$mapped" && ! -L "$mapped" ]] || return 1
-    actual=$(host_prep_observe stat -Lc '%U:%G:%a' "$mapped" 2>/dev/null) || return 1
-    [[ "$actual" == "$expected" ]] || return 1
+    host_prep_observer_exact_line "$expected" 64 stat -Lc '%U:%G:%a' "$mapped" ||
+      return 1
     host_prep_directory_children_are_exact "$absolute_path" "$allowed_child" || return 1
   done
 }
@@ -861,29 +1053,33 @@ host_prep_classify() {
     "/var/backups/palziv"
     "/etc/palziv"
   )
+  HOST_PREP_CLASSIFICATION="conflict"
 
   host_prep_initialize_environment || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
     return 0
   }
-  node_directory_state=$(host_prep_path_state "$HOST_PREP_NODE_DIRECTORY") || {
-    printf '%s\n' conflict
+  host_prep_path_state "$HOST_PREP_NODE_DIRECTORY" >/dev/null || {
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
     return 0
   }
-  node_link_state=$(host_prep_path_state "$HOST_PREP_NODE_LINK") || {
-    printf '%s\n' conflict
+  node_directory_state="$HOST_PREP_PATH_STATE"
+  host_prep_path_state "$HOST_PREP_NODE_LINK" >/dev/null || {
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
     return 0
   }
+  node_link_state="$HOST_PREP_PATH_STATE"
   account_state=$(host_prep_get_account_state) || {
-    printf '%s\n' conflict
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
     return 0
   }
 
   for absolute_path in "${directories[@]}"; do
-    directory_state=$(host_prep_path_state "$absolute_path") || {
-      printf '%s\n' conflict
+    host_prep_path_state "$absolute_path" >/dev/null || {
+      printf '%s\n' "$HOST_PREP_CLASSIFICATION"
       return 0
     }
+    directory_state="$HOST_PREP_PATH_STATE"
     [[ "$directory_state" == "absent" ]] || all_directories_absent=0
   done
 
@@ -891,7 +1087,8 @@ host_prep_classify() {
     "$node_link_state" == "absent" &&
     "$account_state" == "absent" &&
     "$all_directories_absent" -eq 1 ]]; then
-    printf '%s\n' clean
+    HOST_PREP_CLASSIFICATION="clean"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
     return 0
   fi
 
@@ -900,18 +1097,21 @@ host_prep_classify() {
     "$account_state" == "exact" ]] &&
     host_prep_node_is_exact &&
     host_prep_directories_are_exact; then
-    printf '%s\n' already-prepared
+    HOST_PREP_CLASSIFICATION="already-prepared"
+    printf '%s\n' "$HOST_PREP_CLASSIFICATION"
     return 0
   fi
 
-  printf '%s\n' conflict
+  printf '%s\n' "$HOST_PREP_CLASSIFICATION"
 }
 
 host_prep_report_ufw_state() {
   local command_name="u""fw"
   local status="unavailable"
   host_prep_run_observer_bounded 128 "$command_name" status || true
-  if [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 && "$HOST_PREP_BOUNDED_TRUNCATED" -eq 0 ]]; then
+  if [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
+    "$HOST_PREP_BOUNDED_TRUNCATED" -eq 0 &&
+    "$HOST_PREP_BOUNDED_MALFORMED" -eq 0 ]]; then
     case "$HOST_PREP_BOUNDED_OUTPUT" in
       "Status: active"$'\n') status="active" ;;
       "Status: inactive"$'\n') status="inactive" ;;
@@ -1027,16 +1227,32 @@ host_prep_preflight_main() {
     host_prep_fail_main baseline
     return 1
   }
-  classification=$(host_prep_classify) || {
+  host_prep_classify >/dev/null || {
     host_prep_fail_main classification
     return 1
   }
+  classification="$HOST_PREP_CLASSIFICATION"
   host_prep_report_ufw_state
   [[ "$classification" == "clean" || "$classification" == "already-prepared" ]] || {
     host_prep_fail_main classification
     return 1
   }
 
+  host_prep_classify >/dev/null || {
+    host_prep_fail_main final-classification
+    return 1
+  }
+  final_classification="$HOST_PREP_CLASSIFICATION"
+  [[ "$final_classification" == "$classification" &&
+    ( "$final_classification" == "clean" || "$final_classification" == "already-prepared" ) ]] ||
+    {
+      host_prep_fail_main final-classification
+      return 1
+    }
+  host_prep_verify_safety_state || {
+    host_prep_fail_main final-baseline
+    return 1
+  }
   final_fingerprint=$(host_prep_verify_manifest "$HOST_PREP_STAGE") || {
     host_prep_fail_main final-manifest
     return 1
@@ -1045,20 +1261,6 @@ host_prep_preflight_main() {
     host_prep_fail_main manifest-race
     return 1
   }
-  host_prep_verify_safety_state || {
-    host_prep_fail_main final-baseline
-    return 1
-  }
-  final_classification=$(host_prep_classify) || {
-    host_prep_fail_main final-classification
-    return 1
-  }
-  [[ "$final_classification" == "$classification" &&
-    ( "$final_classification" == "clean" || "$final_classification" == "already-prepared" ) ]] ||
-    {
-      host_prep_fail_main final-classification
-      return 1
-    }
   host_prep_publish_token "$classification" "$fingerprint" || {
     host_prep_fail_main token-publication
     return 1

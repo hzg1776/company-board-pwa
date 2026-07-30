@@ -5,6 +5,7 @@ import fs from "node:fs";
 import {
   chmod,
   copyFile,
+  link,
   lstat,
   mkdtemp,
   mkdir,
@@ -350,7 +351,7 @@ esac
     ;;
   -Lc:%U:%G:%a)
     case "\${3-}" in
-      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin/node) printf '%s\\n' root:root:755 ;;
+      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin|*/opt/node-v24.18.0-linux-x64/bin/node) printf '%s\\n' root:root:755 ;;
       */opt/palziv|*/opt/palziv/releases|*/var/backups/palziv|*/etc/palziv) printf '%s\\n' root:palziv:750 ;;
       */var/lib/palziv|*/var/lib/palziv/data) printf '%s\\n' palziv:palziv:700 ;;
       *) exit 94 ;;
@@ -1067,6 +1068,285 @@ test(
     } finally {
       await rm(fixture.base, { recursive: true, force: true });
     }
+  }
+);
+
+test(
+  "host prep preflight rejects persistent replacement of a pinned mapped intermediate",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture();
+    try {
+      const mappedEtc = path.join(fixture.root, "etc");
+      const originalEtc = path.join(fixture.root, "etc-before-replacement");
+      await writeExecutable(
+        path.join(fixture.bin, "uname"),
+        [
+          `/usr/bin/mv ${shellSingleQuote(mappedEtc)} ${shellSingleQuote(originalEtc)}`,
+          `/usr/bin/cp -a ${shellSingleQuote(originalEtc)} ${shellSingleQuote(mappedEtc)}`,
+          "printf '%s\\n' x86_64"
+        ].join("\n")
+      );
+      const result = await runHostPrepScript(fixture);
+      assertBoundedPreflightFailure(result);
+      await assert.rejects(
+        lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+        { code: "ENOENT" }
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep preflight validates and pins the complete Node executable chain",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("direct bin symlink is rejected before external execution", async () => {
+      const fixture = await createHostPrepFixture({ prepared: true });
+      try {
+        const versionRoot = path.join(fixture.root, "opt", "node-v24.18.0-linux-x64");
+        const outsideBin = path.join(fixture.base, "outside-node-bin");
+        const externalMarker = path.join(fixture.base, "external-node-executed");
+        await rm(path.join(versionRoot, "bin"), { recursive: true });
+        await mkdir(outsideBin);
+        await writeExecutable(
+          path.join(outsideBin, "node"),
+          `: > ${shellSingleQuote(externalMarker)}\nprintf '%s\\n' v24.18.0\n`
+        );
+        await symlink(outsideBin, path.join(versionRoot, "bin"));
+
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        await assert.rejects(lstat(externalMarker), { code: "ENOENT" });
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("bin directory replacement during Node execution is rejected", async () => {
+      const fixture = await createHostPrepFixture({ prepared: true });
+      try {
+        const versionRoot = path.join(fixture.root, "opt", "node-v24.18.0-linux-x64");
+        const activeBin = path.join(versionRoot, "bin");
+        const oldBin = path.join(versionRoot, "bin-before-replacement");
+        const replacementBin = path.join(versionRoot, "bin-replacement");
+        const nodePath = path.join(activeBin, "node");
+        const executionMarker = path.join(fixture.base, "node-execution-count");
+        await mkdir(replacementBin);
+        await writeExecutable(
+          nodePath,
+          [
+            `printf x >> ${shellSingleQuote(executionMarker)}`,
+            `/usr/bin/mv ${shellSingleQuote(activeBin)} ${shellSingleQuote(oldBin)}`,
+            `/usr/bin/mv ${shellSingleQuote(replacementBin)} ${shellSingleQuote(activeBin)}`,
+            "printf '%s\\n' v24.18.0"
+          ].join("\n")
+        );
+        await link(nodePath, path.join(replacementBin, "node"));
+
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(await readFile(executionMarker, "utf8"), "x");
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+);
+
+test(
+  "host prep preflight rejects NUL-normalized and non-canonical observer output",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    const cases = [
+      [
+        "NUL-only quiet service output",
+        (fixture) => writeExecutable(
+          path.join(fixture.bin, "systemctl"),
+          `case "\${1-}:\${2-}:\${3-}" in
+  is-active:--quiet:qemu-guest-agent.service|is-active:--quiet:systemd-timesyncd.service) exit 0 ;;
+  is-active:--quiet:palziv.service) printf '\\000'; exit 3 ;;
+  is-enabled:--quiet:palziv.service) exit 1 ;;
+  is-active:--quiet:cloudflared.service) exit 3 ;;
+  is-enabled:--quiet:cloudflared.service) exit 1 ;;
+  *) exit 97 ;;
+esac
+`
+        )
+      ],
+      [
+        "NUL-polluted expected architecture",
+        (fixture) => writeExecutable(
+          path.join(fixture.bin, "uname"),
+          "printf 'x86_64\\000\\n'\n"
+        )
+      ],
+      [
+        "extra df line before the value",
+        (fixture) => writeExecutable(
+          path.join(fixture.bin, "df"),
+          "printf 'Avail\\nunexpected\\n10737418240\\n'\n"
+        )
+      ]
+    ];
+
+    for (const [name, mutate] of cases) {
+      await t.test(name, async () => {
+        const fixture = await createHostPrepFixture();
+        try {
+          await mutate(fixture);
+          const result = await runHostPrepScript(fixture);
+          assertBoundedPreflightFailure(result);
+          await assert.rejects(
+            lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+            { code: "ENOENT" }
+          );
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+);
+
+test(
+  "host prep preflight detects manifest and safety changes between validation passes",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("manifest-covered file changes before final manifest replay", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        await writeExecutable(
+          path.join(fixture.bin, "ufw"),
+          [
+            `printf '%s\\n' tampered >> ${shellSingleQuote(path.join(fixture.stage, "README-FIRST.txt"))}`,
+            "printf '%s\\n' 'Status: inactive'"
+          ].join("\n")
+        );
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(
+          result.stderr,
+          "host-prep: ufw=inactive\nhost-prep: failed step=final-manifest\n"
+        );
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("listener appears before final safety replay", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const listenerMarker = path.join(fixture.base, "listener-after-first-pass");
+        await writeExecutable(
+          path.join(fixture.bin, "ufw"),
+          `: > ${shellSingleQuote(listenerMarker)}\nprintf '%s\\n' 'Status: inactive'\n`
+        );
+        await writeExecutable(
+          path.join(fixture.bin, "ss"),
+          `if [ -e ${shellSingleQuote(listenerMarker)} ]; then
+  printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:3116'
+fi
+`
+        );
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(
+          result.stderr,
+          "host-prep: ufw=inactive\nhost-prep: failed step=final-baseline\n"
+        );
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("manifest-covered file changes during final safety replay", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const firstUnameMarker = path.join(fixture.base, "first-uname-complete");
+        await writeExecutable(
+          path.join(fixture.bin, "uname"),
+          `if [ -e ${shellSingleQuote(firstUnameMarker)} ]; then
+  printf '%s\\n' tampered >> ${shellSingleQuote(path.join(fixture.stage, "README-FIRST.txt"))}
+else
+  : > ${shellSingleQuote(firstUnameMarker)}
+fi
+printf '%s\\n' x86_64
+`
+        );
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(
+          result.stderr,
+          "host-prep: ufw=inactive\nhost-prep: failed step=final-manifest\n"
+        );
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("listener appears during final classification replay", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const getentCount = path.join(fixture.base, "getent-call-count");
+        const listenerMarker = path.join(fixture.base, "listener-during-final-classification");
+        await writeExecutable(
+          path.join(fixture.bin, "getent"),
+          `count=0
+if [ -f ${shellSingleQuote(getentCount)} ]; then
+  read -r count < ${shellSingleQuote(getentCount)}
+fi
+count=$((count + 1))
+printf '%s\\n' "$count" > ${shellSingleQuote(getentCount)}
+if [ "$count" -ge 3 ]; then
+  : > ${shellSingleQuote(listenerMarker)}
+fi
+exit 2
+`
+        );
+        await writeExecutable(
+          path.join(fixture.bin, "ss"),
+          `if [ -e ${shellSingleQuote(listenerMarker)} ]; then
+  printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:3116'
+fi
+`
+        );
+        const result = await runHostPrepScript(fixture);
+        assertBoundedPreflightFailure(result);
+        assert.equal(
+          result.stderr,
+          "host-prep: ufw=inactive\nhost-prep: failed step=final-baseline\n"
+        );
+        await assert.rejects(
+          lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+          { code: "ENOENT" }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
   }
 );
 
