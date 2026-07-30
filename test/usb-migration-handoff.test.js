@@ -1270,3 +1270,49 @@ test("handoff verifier CLI enforces the complete deterministic argument contract
     await rm(usbRoot, { recursive: true, force: true });
   }
 });
+
+test("inbound verification rejects a manifest replaced after bounded approval", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-usb-manifest-race-"));
+  let replacementHandle;
+  try {
+    const built = await run(process.execPath, [
+      "scripts/migration/build-usb-handoff.mjs",
+      "--usb-root", usbRoot
+    ]);
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    const manifestPath = path.join(handoff, "CHECKSUMS", "TO-DEBIAN.sha256");
+    const approvedPath = `${manifestPath}.approved`;
+    const {
+      approveInboundManifest,
+      verifyApprovedInboundManifest
+    } = await import("../scripts/migration/verify-usb-handoff.mjs");
+
+    const approval = await approveInboundManifest(manifestPath);
+    await rename(manifestPath, approvedPath);
+    replacementHandle = await open(manifestPath, "w");
+    await replacementHandle.truncate(4 * 1024 * 1024);
+    await replacementHandle.close();
+    replacementHandle = undefined;
+    assert.equal((await lstat(manifestPath)).size, 4 * 1024 * 1024);
+
+    await assert.rejects(
+      verifyApprovedInboundManifest({
+        root: handoff,
+        manifestPath,
+        approval
+      }),
+      (error) => {
+        assert.equal(
+          error.message,
+          "Inbound checksum manifest changed during verification."
+        );
+        assert.doesNotMatch(error.message, /TO-DEBIAN|Project-A-Migration/i);
+        return true;
+      }
+    );
+  } finally {
+    await replacementHandle?.close();
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});

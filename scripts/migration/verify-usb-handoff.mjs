@@ -5,8 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   FAT32_MAX_FILE_BYTES,
-  scanReturnedReport,
-  verifySha256Manifest
+  scanReturnedReport
 } from "./usb-handoff-lib.mjs";
 
 const TOP_LEVEL = Object.freeze([
@@ -206,7 +205,10 @@ async function readBoundedStableFile({
     ) {
       failSafely(invalidMessage);
     }
-    return Buffer.concat(chunks, position);
+    return {
+      buffer: Buffer.concat(chunks, position),
+      metadata: approved
+    };
   } catch (error) {
     if (error instanceof SafeVerificationError) throw error;
     failSafely(invalidMessage);
@@ -221,13 +223,145 @@ async function readBoundedStableFile({
   }
 }
 
-async function preflightInboundManifest(manifestPath) {
-  await readBoundedStableFile({
+export async function approveInboundManifest(manifestPath) {
+  return readBoundedStableFile({
     filePath: manifestPath,
     maxBytes: MAX_CHECKSUM_BYTES,
     invalidMessage: "Inbound checksum manifest is invalid.",
     tooLargeMessage: "Inbound checksum manifest is too large."
   });
+}
+
+function parseApprovedInboundManifest(buffer) {
+  const text = buffer.toString("utf8");
+  const lines = text.split(/\r?\n/);
+  if (lines.at(-1) !== "") {
+    failSafely("Inbound checksum manifest does not contain the approved files");
+  }
+  lines.pop();
+  if (lines.length !== INBOUND_FILES.length) {
+    failSafely("Inbound checksum manifest does not contain the approved files");
+  }
+
+  const records = [];
+  const seen = new Set();
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = RETURN_MANIFEST_LINE.exec(lines[index]);
+    const expectedPath = INBOUND_FILES[index];
+    if (
+      !match
+      || match[2] !== expectedPath
+      || seen.has(match[2])
+    ) {
+      failSafely("Inbound checksum manifest does not contain the approved files");
+    }
+    seen.add(match[2]);
+    records.push({ path: expectedPath, sha256: match[1] });
+  }
+  return records;
+}
+
+async function hashStableInboundFile(filePath, expectedSha256) {
+  let handle;
+  try {
+    const approved = await safeLstat(
+      filePath,
+      "Inbound checksum verification failed."
+    );
+    if (
+      approved.isSymbolicLink()
+      || !approved.isFile()
+      || approved.size > BigInt(FAT32_MAX_FILE_BYTES)
+    ) {
+      failSafely("Inbound checksum verification failed.");
+    }
+
+    handle = await openWithoutFollowing(filePath);
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !sameFileIdentity(approved, opened)) {
+      failSafely("Inbound checksum verification failed.");
+    }
+
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+    let position = 0;
+    while (true) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        buffer.length,
+        position
+      );
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      if (position > FAT32_MAX_FILE_BYTES) {
+        failSafely("Inbound checksum verification failed.");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+
+    const afterRead = await handle.stat({ bigint: true });
+    const pathname = await safeLstat(
+      filePath,
+      "Inbound checksum verification failed."
+    );
+    if (
+      pathname.isSymbolicLink()
+      || !pathname.isFile()
+      || !sameFileIdentity(approved, opened)
+      || !sameFileIdentity(approved, afterRead)
+      || !sameFileIdentity(approved, pathname)
+      || hash.digest("hex") !== expectedSha256
+    ) {
+      failSafely("Inbound checksum verification failed.");
+    }
+  } catch (error) {
+    if (error instanceof SafeVerificationError) throw error;
+    failSafely("Inbound checksum verification failed.");
+  } finally {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch {
+        failSafely("Inbound checksum verification failed.");
+      }
+    }
+  }
+}
+
+export async function verifyApprovedInboundManifest({
+  root,
+  manifestPath,
+  approval
+}) {
+  if (
+    !approval
+    || !Buffer.isBuffer(approval.buffer)
+    || !approval.metadata
+  ) {
+    failSafely("Inbound checksum manifest is invalid.");
+  }
+  const records = parseApprovedInboundManifest(approval.buffer);
+  for (const record of records) {
+    const filePath = path.join(
+      root,
+      ...record.path.split("/")
+    );
+    await hashStableInboundFile(filePath, record.sha256);
+  }
+
+  const currentManifest = await safeLstat(
+    manifestPath,
+    "Inbound checksum manifest changed during verification."
+  );
+  if (
+    currentManifest.isSymbolicLink()
+    || !currentManifest.isFile()
+    || !sameFileIdentity(approval.metadata, currentManifest)
+  ) {
+    failSafely("Inbound checksum manifest changed during verification.");
+  }
+  return records;
 }
 
 function parseReturnedSidecar(sidecarBuffer, reportName) {
@@ -360,19 +494,12 @@ export async function verifyUsbHandoff({ handoffRoot, mode }) {
     "CHECKSUMS",
     "TO-DEBIAN.sha256"
   );
-  await preflightInboundManifest(inboundManifestPath);
-  let inbound;
-  try {
-    inbound = await verifySha256Manifest({
-      rootPath: root,
-      manifestPath: inboundManifestPath
-    });
-  } catch {
-    failSafely("Inbound checksum verification failed.");
-  }
-  if (!sameEntries(inbound.map((entry) => entry.path), INBOUND_FILES)) {
-    failSafely("Inbound checksum manifest does not contain the approved files");
-  }
+  const inboundApproval = await approveInboundManifest(inboundManifestPath);
+  const inbound = await verifyApprovedInboundManifest({
+    root,
+    manifestPath: inboundManifestPath,
+    approval: inboundApproval
+  });
 
   const returnDir = path.join(root, "FROM-DEBIAN");
   await requireNonSymlinkDirectory(
@@ -426,13 +553,16 @@ export async function verifyUsbHandoff({ handoffRoot, mode }) {
     if (!sidecarNames.has(sidecarName)) {
       failSafely("Missing checksum sidecar.");
     }
-    const sidecarBuffer = await readBoundedStableFile({
+    const sidecarApproval = await readBoundedStableFile({
       filePath: path.join(returnDir, sidecarName),
       maxBytes: MAX_CHECKSUM_BYTES,
       invalidMessage: "Returned checksum sidecar is invalid.",
       tooLargeMessage: "Returned checksum sidecar is too large."
     });
-    const expectedSha256 = parseReturnedSidecar(sidecarBuffer, reportName);
+    const expectedSha256 = parseReturnedSidecar(
+      sidecarApproval.buffer,
+      reportName
+    );
     const verified = await readVerifiedReturnedReport(
       path.join(returnDir, reportName),
       expectedSha256
