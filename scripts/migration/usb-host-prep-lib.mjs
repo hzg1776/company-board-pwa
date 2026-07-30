@@ -67,6 +67,12 @@ function sameFileIdentity(before, after) {
   return Object.keys(before).every((key) => before[key] === after[key]);
 }
 
+function snapshotPathSort(left, right) {
+  if (left.path < right.path) return -1;
+  if (left.path > right.path) return 1;
+  return 0;
+}
+
 function assertAllowedTreeEntry(metadata, candidatePath) {
   if (metadata.isSymbolicLink()) {
     throw new Error(`Symbolic link or junction is not allowed in Phase 1: ${candidatePath}`);
@@ -74,6 +80,46 @@ function assertAllowedTreeEntry(metadata, candidatePath) {
   if (!metadata.isDirectory() && !metadata.isFile()) {
     throw new Error(`Unsupported Phase 1 filesystem entry: ${candidatePath}`);
   }
+}
+
+function directoryChangedError() {
+  return new Error("Phase 1 directory changed while snapshotting.");
+}
+
+async function assertDirectoryIdentity(directoryPath, expectedIdentity) {
+  let metadata;
+  try {
+    metadata = await lstat(directoryPath);
+  } catch {
+    throw directoryChangedError();
+  }
+  if (metadata.isSymbolicLink() || !metadata.isDirectory() || !sameFileIdentity(expectedIdentity, fileIdentity(metadata))) {
+    throw directoryChangedError();
+  }
+}
+
+function canonicalSnapshot(snapshot) {
+  if (!Array.isArray(snapshot)) throw new Error("Phase 1 snapshot is invalid.");
+  const paths = new Set();
+  const entries = snapshot.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("Phase 1 snapshot is invalid.");
+    }
+    const { path: entryPath, type, size, sha256 } = entry;
+    if (typeof entryPath !== "string" || !entryPath || entryPath.includes("\\") || path.posix.isAbsolute(entryPath)) {
+      throw new Error("Phase 1 snapshot is invalid.");
+    }
+    if (paths.has(entryPath)) throw new Error("Phase 1 snapshot is invalid.");
+    paths.add(entryPath);
+    if (type === "directory" && size === 0 && sha256 === null) {
+      return { path: entryPath, type, size, sha256 };
+    }
+    if (type === "file" && Number.isSafeInteger(size) && size >= 0 && typeof sha256 === "string" && SHA256.test(sha256)) {
+      return { path: entryPath, type, size, sha256 };
+    }
+    throw new Error("Phase 1 snapshot is invalid.");
+  });
+  return entries.sort(snapshotPathSort);
 }
 
 export function createPhase2Input({
@@ -141,17 +187,27 @@ export async function snapshotRegularTree(rootPath) {
   if (!rootMetadata.isDirectory()) throw new Error("Phase 1 snapshot root must be a directory");
 
   const entries = [];
-  async function walk(directoryPath) {
-    const children = await readdir(directoryPath);
+  async function walk(directoryPath, approvedIdentity) {
+    await assertDirectoryIdentity(directoryPath, approvedIdentity);
+    let children;
+    try {
+      children = await readdir(directoryPath);
+    } catch {
+      throw directoryChangedError();
+    }
+    await assertDirectoryIdentity(directoryPath, approvedIdentity);
     children.sort();
     for (const name of children) {
+      await assertDirectoryIdentity(directoryPath, approvedIdentity);
       const candidatePath = path.join(directoryPath, name);
       const metadata = await lstat(candidatePath);
       assertAllowedTreeEntry(metadata, candidatePath);
       const relativePath = snapshotEntryPath(root, candidatePath);
       if (metadata.isDirectory()) {
         entries.push({ path: relativePath, type: "directory", size: 0, sha256: null });
-        await walk(candidatePath);
+        const childIdentity = fileIdentity(metadata);
+        await walk(candidatePath, childIdentity);
+        await assertDirectoryIdentity(candidatePath, childIdentity);
         continue;
       }
 
@@ -164,18 +220,15 @@ export async function snapshotRegularTree(rootPath) {
       }
       entries.push({ path: relativePath, type: "file", size: metadata.size, sha256 });
     }
+    await assertDirectoryIdentity(directoryPath, approvedIdentity);
   }
 
-  await walk(root);
-  return entries.sort((left, right) => {
-    if (left.path < right.path) return -1;
-    if (left.path > right.path) return 1;
-    return 0;
-  });
+  await walk(root, fileIdentity(rootMetadata));
+  return entries.sort(snapshotPathSort);
 }
 
 export function assertTreeSnapshotEqual(before, after) {
-  if (JSON.stringify(before) !== JSON.stringify(after)) {
+  if (JSON.stringify(canonicalSnapshot(before)) !== JSON.stringify(canonicalSnapshot(after))) {
     throw new Error("Phase 1 changed while building the host-prep bundle.");
   }
 }
