@@ -119,7 +119,7 @@ function canonicalSnapshot(snapshot) {
     }
     throw new Error("Phase 1 snapshot is invalid.");
   });
-  return entries.sort(snapshotPathSort);
+  return entries;
 }
 
 export function createPhase2Input({

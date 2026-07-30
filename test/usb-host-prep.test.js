@@ -144,6 +144,14 @@ test("tree snapshot comparison canonicalizes approved entry keys", () => {
     () => assertTreeSnapshotEqual(snapshot, [{ path: "evidence.txt", type: "file", size: 6, sha256: "b".repeat(64) }]),
     /Phase 1 changed while building the host-prep bundle\./
   );
+  const orderedSnapshot = [
+    { path: "empty", type: "directory", size: 0, sha256: null },
+    { path: "evidence.txt", type: "file", size: 5, sha256: "b".repeat(64) }
+  ];
+  assert.throws(
+    () => assertTreeSnapshotEqual(orderedSnapshot, [...orderedSnapshot].reverse()),
+    /Phase 1 changed while building the host-prep bundle\./
+  );
 });
 
 test("tree snapshots fail closed when an approved directory is swapped before traversal", async () => {
