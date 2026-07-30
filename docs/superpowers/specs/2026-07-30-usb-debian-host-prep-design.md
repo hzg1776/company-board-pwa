@@ -117,7 +117,7 @@ Production will use Node.js `v24.18.0` for Linux x64:
 
 Before the approved digest is embedded in the bundle sources, the implementation workflow must verify Node's `SHASUMS256.txt.asc` for `v24.18.0` with the official `nodejs/release-keys` keyring at the pinned commit. The verified signed manifest must contain the exact archive basename and digest above.
 
-The Debian apply script downloads only the exact HTTPS URL, writes to a root-owned temporary directory, verifies the exact embedded SHA-256, and extracts only after the hash passes. The authenticated Phase 2 manifest protects the apply script and its embedded expected digest; the archive hash protects the downloaded bytes.
+The Debian apply script downloads only the exact HTTPS URL, writes to a root-owned temporary directory, verifies the exact embedded SHA-256, and extracts only after the hash passes. Before extraction, it requires every archive entry to remain beneath the single expected `node-v24.18.0-linux-x64/` root and rejects absolute paths, parent traversal, links escaping that root, and unexpected top-level entries. Extraction does not preserve archive ownership or unsafe permission bits. The authenticated Phase 2 manifest protects the apply script and its embedded expected digest; the archive hash protects the downloaded bytes.
 
 Installation uses:
 
@@ -161,7 +161,7 @@ The builder never formats, deletes, repairs, ejects, or writes outside its valid
 
 The README provides one fail-closed flow:
 
-1. Confirm a recent Proxmox snapshot exists for `palziv-prod`. Do not run `--apply` without that rollback point.
+1. Create a new Proxmox snapshot of `palziv-prod` immediately before host preparation, using the name pattern `before-project-a-host-prep-YYYYMMDD-HHMM`. Do not run `--apply` without that rollback point.
 2. Identify the USB locally and mount its FAT32 partition with `nodev,nosuid,noexec,umask=077`.
 3. Verify the mounted source, filesystem type, and effective mount options.
 4. Compute the full Phase 2 manifest fingerprint and compare it with the separately retained value.
@@ -193,13 +193,14 @@ The mount and cleanup block validates its literal mountpoint and mounted source 
 - no active or enabled `palziv.service`
 - no active or enabled `cloudflared.service`
 - no listener on TCP port `3116`
-- no existing `/opt/node` or `/opt/node-v24.18.0-linux-x64`
-- no existing `palziv` user or group
-- no existing `/opt/palziv`, `/var/lib/palziv`, `/var/backups/palziv`, or `/etc/palziv`
+- either the verified clean baseline, with no existing Node target, `palziv` account, or owned Palziv directory
+- or the exact completed state defined by this specification, with every version, account, path, owner, group, mode, and symlink target matching
 
-UFW state is reported but not changed. A state that differs from the verified clean baseline stops the apply path and requires the USB to be returned for review.
+UFW state is reported but not changed. Preflight classifies the host as `clean`, `already-prepared`, or `conflict`. Only `clean` and `already-prepared` produce a success token. Any partial or conflicting state stops the apply path and requires the USB to be returned for review.
 
 The preflight must replace inherited command resolution with a fixed safe path, clear Bash startup hooks, proxy/curl configuration, `SSLKEYLOGFILE`, and other transport overrides, and use fixed allowlisted commands. It prints only pass/fail metadata and never reads secrets, logs, process command lines, environment values, SSH material, or service definitions.
+
+Before checking, preflight removes only its own prior token from the local staged bundle. On success it atomically writes `.host-prep-preflight-ok` with mode `0600`. The token is JSON containing only `schemaVersion`, `phaseId`, the full Phase 2 manifest fingerprint, the canonical local-stage path, classification, and creation epoch. The apply script recomputes the manifest fingerprint and canonical stage path, enforces the 15-minute age, and independently reruns every safety-critical conflict check. The token records a completed preflight; it cannot override a changed host or bundle.
 
 ## Mutating Apply Script
 
@@ -236,6 +237,8 @@ It performs only these mutations:
 The script does not write an environment file into `/etc/palziv`. It does not call `systemctl`, `ufw`, `cloudflared`, `npm`, `git clone`, `rsync --delete`, or any Project-A script. It does not access the Proxmox API or host.
 
 The apply script is idempotent only for the exact completed state it owns. It accepts a rerun when every owned path, account, group, mode, owner, Node version, and symlink target matches. It aborts on partial or conflicting state rather than repairing, deleting, recursively changing ownership, or guessing.
+
+An `already-prepared` preflight causes apply to verify the exact state and exit successfully without running `apt-get`, downloading Node.js, or changing the host.
 
 ## Failure and Rollback
 
@@ -328,7 +331,7 @@ Final verification requires syntax checks, focused Windows tests, focused WSL te
 
 - The original Phase 1 bundle and returned report remain unchanged.
 - The Phase 2 bundle is independently checksummed and authenticated with a separately retained manifest fingerprint.
-- Debian preflight reports the verified clean baseline before mutation.
+- Debian preflight reports either the verified clean baseline or the exact already-prepared state before mutation.
 - The apply script requires explicit root authorization and performs only the exact approved host-preparation mutations.
 - Node.js is exactly `v24.18.0` and its archive matches the authenticated official digest.
 - The `palziv` account and six empty directories have the exact approved ownership and modes.
@@ -342,4 +345,3 @@ Final verification requires syntax checks, focused Windows tests, focused WSL te
 - Node.js v24 archive: `https://nodejs.org/en/download/archive/v24`
 - Node.js v24.18.0 release: `https://nodejs.org/en/blog/release/v24.18.0`
 - Node.js release-key repository: `https://github.com/nodejs/release-keys`
-
