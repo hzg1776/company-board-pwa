@@ -4522,3 +4522,637 @@ async function runHostPrepVerifierCliForScript(script, args) {
     return { code: error.code, stdout: error.stdout ?? "", stderr: error.stderr ?? "" };
   }
 }
+
+async function createReturnedPhase1Fixture() {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-builder-"));
+  const built = await runHostPrepVerifierCliForScript(
+    path.resolve("scripts/migration/build-usb-handoff.mjs"),
+    ["--usb-root", usbRoot]
+  );
+  assert.equal(built.code, 0, built.stderr);
+  const phase1Root = path.join(usbRoot, "Project-A-Migration");
+  const reportFileName = "debian-readiness-20260730T192552Z-palziv-prod.txt";
+  const reportPath = path.join(phase1Root, "FROM-DEBIAN", reportFileName);
+  const reportBody = "## Collection\nHostname: palziv-prod\nNode: v24.18.0\n";
+  await writeFile(reportPath, reportBody);
+  await writeFile(
+    `${reportPath}.sha256`,
+    `${sha256Bytes(reportBody)}  ${reportFileName}\n`
+  );
+  return { usbRoot, phase1Root, reportFileName, reportPath, reportBody };
+}
+
+test("host prep builder creates the exact sibling without changing returned Phase 1", async () => {
+  const fixture = await createReturnedPhase1Fixture();
+  try {
+    await writeFile(path.join(fixture.usbRoot, "operator-note.txt"), "unrelated preserve marker\n");
+    const before = await snapshotFixtureTree(fixture.phase1Root);
+    const expectedPhase1ManifestSha256 = await manifestFingerprint(
+      path.join(fixture.phase1Root, "CHECKSUMS", "TO-DEBIAN.sha256")
+    );
+    const result = await runHostPrepVerifierCliForScript(
+      path.resolve("scripts/migration/build-usb-host-prep.mjs"),
+      ["--usb-root", fixture.usbRoot]
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const summary = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(summary).sort(), [
+      "fileCount",
+      "manifestFingerprint",
+      "phase1ReportFileName",
+      "phase1ReportSha256",
+      "phase1Unchanged",
+      "rootName"
+    ]);
+    assert.equal(summary.rootName, HOST_PREP_ROOT_NAME);
+    assert.equal(summary.fileCount, 6);
+    assert.equal(summary.phase1ReportFileName, fixture.reportFileName);
+    assert.equal(summary.phase1ReportSha256, sha256Bytes(fixture.reportBody));
+    assert.equal(summary.phase1Unchanged, true);
+    assert.match(summary.manifestFingerprint, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(result.stdout, /Hostname:|unrelated preserve marker|admin|must-never/i);
+
+    const phase2Root = path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME);
+    assert.deepEqual((await readdir(phase2Root)).sort(), [
+      "CHECKSUMS",
+      "FROM-DEBIAN",
+      "ISOLATION-BOUNDARY.txt",
+      "PHASE-2-INPUT.json",
+      "README-FIRST.txt",
+      "SECRETS-ENCRYPTED",
+      "TO-DEBIAN"
+    ]);
+    assert.deepEqual((await readdir(path.join(phase2Root, "TO-DEBIAN"))).sort(), [
+      "apply-host-prep.sh",
+      "collect-host-prep-evidence.sh",
+      "preflight-host-prep.sh"
+    ]);
+    assert.deepEqual(await readdir(path.join(phase2Root, "FROM-DEBIAN")), []);
+    assert.deepEqual(await readdir(path.join(phase2Root, "SECRETS-ENCRYPTED")), []);
+    assert.deepEqual(await verifyUsbHostPrep({ handoffRoot: phase2Root, mode: "outbound" }), {
+      ok: true,
+      phaseId: HOST_PREP_PHASE_ID,
+      mode: "outbound",
+      inputReferenceSha256: sha256Bytes(await readFile(path.join(phase2Root, "PHASE-2-INPUT.json"))),
+      inboundFiles: 6,
+      receipt: null
+    });
+    const input = JSON.parse(await readFile(path.join(phase2Root, "PHASE-2-INPUT.json"), "utf8"));
+    assert.deepEqual(input, createPhase2Input({
+      reportFileName: fixture.reportFileName,
+      reportSha256: sha256Bytes(fixture.reportBody),
+      phase1ManifestSha256: expectedPhase1ManifestSha256
+    }));
+    assert.deepEqual(await snapshotFixtureTree(fixture.phase1Root), before);
+  } finally {
+    await rm(fixture.usbRoot, { recursive: true, force: true });
+  }
+});
+
+test("host prep builder blocks unsafe Phase 1 and no-clobber failures without staging residue", async (t) => {
+  await t.test("secret-bearing returned report", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    try {
+      const secret = "must-never-be-echoed-builder-secret";
+      await writeFile(fixture.reportPath, `RESEND_API_KEY=${secret}\n`);
+      await writeFile(
+        `${fixture.reportPath}.sha256`,
+        `${sha256Bytes(`RESEND_API_KEY=${secret}\n`)}  ${fixture.reportFileName}\n`
+      );
+      const result = await runHostPrepVerifierCliForScript(
+        path.resolve("scripts/migration/build-usb-host-prep.mjs"),
+        ["--usb-root", fixture.usbRoot]
+      );
+      assert.notEqual(result.code, 0);
+      assert.equal(result.stdout, "");
+      assert.doesNotMatch(result.stderr, new RegExp(secret, "i"));
+      assert.equal((await readdir(fixture.usbRoot)).some((name) => name.startsWith(`${HOST_PREP_ROOT_NAME}.partial-`)), false);
+      await assert.rejects(lstat(path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME)));
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("existing exact Phase 2 target", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    const target = path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME);
+    try {
+      await mkdir(target);
+      await writeFile(path.join(target, "preserve.txt"), "preserve\n");
+      const result = await runHostPrepVerifierCliForScript(
+        path.resolve("scripts/migration/build-usb-host-prep.mjs"),
+        ["--usb-root", fixture.usbRoot]
+      );
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /already exists.*will not overwrite/i);
+      assert.equal(await readFile(path.join(target, "preserve.txt"), "utf8"), "preserve\n");
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("publish-time empty target remains untouched", async () => {
+    const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-publish-race-"));
+    const stagingPath = path.join(usbRoot, `${HOST_PREP_ROOT_NAME}.partial-test`);
+    const finalRoot = path.join(usbRoot, HOST_PREP_ROOT_NAME);
+    try {
+      await mkdir(stagingPath);
+      await writeFile(path.join(stagingPath, "staged.txt"), "staged\n");
+      await mkdir(finalRoot);
+      const { publishHostPrepStagingNoClobber } = await import(
+        "../scripts/migration/build-usb-host-prep.mjs"
+      );
+      await assert.rejects(
+        publishHostPrepStagingNoClobber({ usbRoot, stagingPath, finalRoot }),
+        /already exists.*will not overwrite/i
+      );
+      assert.deepEqual(await readdir(finalRoot), []);
+      assert.deepEqual(await readdir(stagingPath), ["staged.txt"]);
+    } finally {
+      await rm(usbRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("linked Phase 2 target is rejected without touching its destination", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    const outside = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-linked-target-"));
+    const finalRoot = path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME);
+    try {
+      await writeFile(path.join(outside, "preserve.txt"), "preserve linked destination\n");
+      await symlink(outside, finalRoot, process.platform === "win32" ? "junction" : "dir");
+      const { buildUsbHostPrep } = await import("../scripts/migration/build-usb-host-prep.mjs");
+      await assert.rejects(
+        buildUsbHostPrep({ usbRoot: fixture.usbRoot }),
+        /symbolic link|junction/i
+      );
+      assert.equal(
+        await readFile(path.join(outside, "preserve.txt"), "utf8"),
+        "preserve linked destination\n"
+      );
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("insufficient space fails before creating staging", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    try {
+      const { buildUsbHostPrep } = await import("../scripts/migration/build-usb-host-prep.mjs");
+      await assert.rejects(
+        buildUsbHostPrep({ usbRoot: fixture.usbRoot, availableBytes: 0 }),
+        /enough free space/i
+      );
+      assert.deepEqual((await readdir(fixture.usbRoot)).sort(), ["Project-A-Migration"]);
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("CLI does not echo a caller-controlled local path", async () => {
+    const sentinel = "must-never-echo-local-username";
+    const missingRoot = path.join(os.tmpdir(), sentinel, "missing-usb-root");
+    const result = await runHostPrepVerifierCliForScript(
+      path.resolve("scripts/migration/build-usb-host-prep.mjs"),
+      ["--usb-root", missingRoot]
+    );
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "Host-prep bundle creation failed safely.\n");
+    assert.doesNotMatch(result.stderr, new RegExp(sentinel, "i"));
+  });
+});
+
+async function createHostPrepBuilderSourceFixture() {
+  const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-source-"));
+  const relativePaths = [
+    "deploy/usb-host-prep/ISOLATION-BOUNDARY.txt",
+    "deploy/usb-host-prep/README-FIRST.txt",
+    "scripts/migration/apply-host-prep.sh",
+    "scripts/migration/collect-host-prep-evidence.sh",
+    "scripts/migration/preflight-host-prep.sh"
+  ];
+  for (const relativePath of relativePaths) {
+    const destination = path.join(sourceRoot, ...relativePath.split("/"));
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(path.resolve(...relativePath.split("/")), destination);
+  }
+  return sourceRoot;
+}
+
+async function waitForHostPrepStagingFile(usbRoot, relativePath) {
+  for (let attempt = 0; attempt < 2000; attempt += 1) {
+    const stagingName = (await readdir(usbRoot)).find((name) =>
+      name.startsWith(`${HOST_PREP_ROOT_NAME}.partial-`)
+    );
+    if (stagingName) {
+      const candidate = path.join(
+        usbRoot,
+        stagingName,
+        HOST_PREP_ROOT_NAME,
+        ...relativePath.split("/")
+      );
+      try {
+        await lstat(candidate);
+        return candidate;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error(`Timed out waiting for host-prep staging file ${relativePath}`);
+}
+
+test("host prep builder rejects linked, oversized, and replaced repository sources", async (t) => {
+  await t.test("linked source ancestor", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    const sourceRoot = await createHostPrepBuilderSourceFixture();
+    const outside = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-source-outside-"));
+    const linkedDirectory = path.join(sourceRoot, "deploy", "usb-host-prep");
+    try {
+      await copyFile(
+        path.resolve("deploy/usb-host-prep/README-FIRST.txt"),
+        path.join(outside, "README-FIRST.txt")
+      );
+      await copyFile(
+        path.resolve("deploy/usb-host-prep/ISOLATION-BOUNDARY.txt"),
+        path.join(outside, "ISOLATION-BOUNDARY.txt")
+      );
+      await rm(linkedDirectory, { recursive: true });
+      await symlink(outside, linkedDirectory, process.platform === "win32" ? "junction" : "dir");
+      const { buildUsbHostPrep } = await import("../scripts/migration/build-usb-host-prep.mjs");
+      await assert.rejects(
+        buildUsbHostPrep({ usbRoot: fixture.usbRoot, sourceRoot }),
+        /symbolic link|junction/i
+      );
+      await assert.rejects(lstat(path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME)));
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+      await rm(sourceRoot, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("FAT32-incompatible source", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    const sourceRoot = await createHostPrepBuilderSourceFixture();
+    let handle;
+    try {
+      const { FAT32_MAX_FILE_BYTES } = await import("../scripts/migration/usb-handoff-lib.mjs");
+      handle = await open(path.join(sourceRoot, "deploy", "usb-host-prep", "README-FIRST.txt"), "w");
+      await handle.truncate(FAT32_MAX_FILE_BYTES + 1);
+      await handle.close();
+      handle = undefined;
+      const { buildUsbHostPrep } = await import("../scripts/migration/build-usb-host-prep.mjs");
+      await assert.rejects(
+        buildUsbHostPrep({ usbRoot: fixture.usbRoot, sourceRoot }),
+        /FAT32/i
+      );
+      assert.equal((await readdir(fixture.usbRoot)).some((name) => name.includes(".partial-")), false);
+    } finally {
+      await handle?.close();
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("source replacement after approval", async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    const sourceRoot = await createHostPrepBuilderSourceFixture();
+    const preflight = path.join(sourceRoot, "scripts", "migration", "preflight-host-prep.sh");
+    try {
+      await writeFile(
+        path.join(sourceRoot, "deploy", "usb-host-prep", "README-FIRST.txt"),
+        Buffer.alloc(32 * 1024 * 1024, 0x52)
+      );
+      const phase1Before = await snapshotFixtureTree(fixture.phase1Root);
+      const { buildUsbHostPrep } = await import("../scripts/migration/build-usb-host-prep.mjs");
+      const build = buildUsbHostPrep({ usbRoot: fixture.usbRoot, sourceRoot });
+      await waitForHostPrepStagingFile(fixture.usbRoot, "ISOLATION-BOUNDARY.txt");
+      await rename(preflight, `${preflight}.approved`);
+      await writeFile(preflight, "must-never-be-copied replacement\n");
+      await assert.rejects(build, /source changed during the build/i);
+      assert.equal((await readdir(fixture.usbRoot)).some((name) => name.includes(".partial-")), false);
+      await assert.rejects(lstat(path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME)));
+      assert.deepEqual(await snapshotFixtureTree(fixture.phase1Root), phase1Before);
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep PowerShell wrapper is a guarded verify-build-verify handoff", {
+  skip: process.platform !== "win32" ? "PowerShell wrapper check runs on Windows." : false
+}, async () => {
+  const wrapper = await readFile(
+    new URL("../scripts/migration/prepare-usb-host-prep.ps1", import.meta.url),
+    "utf8"
+  );
+  assert.match(wrapper, /ValidatePattern\('\^\[A-Za-z\]:\$'\)/);
+  assert.match(wrapper, /Win32_LogicalDisk/);
+  assert.match(wrapper, /DriveType\s*-ne\s*2/);
+  assert.match(wrapper, /FileSystem\s*-ne\s*['"]FAT32['"]/);
+  assert.match(wrapper, /104857600|100MB/);
+  assert.match(wrapper, /build-usb-host-prep\.mjs/);
+  assert.match(wrapper, /verify-usb-host-prep\.mjs/);
+  assert.match(wrapper, /verify-usb-handoff\.mjs/);
+  const validationOrder = [
+    wrapper.indexOf("QueryDosDevice"),
+    wrapper.indexOf("Get-PSDrive"),
+    wrapper.indexOf("Get-Item -LiteralPath $usbRoot"),
+    wrapper.indexOf("Get-CimInstance Win32_LogicalDisk"),
+    wrapper.indexOf("Get-Command node.exe"),
+    wrapper.indexOf("$phase1Root ="),
+    wrapper.indexOf("build-usb-host-prep.mjs"),
+    wrapper.indexOf("verify-usb-host-prep.mjs"),
+    wrapper.indexOf("verify-usb-handoff.mjs")
+  ];
+  assert.ok(validationOrder.every((index) => index >= 0));
+  assert.deepEqual(validationOrder, [...validationOrder].sort((left, right) => left - right));
+  assert.equal(wrapper.match(/build-usb-host-prep\.mjs/g)?.length, 1);
+  assert.doesNotMatch(wrapper, /Format-Volume|Remove-Item|Clear-Disk|Repair-Volume|Dismount-Volume|Invoke-WebRequest|Invoke-RestMethod/);
+});
+
+test("host prep instructions provide the stand-alone fail-closed local operator flow", async () => {
+  const readme = await readFile(
+    new URL("../deploy/usb-host-prep/README-FIRST.txt", import.meta.url),
+    "utf8"
+  );
+  const boundary = await readFile(
+    new URL("../deploy/usb-host-prep/ISOLATION-BOUNDARY.txt", import.meta.url),
+    "utf8"
+  );
+  assert.match(readme, /Project-A-Migration-Phase-2-Host-Prep/);
+  assert.doesNotMatch(readme, /Project-A-Migration(?:\s|["'\/])/);
+  assert.match(readme, /before-project-a-host-prep-YYYYMMDD-HHMM/);
+  assert.match(readme, /mount -t vfat -o "\$REQUESTED_OPTIONS"/);
+  assert.match(readme, /nodev,nosuid,noexec/);
+  assert.match(readme, /sha256sum CHECKSUMS\/PHASE-2-HOST-PREP\.sha256/);
+  assert.match(readme, /sha256sum --check CHECKSUMS\/PHASE-2-HOST-PREP\.sha256/g);
+  assert.ok((readme.match(/sha256sum --check CHECKSUMS\/PHASE-2-HOST-PREP\.sha256/g) ?? []).length >= 2);
+  assert.match(readme, /mktemp -d "\$HOME\/project-a-host-prep\.XXXXXX"/);
+  assert.match(readme, /\/usr\/bin\/env -i[\s\S]*preflight-host-prep\.sh/);
+  assert.match(readme, /apply-host-prep\.sh --apply/);
+  assert.match(readme, /collect-host-prep-evidence\.sh[\s\\]*--usb-root "\$HANDOFF_ROOT"/);
+  assert.match(readme, /noexec[^\n]+does not block \/bin\/bash/i);
+  assert.match(readme, /out-of-band fingerprint/i);
+  assert.match(readme, /sync/);
+  assert.match(readme, /umount -- "\$MOUNT_POINT"/);
+  assert.match(readme, /Do not retry|do not retry/i);
+  assert.doesNotMatch(readme, /\b(?:ssh|scp)\b|Proxmox API|Cloudflare|firewall|\bnpm\b|cutover/i);
+  assert.match(boundary, /Codex has no remote access to Debian or Proxmox/);
+  assert.match(boundary, /Stop on any checksum, fingerprint, mount, preflight, apply, collector, sync, or unmount error\. Do not retry\./);
+});
+
+function extractHostPrepReadmeScript(readme) {
+  const match = readme.match(
+    /<<'PROJECT_A_HOST_PREP_LOCAL'\r?\n([\s\S]*?)\r?\nPROJECT_A_HOST_PREP_LOCAL/
+  );
+  assert.ok(match, "Phase 2 README command block was not found");
+  return match[1];
+}
+
+async function writeHostPrepReadmeExecutable(filePath, contents) {
+  await writeFile(filePath, contents, { mode: 0o700 });
+  await chmod(filePath, 0o700);
+}
+
+async function createHostPrepReadmeHarness(scenario = {}) {
+  const base = await mkdtemp("/tmp/project-a-host-prep-readme-test.");
+  const fakeBin = path.join(base, "bin");
+  const home = path.join(base, "home");
+  const deviceDirectory = path.join(base, "devices");
+  const device = path.join(deviceDirectory, "usb-partition");
+  const mountPoint = path.join(base, "mount");
+  const handoffRoot = path.join(mountPoint, HOST_PREP_ROOT_NAME);
+  const stateFile = path.join(base, "mounted.state");
+  const logFile = path.join(base, "commands.log");
+  const checksumCount = path.join(base, "checksum.count");
+  const deviceInput = path.join(base, "device-input");
+  const fingerprintInput = path.join(base, "fingerprint-input");
+  const applyInput = path.join(base, "apply-input");
+  const scriptPath = path.join(base, "operator.sh");
+  const fingerprint = "8".repeat(64);
+  await Promise.all([
+    mkdir(fakeBin),
+    mkdir(home),
+    mkdir(deviceDirectory)
+  ]);
+  await writeFile(device, "fixture device\n");
+  await writeFile(deviceInput, `${device}\n`);
+  await writeFile(fingerprintInput, `${fingerprint}\n`);
+  await writeFile(applyInput, "APPLY\n");
+  if (scenario.redirectedMount) {
+    const outside = path.join(base, "redirected");
+    await mkdir(outside);
+    await writeFile(path.join(outside, "preserve.txt"), "preserve\n");
+    await symlink(outside, mountPoint, "dir");
+  } else if (scenario.mountPointFile) {
+    await writeFile(mountPoint, "preserve file\n");
+  } else {
+    await Promise.all([
+      mkdir(path.join(handoffRoot, "CHECKSUMS"), { recursive: true }),
+      mkdir(path.join(handoffRoot, "TO-DEBIAN"), { recursive: true }),
+      mkdir(path.join(handoffRoot, "FROM-DEBIAN"), { recursive: true }),
+      mkdir(path.join(handoffRoot, "SECRETS-ENCRYPTED"), { recursive: true })
+    ]);
+    await writeFile(path.join(handoffRoot, "CHECKSUMS", "PHASE-2-HOST-PREP.sha256"), "fixture manifest\n");
+    for (const [name, marker, failureVariable] of [
+      ["preflight-host-prep.sh", "preflight", "FAKE_PREFLIGHT_FAIL"],
+      ["apply-host-prep.sh", "apply", "FAKE_APPLY_FAIL"],
+      ["collect-host-prep-evidence.sh", "collector", "FAKE_COLLECTOR_FAIL"]
+    ]) {
+      await writeHostPrepReadmeExecutable(path.join(handoffRoot, "TO-DEBIAN", name), `#!/bin/bash
+printf '${marker}:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
+${scenario[`${marker}Fails`] ? "exit 81" : ":"}
+`);
+    }
+  }
+
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "sudo"), `#!/bin/bash
+printf 'sudo:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
+exec "$@"
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "mount"), `#!/bin/bash
+printf 'mount:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
+[[ "\${FAKE_MOUNT_FAIL:-0}" != 1 ]] || exit 71
+: > ${shellSingleQuote(stateFile)}
+[[ "\${FAKE_SIGNAL_AFTER_MOUNT:-0}" != 1 ]] || kill -TERM "$PPID"
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "umount"), `#!/bin/bash
+printf 'umount:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
+[[ "\${FAKE_UNMOUNT_FAIL:-0}" != 1 ]] || exit 72
+rm -f -- ${shellSingleQuote(stateFile)}
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "findmnt"), `#!/bin/bash
+field=''
+previous=''
+for argument in "$@"; do
+  [[ "$previous" != -o ]] || field="$argument"
+  previous="$argument"
+done
+if [[ -z "$field" ]]; then
+  [[ "\${FAKE_ALREADY_MOUNTED:-0}" == 1 || -e ${shellSingleQuote(stateFile)} ]] && exit 0
+  exit 1
+fi
+[[ -e ${shellSingleQuote(stateFile)} ]] || exit 1
+case "$field" in
+  SOURCE) printf '%s\\n' "\${FAKE_MOUNT_SOURCE:-${device}}" ;;
+  FSTYPE) printf '%s\\n' "\${FAKE_MOUNT_FSTYPE:-vfat}" ;;
+  OPTIONS) printf '%s\\n' "\${FAKE_MOUNT_OPTIONS:-rw,nodev,nosuid,noexec,uid=1001,gid=1002,umask=0077}" ;;
+  *) exit 73 ;;
+esac
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "lsblk"), `#!/bin/bash
+case " $* " in
+  *' TYPE '*) printf 'part\\n' ;;
+  *' FSTYPE '*) printf '%s\\n' "\${FAKE_DEVICE_FSTYPE:-vfat}" ;;
+  *) printf 'fixture vfat\\n' ;;
+esac
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "id"), `#!/bin/bash
+case "\${1:-}" in -u) printf '1001\\n' ;; -g) printf '1002\\n' ;; *) exit 74 ;; esac
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "sha256sum"), `#!/bin/bash
+printf 'checksum:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
+if [[ "\${1:-}" == --check ]]; then
+  count=0
+  [[ ! -f ${shellSingleQuote(checksumCount)} ]] || count="$(cat ${shellSingleQuote(checksumCount)})"
+  count=$((count + 1))
+  printf '%s\\n' "$count" > ${shellSingleQuote(checksumCount)}
+  [[ "\${FAKE_CHECKSUM_FAIL_AT:-0}" != "$count" ]] || exit 75
+  exit 0
+fi
+printf '%s  %s\\n' ${fingerprint} "\${1:-}"
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "cp"), `#!/bin/bash
+printf 'copy:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
+[[ "\${FAKE_COPY_FAIL:-0}" != 1 ]] || exit 76
+exec /usr/bin/cp "$@"
+`);
+  await writeHostPrepReadmeExecutable(path.join(fakeBin, "sync"), `#!/bin/bash
+printf 'sync\\n' >> ${shellSingleQuote(logFile)}
+[[ "\${FAKE_SYNC_FAIL:-0}" != 1 ]]
+`);
+
+  const readme = await readFile(
+    new URL("../deploy/usb-host-prep/README-FIRST.txt", import.meta.url),
+    "utf8"
+  );
+  let script = extractHostPrepReadmeScript(readme);
+  script = script.replace(
+    "readonly SYSTEM_PATH='/usr/sbin:/usr/bin:/sbin:/bin'",
+    `readonly SYSTEM_PATH=${shellSingleQuote(`${fakeBin}:/usr/bin:/bin`)}`
+  );
+  script = script.replace(
+    "readonly MOUNT_POINT='/mnt/project-a-host-prep-usb'",
+    `readonly MOUNT_POINT=${shellSingleQuote(mountPoint)}`
+  );
+  script = script.replace("< /dev/tty", `< ${shellSingleQuote(deviceInput)}`);
+  script = script.replace("< /dev/tty", `< ${shellSingleQuote(fingerprintInput)}`);
+  script = script.replace("< /dev/tty", `< ${shellSingleQuote(applyInput)}`);
+  script = script.replace(
+    '[[ "$USB_DEVICE" == /dev/* && -b "$USB_DEVICE" ]]',
+    `[[ "$USB_DEVICE" == ${shellSingleQuote(deviceDirectory)}/* && -e "$USB_DEVICE" ]]`
+  );
+  await writeFile(scriptPath, script);
+
+  let result;
+  try {
+    const output = await execFile("/bin/bash", ["--noprofile", "--norc", scriptPath], {
+      cwd: base,
+      env: {
+        ...process.env,
+        HOME: home,
+        FAKE_ALREADY_MOUNTED: scenario.alreadyMounted ? "1" : "0",
+        FAKE_MOUNT_FAIL: scenario.mountFails ? "1" : "0",
+        FAKE_SIGNAL_AFTER_MOUNT: scenario.signalAfterMount ? "1" : "0",
+        FAKE_MOUNT_SOURCE: scenario.mountedSource || device,
+        FAKE_MOUNT_FSTYPE: scenario.mountedFsType || "vfat",
+        FAKE_MOUNT_OPTIONS: scenario.mountOptions || "rw,nodev,nosuid,noexec,uid=1001,gid=1002,umask=0077",
+        FAKE_CHECKSUM_FAIL_AT: scenario.checksumFailAt || "0",
+        FAKE_COPY_FAIL: scenario.copyFails ? "1" : "0",
+        FAKE_SYNC_FAIL: scenario.syncFails ? "1" : "0",
+        FAKE_UNMOUNT_FAIL: scenario.unmountFails ? "1" : "0"
+      },
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    result = { code: 0, stdout: output.stdout, stderr: output.stderr };
+  } catch (error) {
+    result = {
+      code: error.code,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? ""
+    };
+  }
+  let log = "";
+  try {
+    log = await readFile(logFile, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return { base, home, log, mountPoint, result, stateFile };
+}
+
+test("host prep instructions fail closed across mount, copy, command, sync, unmount, and signal windows", {
+  skip: process.platform === "win32" ? "Runtime operator-flow checks run on POSIX." : false
+}, async (t) => {
+  await t.test("successful one-pass local flow", async () => {
+    const harness = await createHostPrepReadmeHarness();
+    try {
+      assert.equal(harness.result.code, 0, harness.result.stderr);
+      assert.equal(harness.log.match(/^preflight:/gm)?.length, 1);
+      assert.equal(harness.log.match(/^apply:/gm)?.length, 1);
+      assert.equal(harness.log.match(/^collector:/gm)?.length, 1);
+      assert.equal(harness.log.match(/^sync$/gm)?.length, 1);
+      assert.equal(harness.log.match(/^umount:/gm)?.length, 1);
+      await assert.rejects(lstat(harness.stateFile));
+      assert.deepEqual(
+        (await readdir(harness.home)).filter((name) => name.startsWith("project-a-host-prep.")),
+        []
+      );
+    } finally {
+      await rm(harness.base, { recursive: true, force: true });
+    }
+  });
+  const scenarios = [
+    ["redirected mountpoint", { redirectedMount: true }, /mountpoint/i],
+    ["non-directory mountpoint", { mountPointFile: true }, /mountpoint/i],
+    ["already-mounted target", { alreadyMounted: true }, /already mounted/i],
+    ["failed mount", { mountFails: true }, /mount/i],
+    ["wrong mounted source", { mountedSource: "/wrong/source" }, /mounted source/i],
+    ["wrong mounted filesystem", { mountedFsType: "ext4" }, /filesystem/i],
+    ["missing mount option", { mountOptions: "rw,nodev,nosuid,uid=1001,gid=1002,umask=0077" }, /mount options/i],
+    ["failed media checksum", { checksumFailAt: "1" }, /checksum/i],
+    ["failed copy", { copyFails: true }, /staging copy/i],
+    ["failed local checksum", { checksumFailAt: "2" }, /local checksum/i],
+    ["failed preflight", { preflightFails: true }, /preflight/i],
+    ["failed apply", { applyFails: true }, /apply failed/i],
+    ["failed collector", { collectorFails: true }, /evidence collection failed/i],
+    ["failed sync", { syncFails: true }, /sync/i],
+    ["failed unmount", { unmountFails: true }, /unmount/i],
+    ["signal after mount", { signalAfterMount: true }, /(?:STOP|$)/i]
+  ];
+  for (const [name, scenario, expected] of scenarios) {
+    await t.test(name, async () => {
+      const harness = await createHostPrepReadmeHarness(scenario);
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.match(harness.result.stderr, expected);
+        if (scenario.applyFails) {
+          assert.equal(harness.log.match(/^apply:/gm)?.length, 1);
+          assert.equal(harness.log.match(/^collector:/gm)?.length, 1);
+        }
+        if (scenario.unmountFails) {
+          assert.equal(harness.log.match(/^umount:/gm)?.length, 1);
+        }
+      } finally {
+        await rm(harness.base, { recursive: true, force: true });
+      }
+    });
+  }
+});
