@@ -3352,3 +3352,356 @@ test(
     });
   }
 );
+
+const HOST_PREP_EVIDENCE_SCRIPT_URL = new URL(
+  "../scripts/migration/collect-host-prep-evidence.sh",
+  import.meta.url
+);
+const HOST_PREP_EVIDENCE_TIMESTAMP = "20260731T123456Z";
+const HOST_PREP_EVIDENCE_HOST = "fixture-host";
+const HOST_PREP_EVIDENCE_REPORT =
+  `debian-host-prep-${HOST_PREP_EVIDENCE_TIMESTAMP}-${HOST_PREP_EVIDENCE_HOST}.txt`;
+
+async function createHostPrepEvidenceFixture({ state = "clean", sensitiveOutput = false } = {}) {
+  const base = await mkdtemp("/tmp/project-a-host-prep-evidence-test.");
+  const usbRoot = path.join(base, HOST_PREP_ROOT_NAME);
+  const systemRoot = path.join(base, "system-root");
+  const bin = path.join(base, "bin");
+  const fromDir = path.join(usbRoot, "FROM-DEBIAN");
+  const scriptPath = path.join(usbRoot, "TO-DEBIAN", "collect-host-prep-evidence.sh");
+  await Promise.all([
+    mkdir(path.join(usbRoot, "CHECKSUMS"), { recursive: true }),
+    mkdir(fromDir, { recursive: true }),
+    mkdir(path.join(usbRoot, "SECRETS-ENCRYPTED"), { recursive: true }),
+    mkdir(path.dirname(scriptPath), { recursive: true }),
+    mkdir(path.join(systemRoot, "etc"), { recursive: true }),
+    mkdir(path.join(systemRoot, "proc", "self"), { recursive: true }),
+    mkdir(path.join(systemRoot, "var", "log"), { recursive: true }),
+    mkdir(bin, { recursive: true })
+  ]);
+  await Promise.all([
+    writeFile(path.join(usbRoot, "ISOLATION-BOUNDARY.txt"), "fixture\n"),
+    writeFile(
+      path.join(usbRoot, "PHASE-2-INPUT.json"),
+      '{"schemaVersion":1,"phaseId":"debian-host-prep-v1"}\n'
+    ),
+    writeFile(path.join(usbRoot, "README-FIRST.txt"), "fixture\n"),
+    writeFile(
+      path.join(systemRoot, "etc", "os-release"),
+      'ID=debian\nVERSION_ID="13"\n'
+    ),
+    writeFile(path.join(systemRoot, "proc", "meminfo"), "MemTotal:        3584000 kB\n"),
+    writeFile(path.join(systemRoot, "proc", "self", "cmdline"), "secret-process-argument\0"),
+    writeFile(path.join(systemRoot, "etc", "resolv.conf"), "nameserver 10.77.66.1\n"),
+    writeFile(path.join(systemRoot, "var", "log", "fixture.log"), "seeded-log-text\n")
+  ]);
+  await copyFile(HOST_PREP_EVIDENCE_SCRIPT_URL, scriptPath);
+  await chmod(scriptPath, 0o700);
+
+  const prepared = state === "prepared";
+  const partial = state === "partial";
+  const directorySpecs = [
+    ["opt/palziv", "root", "palziv", "750"],
+    ["opt/palziv/releases", "root", "palziv", "750"],
+    ["var/lib/palziv", "palziv", "palziv", "700"],
+    ["var/lib/palziv/data", "palziv", "palziv", "700"],
+    ["var/backups/palziv", "root", "palziv", "750"],
+    ["etc/palziv", "root", "palziv", "750"]
+  ];
+  if (prepared) {
+    for (const [relativePath] of directorySpecs) {
+      await mkdir(path.join(systemRoot, ...relativePath.split("/")), { recursive: true });
+    }
+  } else if (partial) {
+    await mkdir(path.join(systemRoot, "opt", "palziv"), { recursive: true });
+  }
+  if (sensitiveOutput) {
+    await writeFile(
+      path.join(systemRoot, "etc", "palziv", "security.json"),
+      "seeded-secret-value\n"
+    );
+  }
+
+  const packageBody = prepared
+    ? "test \"$1\" = --show\ntest \"$2\" = '--showformat=${Version}'\ncase \"$3\" in ca-certificates|curl|git|jq|rsync|tar|xz-utils) printf '%s\\n' '1.2.3-fixture' ;; *) exit 1 ;; esac\n"
+    : "exit 1\n";
+  const accountBody = prepared || partial
+    ? `case "\${1-}:\${2-}" in
+  passwd:palziv) printf '%s\\n' 'palziv:x:998:998::/var/lib/palziv:/usr/sbin/nologin' ;;
+  group:palziv) printf '%s\\n' 'palziv:x:998:' ;;
+  *) exit 2 ;;
+esac
+`
+    : "exit 2\n";
+  const statCases = directorySpecs.map(([relativePath, owner, group, mode]) =>
+    `      */${relativePath}) printf '%s\\n' 'directory|${owner}|${group}|${mode}' ;;`
+  ).join("\n");
+  const commandBodies = {
+    date: `case "\${1-}:\${2-}" in
+  -u:+%Y%m%dT%H%M%SZ) printf '%s\\n' '${HOST_PREP_EVIDENCE_TIMESTAMP}' ;;
+  -u:+%Y-%m-%dT%H:%M:%SZ) printf '%s\\n' '2026-07-31T12:34:56Z' ;;
+  *) exit 90 ;;
+esac
+`,
+    hostname: `test "$#" -eq 0
+printf '%s\\n' '${HOST_PREP_EVIDENCE_HOST}'
+`,
+    uname: "test \"${1-}\" = -m\nprintf '%s\\n' x86_64\n",
+    nproc: "test \"$#\" -eq 0\nprintf '%s\\n' 2\n",
+    df: "test \"$#\" -eq 3\ntest \"$1\" = -B1\ntest \"$2\" = --output=avail\nprintf 'Avail\\n10737418240\\n'\n",
+    "dpkg-query": packageBody,
+    node: prepared
+      ? "test \"${1-}\" = --version\nprintf '%s\\n' v24.18.0\n"
+      : partial
+      ? "test \"${1-}\" = --version\nprintf '%s\\n' v23.0.0\n"
+      : "exit 127\n",
+    npm: prepared
+      ? "test \"${1-}\" = --version\nprintf '%s\\n' 11.9.0\n"
+      : "exit 127\n",
+    getent: accountBody,
+    stat: `test "$1" = -c
+test "$2" = '%F|%U|%G|%a'
+case "\${3-}" in
+${prepared ? statCases : partial ? "      */opt/palziv) printf '%s\\n' 'directory|root|palziv|750' ;;" : ""}
+  *) exit 1 ;;
+esac
+`,
+    systemctl: `case "\${1-}:\${2-}:\${3-}" in
+  is-enabled:--quiet:palziv.service|is-enabled:--quiet:cloudflared.service|is-enabled:--quiet:palziv-backup.timer|is-enabled:--quiet:palziv-health.timer) exit 4 ;;
+  is-active:--quiet:palziv.service|is-active:--quiet:cloudflared.service|is-active:--quiet:palziv-backup.timer|is-active:--quiet:palziv-health.timer) exit 4 ;;
+  *) exit 91 ;;
+esac
+`,
+    ufw: sensitiveOutput
+      ? "test \"${1-}\" = status\nprintf '%s\\n' 'Status: inactive' 'seeded-secret-value 10.77.66.1 nameserver seeded-log-text'\n"
+      : "test \"${1-}\" = status\nprintf '%s\\n' 'Status: inactive'\n",
+    ss: sensitiveOutput
+      ? "printf '%s\\n' 'LISTEN 0 4096 10.77.66.2:3116 0.0.0.0:* users:((seeded-process-argument))'\n"
+      : ":\n",
+    sha256sum: "exec /usr/bin/sha256sum \"$@\"\n"
+  };
+  for (const [name, body] of Object.entries(commandBodies)) {
+    await writeExecutable(path.join(bin, name), body);
+  }
+  return { base, usbRoot, systemRoot, bin, fromDir, scriptPath };
+}
+
+async function runHostPrepEvidence(fixture, extraEnvironment = {}, usbRoot = fixture.usbRoot) {
+  const hostileMarker = path.join(fixture.base, "hostile-bash-env-fired");
+  const hostileBashEnv = path.join(fixture.base, "hostile-bash-env");
+  await writeFile(hostileBashEnv, `: > ${shellSingleQuote(hostileMarker)}\n`);
+  const isolatedEnvironment = [
+    "-i",
+    "HOME=/tmp",
+    "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+    "PALZIV_HOST_PREP_EVIDENCE_TEST_MODE=1",
+    `PALZIV_HOST_PREP_EVIDENCE_TEST_ROOT=${fixture.systemRoot}`,
+    `PALZIV_HOST_PREP_EVIDENCE_TEST_BIN=${fixture.bin}`,
+    ...Object.entries(extraEnvironment).map(([name, value]) => `${name}=${value}`),
+    "/bin/bash",
+    "-p",
+    fixture.scriptPath,
+    "--usb-root",
+    usbRoot
+  ];
+  try {
+    const result = await execFile("/usr/bin/env", isolatedEnvironment, {
+      cwd: fixture.usbRoot,
+      env: {
+        ...process.env,
+        BASH_ENV: hostileBashEnv,
+        ENV: hostileBashEnv,
+        PALZIV_SECRET_FIXTURE: "seeded-environment-value"
+      },
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr, hostileMarker };
+  } catch (error) {
+    return {
+      code: error.code,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? "",
+      hostileMarker
+    };
+  }
+}
+
+test("host prep evidence collector source keeps a fixed metadata-only contract", async () => {
+  const source = await readFile(HOST_PREP_EVIDENCE_SCRIPT_URL, "utf8");
+  assert.match(source, /^#!\/usr\/bin\/env bash\nset -Eeuo pipefail\n/);
+  assert.match(source, /readonly EVIDENCE_PHASE_ID="debian-host-prep-v1"/);
+  assert.match(source, /readonly EVIDENCE_MAX_REPORT_BYTES="67108864"/);
+  assert.match(source, /unset BASH_ENV ENV CDPATH/);
+  assert.match(source, /mv -T -n/);
+  assert.match(source, /sha256sum/);
+  for (const field of [
+    "Project-A Debian Host Preparation Receipt",
+    "Collection UTC:", "OS:", "Architecture:", "CPU threshold:",
+    "Memory threshold:", "Root free-space threshold:", "Package ca-certificates:",
+    "Package curl:", "Package git:", "Package jq:", "Package rsync:", "Package tar:",
+    "Package xz-utils:", "Node:", "npm:", "Palziv user:", "Palziv group:",
+    "Directory ", "Service palziv:", "Service cloudflared:", "Timer palziv-backup:",
+    "Timer palziv-health:", "UFW:", "TCP 3116 listener:", "Classification:"
+  ]) {
+    assert.ok(source.includes(field), `missing approved receipt field ${field}`);
+  }
+  for (const forbidden of [
+    "ip address", "ip route", "resolv.conf", "printenv", "journalctl", "cmdline",
+    ".bash_history", "security.json", "push.json", "board.json", "analytics.json",
+    "/etc/palziv/palziv.env", "/etc/cloudflared", "systemctl start", "systemctl stop",
+    "systemctl enable", "ufw enable", "apt-get"
+  ]) {
+    assert.equal(source.toLowerCase().includes(forbidden.toLowerCase()), false, forbidden);
+  }
+});
+
+test(
+  "host prep evidence classifies fixed fixtures and publishes one redacted verified pair",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    for (const [state, expected] of [
+      ["clean", "not-applied"],
+      ["prepared", "prepared"],
+      ["partial", "partial"]
+    ]) {
+      await t.test(state, async () => {
+        const fixture = await createHostPrepEvidenceFixture({
+          state,
+          sensitiveOutput: state === "prepared"
+        });
+        try {
+          const result = await runHostPrepEvidence(fixture);
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(
+            result.stdout,
+            `${HOST_PREP_EVIDENCE_REPORT}\n${HOST_PREP_EVIDENCE_REPORT}.sha256\n`
+          );
+          assert.equal(result.stderr, "");
+          const entries = (await readdir(fixture.fromDir)).sort();
+          assert.deepEqual(entries, [
+            HOST_PREP_EVIDENCE_REPORT,
+            `${HOST_PREP_EVIDENCE_REPORT}.sha256`
+          ]);
+          const report = await readFile(
+            path.join(fixture.fromDir, HOST_PREP_EVIDENCE_REPORT),
+            "utf8"
+          );
+          assert.match(
+            report,
+            new RegExp(
+              `^Project-A Debian Host Preparation Receipt\\n[\\s\\S]*\\nClassification: ${expected}\\n$`
+            )
+          );
+          for (const sensitive of [
+            "seeded-secret-value", "10.77.66.1", "10.77.66.2", "nameserver",
+            "seeded-process-argument", "seeded-environment-value", "seeded-log-text",
+            "security.json", "resolv.conf", "cmdline", "fixture.log"
+          ]) {
+            assert.equal(report.includes(sensitive), false, sensitive);
+          }
+          const expectedHash = createHash("sha256").update(report).digest("hex");
+          assert.equal(
+            await readFile(
+              path.join(fixture.fromDir, `${HOST_PREP_EVIDENCE_REPORT}.sha256`),
+              "utf8"
+            ),
+            `${expectedHash}  ${HOST_PREP_EVIDENCE_REPORT}\n`
+          );
+          await assert.rejects(lstat(result.hostileMarker), { code: "ENOENT" });
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+);
+
+test(
+  "host prep evidence fails closed without clobbering or deleting caller-owned output",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("checksum failure removes only its owned report", async () => {
+      const fixture = await createHostPrepEvidenceFixture({ state: "prepared" });
+      try {
+        const result = await runHostPrepEvidence(fixture, {
+          PALZIV_HOST_PREP_EVIDENCE_TEST_SHA256_FAIL: "1"
+        });
+        assert.notEqual(result.code, 0);
+        assert.deepEqual(await readdir(fixture.fromDir), []);
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("same-second contention preserves the completed pair", async () => {
+      const fixture = await createHostPrepEvidenceFixture({ state: "prepared" });
+      try {
+        const runs = await Promise.all([
+          runHostPrepEvidence(fixture, { PALZIV_HOST_PREP_EVIDENCE_TEST_DELAY: "1" }),
+          runHostPrepEvidence(fixture, { PALZIV_HOST_PREP_EVIDENCE_TEST_DELAY: "1" })
+        ]);
+        assert.deepEqual(runs.map((result) => result.code === 0).sort(), [false, true]);
+        assert.deepEqual(
+          (await readdir(fixture.fromDir)).sort(),
+          [HOST_PREP_EVIDENCE_REPORT, `${HOST_PREP_EVIDENCE_REPORT}.sha256`]
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("wrong and linked roots fail", async () => {
+      const fixture = await createHostPrepEvidenceFixture();
+      const aliasBase = await mkdtemp("/tmp/project-a-host-prep-evidence-test.");
+      const linkedRoot = path.join(aliasBase, HOST_PREP_ROOT_NAME);
+      try {
+        const wrongRoot = await runHostPrepEvidence(fixture, {}, fixture.base);
+        assert.notEqual(wrongRoot.code, 0);
+        await symlink(fixture.usbRoot, linkedRoot, "dir");
+        const linked = await runHostPrepEvidence(fixture, {}, linkedRoot);
+        assert.notEqual(linked.code, 0);
+        assert.deepEqual(await readdir(fixture.fromDir), []);
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+        await rm(aliasBase, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("linked return directory fails", async () => {
+      const fixture = await createHostPrepEvidenceFixture();
+      const callerDirectory = path.join(fixture.base, "caller-return");
+      try {
+        await rm(fixture.fromDir, { recursive: true });
+        await mkdir(callerDirectory);
+        await symlink(callerDirectory, fixture.fromDir, "dir");
+        const result = await runHostPrepEvidence(fixture);
+        assert.notEqual(result.code, 0);
+        assert.deepEqual(await readdir(callerDirectory), []);
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("pre-existing report and oversized temporary output fail", async () => {
+      const existingFixture = await createHostPrepEvidenceFixture();
+      const oversizedFixture = await createHostPrepEvidenceFixture();
+      try {
+        const existingPath = path.join(existingFixture.fromDir, HOST_PREP_EVIDENCE_REPORT);
+        await writeFile(existingPath, "caller-owned\n");
+        const existing = await runHostPrepEvidence(existingFixture);
+        assert.notEqual(existing.code, 0);
+        assert.equal(await readFile(existingPath, "utf8"), "caller-owned\n");
+
+        const oversized = await runHostPrepEvidence(oversizedFixture, {
+          PALZIV_HOST_PREP_EVIDENCE_TEST_FORCE_OVERSIZE: "1"
+        });
+        assert.notEqual(oversized.code, 0);
+        assert.deepEqual(await readdir(oversizedFixture.fromDir), []);
+      } finally {
+        await rm(existingFixture.base, { recursive: true, force: true });
+        await rm(oversizedFixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+);
