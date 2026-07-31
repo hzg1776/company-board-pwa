@@ -5,7 +5,6 @@ import {
   mkdir,
   mkdtemp,
   open,
-  readdir,
   rename,
   rm,
   rmdir,
@@ -37,6 +36,8 @@ const PHASE1_ROOT_NAME = "Project-A-Migration";
 const STAGING_PREFIX = `${HOST_PREP_ROOT_NAME}.partial-`;
 const MINIMUM_HEADROOM_BYTES = 1024 * 1024;
 const CLI_USAGE = "Usage: node scripts/migration/build-usb-host-prep.mjs --usb-root <absolute drive root>";
+const PRESERVED_STAGING_ERROR =
+  "Host-prep bundle creation failed safely; builder-owned partial staging was preserved for operator inspection.";
 const TRANSFER_FILES = Object.freeze([
   ["deploy/usb-host-prep/ISOLATION-BOUNDARY.txt", "ISOLATION-BOUNDARY.txt"],
   ["deploy/usb-host-prep/README-FIRST.txt", "README-FIRST.txt"],
@@ -90,57 +91,6 @@ async function requirePlainDirectory(directoryPath, label) {
   const metadata = await lstat(directoryPath);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
     throw new Error(`${label} must be an existing non-linked directory.`);
-  }
-}
-
-function stableDirectoryIdentity(metadata) {
-  return Object.freeze({
-    dev: metadata.dev,
-    ino: metadata.ino,
-    mode: metadata.mode
-  });
-}
-
-function sameDirectoryIdentity(approved, metadata) {
-  return (
-    metadata.isDirectory()
-    && !metadata.isSymbolicLink()
-    && (approved.dev === 0n || metadata.dev === 0n || approved.dev === metadata.dev)
-    && approved.ino === metadata.ino
-    && approved.mode === metadata.mode
-  );
-}
-
-async function captureDirectoryChain(directoryPath, label) {
-  const resolved = path.resolve(directoryPath);
-  const volumeRoot = path.parse(resolved).root;
-  const relative = path.relative(volumeRoot, resolved);
-  const components = relative ? relative.split(path.sep) : [];
-  const approved = [];
-  let current = volumeRoot;
-  for (const component of [null, ...components]) {
-    if (component) current = path.join(current, component);
-    const metadata = await lstat(current, { bigint: true });
-    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      throw new Error(`${label} contains a linked or non-directory component.`);
-    }
-    approved.push(Object.freeze({
-      path: current,
-      identity: stableDirectoryIdentity(metadata)
-    }));
-  }
-  return Object.freeze(approved);
-}
-
-async function assertDirectoryIdentity(approved, label) {
-  let metadata;
-  try {
-    metadata = await lstat(approved.path, { bigint: true });
-  } catch (error) {
-    throw new Error(`${label} identity changed.`, { cause: error });
-  }
-  if (!sameDirectoryIdentity(approved.identity, metadata)) {
-    throw new Error(`${label} identity changed.`);
   }
 }
 
@@ -238,85 +188,6 @@ async function writeJsonAtomically(stagingRoot, relativePath, value) {
   }
 }
 
-async function assertOwnedStagingLayout(stagingPath) {
-  const allowedDirectories = new Set([
-    HOST_PREP_ROOT_NAME,
-    ...CHILD_DIRECTORIES.map((entry) => `${HOST_PREP_ROOT_NAME}/${entry}`)
-  ]);
-  const allowedFiles = new Set([
-    ...TRANSFER_FILES.map(([, destination]) => `${HOST_PREP_ROOT_NAME}/${destination}`),
-    `${HOST_PREP_ROOT_NAME}/PHASE-2-INPUT.json`,
-    `${HOST_PREP_ROOT_NAME}/PHASE-2-INPUT.json.partial`,
-    `${HOST_PREP_ROOT_NAME}/${HOST_PREP_MANIFEST_PATH}`,
-    `${HOST_PREP_ROOT_NAME}/${HOST_PREP_MANIFEST_PATH}.partial`
-  ]);
-  const pending = [{ absolutePath: stagingPath, relativePath: "" }];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    const entries = await readdir(current.absolutePath, { withFileTypes: true });
-    for (const entry of entries) {
-      const relativePath = current.relativePath
-        ? `${current.relativePath}/${entry.name}`
-        : entry.name;
-      const absolutePath = path.join(current.absolutePath, entry.name);
-      const metadata = await lstat(absolutePath, { bigint: true });
-      if (metadata.isSymbolicLink()) {
-        throw new Error("Host-prep staging cleanup found a linked entry.");
-      }
-      if (metadata.isDirectory()) {
-        if (!allowedDirectories.has(relativePath)) {
-          throw new Error("Host-prep staging cleanup found an unexpected directory.");
-        }
-        pending.push({ absolutePath, relativePath });
-      } else if (!metadata.isFile() || !allowedFiles.has(relativePath)) {
-        throw new Error("Host-prep staging cleanup found an unexpected entry.");
-      }
-    }
-  }
-}
-
-async function removeOwnedStaging(approval) {
-  const { usbRoot, stagingPath, stagingIdentity, rootChain, phase1 } = approval;
-  const root = path.resolve(usbRoot);
-  const staging = assertPathWithin(root, stagingPath);
-  if (
-    path.dirname(staging) !== root
-    || !path.basename(staging).startsWith(STAGING_PREFIX)
-    || path.basename(staging) === PHASE1_ROOT_NAME
-    || path.basename(staging) === HOST_PREP_ROOT_NAME
-  ) {
-    throw new Error("Refusing to clean a path not owned by the host-prep builder.");
-  }
-  try {
-    for (const ancestor of rootChain) {
-      await assertDirectoryIdentity(ancestor, "USB root ancestor");
-    }
-    await assertDirectoryIdentity(phase1, "Returned Phase 1 directory");
-    assertTreeSnapshotEqual(
-      phase1.snapshot,
-      await snapshotRegularTree(phase1.path)
-    );
-    await assertDirectoryIdentity({ path: staging, identity: stagingIdentity }, "Host-prep staging directory");
-    await assertOwnedStagingLayout(staging);
-    for (const ancestor of rootChain) {
-      await assertDirectoryIdentity(ancestor, "USB root ancestor");
-    }
-    await assertDirectoryIdentity(phase1, "Returned Phase 1 directory");
-    assertTreeSnapshotEqual(
-      phase1.snapshot,
-      await snapshotRegularTree(phase1.path)
-    );
-    await assertDirectoryIdentity({ path: staging, identity: stagingIdentity }, "Host-prep staging directory");
-    await assertOwnedStagingLayout(staging);
-  } catch (error) {
-    throw new Error(
-      "Host-prep staging cleanup refused because ownership, containment, or Phase 1 changed.",
-      { cause: error }
-    );
-  }
-  await rm(staging, { recursive: true, force: true });
-}
-
 export async function publishHostPrepStagingNoClobber({
   usbRoot,
   stagingPath,
@@ -401,7 +272,6 @@ export async function buildUsbHostPrep({
 
   await assertNoLinkedExistingComponents(root, "USB root");
   await requirePlainDirectory(root, "USB root");
-  const rootChain = await captureDirectoryChain(root, "USB root");
   await assertNoLinkedExistingComponents(source, "Repository source root");
   await requirePlainDirectory(source, "Repository source root");
   await assertNoLinkedExistingComponents(phase1Root, "Phase 1 path");
@@ -417,7 +287,6 @@ export async function buildUsbHostPrep({
   }
   const [report] = returned.reports;
   const phase1Snapshot = await snapshotRegularTree(phase1Root);
-  const phase1Identity = stableDirectoryIdentity(await lstat(phase1Root, { bigint: true }));
   const reportRelativePath = `FROM-DEBIAN/${report.fileName}`;
   if (snapshotHash(phase1Snapshot, reportRelativePath) !== report.sha256) {
     throw new Error("Returned Phase 1 changed after verification.");
@@ -457,23 +326,11 @@ export async function buildUsbHostPrep({
   }
 
   let stagingPath;
-  let cleanupApproval;
   try {
     stagingPath = await mkdtemp(path.join(root, STAGING_PREFIX));
     stagingPath = assertPathWithin(root, stagingPath);
     await assertNoLinkedExistingComponents(stagingPath, "Host-prep staging path");
     await requirePlainDirectory(stagingPath, "Host-prep staging path");
-    cleanupApproval = Object.freeze({
-      usbRoot: root,
-      stagingPath,
-      stagingIdentity: stableDirectoryIdentity(await lstat(stagingPath, { bigint: true })),
-      rootChain,
-      phase1: Object.freeze({
-        path: phase1Root,
-        identity: phase1Identity,
-        snapshot: phase1Snapshot
-      })
-    });
     const stagingBundleRoot = path.join(stagingPath, HOST_PREP_ROOT_NAME);
     await mkdir(stagingBundleRoot);
     for (const relativeDirectory of CHILD_DIRECTORIES) {
@@ -540,7 +397,9 @@ export async function buildUsbHostPrep({
       phase1Unchanged: true
     };
   } catch (error) {
-    if (stagingPath && cleanupApproval) await removeOwnedStaging(cleanupApproval);
+    if (stagingPath) {
+      throw new Error(PRESERVED_STAGING_ERROR, { cause: error });
+    }
     throw error;
   }
 }

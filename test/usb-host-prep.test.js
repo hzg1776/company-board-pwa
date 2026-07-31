@@ -4605,6 +4605,12 @@ test("host prep builder creates the exact sibling without changing returned Phas
       phase1ManifestSha256: expectedPhase1ManifestSha256
     }));
     assert.deepEqual(await snapshotFixtureTree(fixture.phase1Root), before);
+    assert.equal(
+      (await readdir(fixture.usbRoot)).some((name) =>
+        name.startsWith(`${HOST_PREP_ROOT_NAME}.partial-`)
+      ),
+      false
+    );
   } finally {
     await rm(fixture.usbRoot, { recursive: true, force: true });
   }
@@ -4818,7 +4824,7 @@ test("host prep builder rejects linked, oversized, and replaced repository sourc
     }
   });
 
-  await t.test("source replacement after approval", async () => {
+  await t.test("source replacement preserves recognizable residue without recursive cleanup", async () => {
     const fixture = await createReturnedPhase1Fixture();
     const sourceRoot = await createHostPrepBuilderSourceFixture();
     const preflight = path.join(sourceRoot, "scripts", "migration", "preflight-host-prep.sh");
@@ -4833,8 +4839,46 @@ test("host prep builder rejects linked, oversized, and replaced repository sourc
       await waitForHostPrepStagingFile(fixture.usbRoot, "ISOLATION-BOUNDARY.txt");
       await rename(preflight, `${preflight}.approved`);
       await writeFile(preflight, "must-never-be-copied replacement\n");
-      await assert.rejects(build, /source changed during the build/i);
-      assert.equal((await readdir(fixture.usbRoot)).some((name) => name.includes(".partial-")), false);
+      await assert.rejects(build, {
+        message: "Host-prep bundle creation failed safely; builder-owned partial staging was preserved for operator inspection."
+      });
+      const residueNames = (await readdir(fixture.usbRoot)).filter((name) =>
+        name.startsWith(`${HOST_PREP_ROOT_NAME}.partial-`)
+      );
+      assert.equal(residueNames.length, 1);
+      assert.match(
+        residueNames[0],
+        /^Project-A-Migration-Phase-2-Host-Prep\.partial-[A-Za-z0-9_-]{6}$/
+      );
+      const residueRoot = path.join(fixture.usbRoot, residueNames[0]);
+      assert.deepEqual(await readdir(residueRoot), [HOST_PREP_ROOT_NAME]);
+      const residueSnapshot = await snapshotFixtureTree(
+        path.join(residueRoot, HOST_PREP_ROOT_NAME)
+      );
+      const allowedResiduePaths = new Set([
+        "CHECKSUMS",
+        "FROM-DEBIAN",
+        "ISOLATION-BOUNDARY.txt",
+        "PHASE-2-INPUT.json",
+        "PHASE-2-INPUT.json.partial",
+        "README-FIRST.txt",
+        "SECRETS-ENCRYPTED",
+        "TO-DEBIAN",
+        "TO-DEBIAN/apply-host-prep.sh",
+        "TO-DEBIAN/collect-host-prep-evidence.sh",
+        "TO-DEBIAN/preflight-host-prep.sh",
+        "CHECKSUMS/PHASE-2-HOST-PREP.sha256",
+        "CHECKSUMS/PHASE-2-HOST-PREP.sha256.partial"
+      ]);
+      assert.ok(residueSnapshot.length > 0 && residueSnapshot.length <= allowedResiduePaths.size);
+      assert.ok(residueSnapshot.every(([relativePath, type]) =>
+        allowedResiduePaths.has(relativePath) && type !== "symlink"
+      ));
+      const builderSource = await readFile(
+        new URL("../scripts/migration/build-usb-host-prep.mjs", import.meta.url),
+        "utf8"
+      );
+      assert.doesNotMatch(builderSource, /recursive\s*:\s*true/);
       await assert.rejects(lstat(path.join(fixture.usbRoot, HOST_PREP_ROOT_NAME)));
       assert.deepEqual(await snapshotFixtureTree(fixture.phase1Root), phase1Before);
     } finally {
@@ -4843,7 +4887,7 @@ test("host prep builder rejects linked, oversized, and replaced repository sourc
     }
   });
 
-  await t.test("cleanup refuses a substituted predictable staging path", {
+  await t.test("failure preserves a substituted predictable staging path without cleanup", {
     skip: process.platform === "win32"
       ? "Windows prevents renaming the staging directory while its destination file is open."
       : false
@@ -4876,7 +4920,9 @@ test("host prep builder rejects linked, oversized, and replaced repository sourc
       );
       await writeFile(callerMarker, "caller-owned and must survive\n");
 
-      await assert.rejects(build, /cleanup|staging.*changed|source changed/i);
+      await assert.rejects(build, {
+        message: "Host-prep bundle creation failed safely; builder-owned partial staging was preserved for operator inspection."
+      });
       assert.equal(
         await readFile(callerMarker, "utf8"),
         "caller-owned and must survive\n"
