@@ -9,6 +9,7 @@ import {
   lstat,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
@@ -35,6 +36,12 @@ import {
   snapshotRegularTree,
   validatePhase2Input
 } from "../scripts/migration/usb-host-prep-lib.mjs";
+import {
+  approveHostPrepInboundManifest,
+  readStableOpenedHostPrepReceipt,
+  verifyApprovedHostPrepInboundManifest,
+  verifyUsbHostPrep
+} from "../scripts/migration/verify-usb-host-prep.mjs";
 
 const PHASE1_REPORT = "debian-readiness-20260730T192552Z-palziv-prod.txt";
 const PHASE1_REPORT_SHA = "6170af37d51ee151424dc505ae9537c3e78a381bd6867eeb39a40fbd2634a588";
@@ -3914,3 +3921,604 @@ test(
     });
   }
 );
+
+const HOST_PREP_VERIFIER_PATH = path.resolve(
+  "scripts/migration/verify-usb-host-prep.mjs"
+);
+const HOST_PREP_RECEIPT_NAME =
+  "debian-host-prep-20260731T123456Z-fixture-host.txt";
+
+function sha256Bytes(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function writeHostPrepVerifierManifest(fixture) {
+  const lines = [];
+  for (const relativePath of HOST_PREP_INBOUND_FILES) {
+    const bytes = await readFile(path.join(fixture.root, ...relativePath.split("/")));
+    lines.push(`${sha256Bytes(bytes)}  ${relativePath}`);
+  }
+  await writeFile(fixture.manifestPath, `${lines.join("\n")}\n`);
+}
+
+async function createHostPrepVerifierFixture({ returned = false } = {}) {
+  const base = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-verifier-"));
+  const root = path.join(base, HOST_PREP_ROOT_NAME);
+  const checksumDir = path.join(root, "CHECKSUMS");
+  const fromDir = path.join(root, "FROM-DEBIAN");
+  const secretsDir = path.join(root, "SECRETS-ENCRYPTED");
+  const toDir = path.join(root, "TO-DEBIAN");
+  await Promise.all([
+    mkdir(checksumDir, { recursive: true }),
+    mkdir(fromDir, { recursive: true }),
+    mkdir(secretsDir, { recursive: true }),
+    mkdir(toDir, { recursive: true })
+  ]);
+
+  const phase2Input = createPhase2Input({
+    reportFileName: PHASE1_REPORT,
+    reportSha256: PHASE1_REPORT_SHA,
+    phase1ManifestSha256: PHASE1_MANIFEST_SHA
+  });
+  const inputBytes = Buffer.from(`${JSON.stringify(phase2Input, null, 2)}\n`, "utf8");
+  const files = new Map([
+    ["ISOLATION-BOUNDARY.txt", "No secrets. Metadata-only transfer.\n"],
+    ["PHASE-2-INPUT.json", inputBytes],
+    ["README-FIRST.txt", "Run the Phase 2 host-prep scripts offline.\n"],
+    ["TO-DEBIAN/apply-host-prep.sh", "#!/usr/bin/env bash\nexit 0\n"],
+    ["TO-DEBIAN/collect-host-prep-evidence.sh", "#!/usr/bin/env bash\nexit 0\n"],
+    ["TO-DEBIAN/preflight-host-prep.sh", "#!/usr/bin/env bash\nexit 0\n"]
+  ]);
+  for (const [relativePath, contents] of files) {
+    await writeFile(path.join(root, ...relativePath.split("/")), contents);
+  }
+
+  const fixture = {
+    base,
+    root,
+    checksumDir,
+    fromDir,
+    secretsDir,
+    toDir,
+    manifestPath: path.join(root, ...HOST_PREP_MANIFEST_PATH.split("/")),
+    inputPath: path.join(root, "PHASE-2-INPUT.json"),
+    inputBytes,
+    receiptName: HOST_PREP_RECEIPT_NAME,
+    receiptPath: path.join(fromDir, HOST_PREP_RECEIPT_NAME)
+  };
+  await writeHostPrepVerifierManifest(fixture);
+  if (returned) await addHostPrepReceipt(fixture);
+  return fixture;
+}
+
+async function addHostPrepReceipt(
+  fixture,
+  contents = "Project-A Debian Host Preparation Receipt\nClassification: prepared\n"
+) {
+  await writeFile(fixture.receiptPath, contents);
+  const hash = sha256Bytes(Buffer.from(contents));
+  await writeFile(
+    `${fixture.receiptPath}.sha256`,
+    `${hash}  ${fixture.receiptName}\n`
+  );
+  return hash;
+}
+
+async function rewriteHostPrepInput(fixture, mutate, { updateManifest = true } = {}) {
+  const input = JSON.parse(await readFile(fixture.inputPath, "utf8"));
+  mutate(input);
+  const bytes = Buffer.from(`${JSON.stringify(input)}\n`, "utf8");
+  await writeFile(fixture.inputPath, bytes);
+  if (updateManifest) await writeHostPrepVerifierManifest(fixture);
+  return bytes;
+}
+
+async function runHostPrepVerifierCli(args) {
+  try {
+    const result = await execFile(process.execPath, [HOST_PREP_VERIFIER_PATH, ...args], {
+      cwd: path.resolve("."),
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return {
+      code: error.code,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? ""
+    };
+  }
+}
+
+test("host prep verifier accepts only the exact outbound and returned contracts", async (t) => {
+  await t.test("exact outbound tree passes without exposing input metadata", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      const expectedInputHash = sha256Bytes(fixture.inputBytes);
+      assert.deepEqual(
+        await verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        {
+          ok: true,
+          phaseId: HOST_PREP_PHASE_ID,
+          mode: "outbound",
+          inputReferenceSha256: expectedInputHash,
+          inboundFiles: 6,
+          receipt: null
+        }
+      );
+      const cli = await runHostPrepVerifierCli([
+        "--handoff-root", fixture.root,
+        "--mode", "outbound"
+      ]);
+      assert.equal(cli.code, 0, cli.stderr);
+      assert.deepEqual(JSON.parse(cli.stdout), {
+        ok: true,
+        phaseId: HOST_PREP_PHASE_ID,
+        mode: "outbound",
+        inputReferenceSha256: expectedInputHash,
+        inboundFiles: 6,
+        receipt: null
+      });
+      assert.equal(cli.stderr, "");
+      assert.doesNotMatch(cli.stdout, /Project-A-Migration|node-v24|reportFileName/);
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("exact returned one-pair tree passes and returns only its fingerprint", async () => {
+    const fixture = await createHostPrepVerifierFixture({ returned: true });
+    try {
+      const receiptSha256 = sha256Bytes(await readFile(fixture.receiptPath));
+      assert.deepEqual(
+        await verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "returned" }),
+        {
+          ok: true,
+          phaseId: HOST_PREP_PHASE_ID,
+          mode: "returned",
+          inputReferenceSha256: sha256Bytes(fixture.inputBytes),
+          inboundFiles: 6,
+          receipt: { fileName: fixture.receiptName, sha256: receiptSha256 }
+        }
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep verifier rejects checksum tampering and screens receipts without echoing media", async (t) => {
+  await t.test("receipt and sidecar checksum mismatches fail", async () => {
+    for (const mutation of ["receipt", "sidecar"]) {
+      const fixture = await createHostPrepVerifierFixture({ returned: true });
+      try {
+        if (mutation === "receipt") {
+          await writeFile(fixture.receiptPath, "tampered receipt\n");
+        } else {
+          await writeFile(
+            `${fixture.receiptPath}.sha256`,
+            `${"0".repeat(64)}  ${fixture.receiptName}\n`
+          );
+        }
+        await assert.rejects(
+          verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "returned" }),
+          /checksum mismatch/i
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    }
+  });
+
+  await t.test("secret-shaped content produces the fixed line-and-rule warning only", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    const sentinel = "must-never-be-echoed-receipt-secret";
+    try {
+      await addHostPrepReceipt(fixture, `Receipt\nRESEND_API_KEY=${sentinel}\n`);
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "returned" }),
+        (error) => {
+          assert.equal(
+            error.message,
+            "Potential secret material detected at line 2 (secret-assignment); do not open or share this receipt."
+          );
+          assert.doesNotMatch(error.message, new RegExp(sentinel, "i"));
+          return true;
+        }
+      );
+      const cli = await runHostPrepVerifierCli([
+        "--handoff-root", fixture.root,
+        "--mode", "returned"
+      ]);
+      assert.equal(cli.code, 1);
+      assert.equal(cli.stdout, "");
+      assert.equal(
+        cli.stderr,
+        "Potential secret material detected at line 2 (secret-assignment); do not open or share this receipt.\n"
+      );
+      assert.doesNotMatch(cli.stderr, new RegExp(sentinel, "i"));
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep verifier rejects every extra fixed-tree entry", async (t) => {
+  const scenarios = [
+    ["top-level", (fixture) => writeFile(path.join(fixture.root, "attacker-top-level"), "x")],
+    ["checksum", (fixture) => writeFile(path.join(fixture.checksumDir, "attacker.sha256"), "x")],
+    ["TO-DEBIAN", (fixture) => writeFile(path.join(fixture.toDir, "attacker.sh"), "x")],
+    ["secret", (fixture) => writeFile(path.join(fixture.secretsDir, "secret.bin"), "x")],
+    ["return", (fixture) => writeFile(path.join(fixture.fromDir, "attacker-return"), "x")]
+  ];
+  for (const [name, mutate] of scenarios) {
+    await t.test(name, async () => {
+      const fixture = await createHostPrepVerifierFixture();
+      try {
+        await mutate(fixture);
+        await assert.rejects(
+          verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+          (error) => {
+            assert.doesNotMatch(error.message, /attacker/i);
+            return true;
+          }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("host prep verifier rejects wrong entry types and linked components", async (t) => {
+  await t.test("directory in a file slot", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      await rm(fixture.inputPath);
+      await mkdir(fixture.inputPath);
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        /top-level layout/i
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("file in a directory slot", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      await rm(fixture.secretsDir, { recursive: true });
+      await writeFile(fixture.secretsDir, "not a directory\n");
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        /top-level layout/i
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("wrong regular entry type", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      await rm(path.join(fixture.toDir, "apply-host-prep.sh"));
+      await mkdir(path.join(fixture.toDir, "apply-host-prep.sh"));
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        /inbound layout/i
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("POSIX symbolic link", { skip: process.platform === "win32" }, async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      const target = path.join(fixture.base, "outside-input");
+      await writeFile(target, await readFile(fixture.inputPath));
+      await rm(fixture.inputPath);
+      await symlink(target, fixture.inputPath);
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        /top-level layout|symbolic link/i
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("Windows junction", { skip: process.platform !== "win32" }, async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    const outside = path.join(fixture.base, "outside-return");
+    try {
+      await mkdir(outside);
+      await rm(fixture.fromDir, { recursive: true });
+      await symlink(outside, fixture.fromDir, "junction");
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        /top-level layout|symbolic link|junction/i
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("linked ancestor", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    const alias = path.join(path.dirname(fixture.base), `${path.basename(fixture.base)}-alias`);
+    try {
+      await symlink(fixture.base, alias, process.platform === "win32" ? "junction" : "dir");
+      await assert.rejects(
+        verifyUsbHostPrep({
+          handoffRoot: path.join(alias, HOST_PREP_ROOT_NAME),
+          mode: "outbound"
+        }),
+        /ancestor.*(?:symbolic link|junction)/i
+      );
+    } finally {
+      await rm(alias, { recursive: true, force: true });
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep verifier validates manifested Phase 2 metadata before use", async (t) => {
+  const invalidInputs = [
+    ["extra field", (input) => { input.attacker = true; }],
+    ["missing field", (input) => { delete input.node; }],
+    ["invalid field", (input) => { input.schemaVersion = 2; }],
+    ["Node provenance", (input) => { input.node.version = "v24.18.1"; }],
+    ["Phase 1 report hash", (input) => { input.phase1.reportSha256 = "not-a-hash"; }],
+    ["Phase 1 report reference", (input) => { input.phase1.reportFileName = "report.txt"; }]
+  ];
+  for (const [name, mutate] of invalidInputs) {
+    await t.test(name, async () => {
+      const fixture = await createHostPrepVerifierFixture();
+      try {
+        await rewriteHostPrepInput(fixture, mutate);
+        await assert.rejects(
+          verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+          /Phase 2 input|Phase 1|Node provenance/i
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+
+  await t.test("unmanifested Phase 1 hash tampering fails before JSON validation", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      const sentinel = "must-never-be-echoed-input-tamper";
+      await rewriteHostPrepInput(
+        fixture,
+        (input) => { input.phase1.reportSha256 = sentinel; },
+        { updateManifest: false }
+      );
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "outbound" }),
+        (error) => {
+          assert.equal(error.message, "Inbound checksum verification failed.");
+          assert.doesNotMatch(error.message, new RegExp(sentinel, "i"));
+          return true;
+        }
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep verifier requires exactly one safe receipt and sidecar", async (t) => {
+  const scenarios = [
+    ["missing receipt", async (fixture) => {
+      await addHostPrepReceipt(fixture);
+      await rm(fixture.receiptPath);
+    }],
+    ["missing sidecar", async (fixture) => {
+      await addHostPrepReceipt(fixture);
+      await rm(`${fixture.receiptPath}.sha256`);
+    }],
+    ["duplicate report", async (fixture) => {
+      await addHostPrepReceipt(fixture);
+      await writeFile(
+        path.join(fixture.fromDir, "debian-host-prep-20260731T123457Z-other.txt"),
+        "second report\n"
+      );
+    }],
+    ["duplicate sidecar", async (fixture) => {
+      await addHostPrepReceipt(fixture);
+      await writeFile(
+        path.join(fixture.fromDir, "debian-host-prep-20260731T123457Z-other.txt.sha256"),
+        `${"0".repeat(64)}  debian-host-prep-20260731T123457Z-other.txt\n`
+      );
+    }],
+    ["unsafe sidecar path", async (fixture) => {
+      await addHostPrepReceipt(fixture);
+      await writeFile(
+        `${fixture.receiptPath}.sha256`,
+        `${"0".repeat(64)}  ../must-never-be-echoed.txt\n`
+      );
+    }],
+    ["multiple sidecar lines", async (fixture) => {
+      await addHostPrepReceipt(fixture);
+      await writeFile(
+        `${fixture.receiptPath}.sha256`,
+        `${"0".repeat(64)}  ${fixture.receiptName}\n${"1".repeat(64)}  ${fixture.receiptName}\n`
+      );
+    }],
+    ["wrong filename grammar", async (fixture) => {
+      await writeFile(path.join(fixture.fromDir, "host-prep.txt"), "x\n");
+      await writeFile(path.join(fixture.fromDir, "host-prep.txt.sha256"), `${"0".repeat(64)}  host-prep.txt\n`);
+    }],
+    ["temporary file", async (fixture) => {
+      await writeFile(path.join(fixture.fromDir, `${fixture.receiptName}.partial`), "x\n");
+    }]
+  ];
+  for (const [name, mutate] of scenarios) {
+    await t.test(name, async () => {
+      const fixture = await createHostPrepVerifierFixture();
+      try {
+        await mutate(fixture);
+        await assert.rejects(
+          verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "returned" }),
+          (error) => {
+            assert.doesNotMatch(error.message, /must-never-be-echoed|host-prep\.txt/i);
+            return true;
+          }
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+
+  await t.test("oversized checksum", async () => {
+    const fixture = await createHostPrepVerifierFixture({ returned: true });
+    let handle;
+    try {
+      handle = await open(`${fixture.receiptPath}.sha256`, "w");
+      await handle.truncate(2048);
+      await handle.close();
+      handle = undefined;
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "returned" }),
+        /sidecar is too large/i
+      );
+    } finally {
+      await handle?.close();
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("oversized receipt", async () => {
+    const fixture = await createHostPrepVerifierFixture({ returned: true });
+    let handle;
+    try {
+      handle = await open(fixture.receiptPath, "w");
+      await handle.truncate(64 * 1024 * 1024 + 1);
+      await handle.close();
+      handle = undefined;
+      await assert.rejects(
+        verifyUsbHostPrep({ handoffRoot: fixture.root, mode: "returned" }),
+        /safe verification size limit/i
+      );
+    } finally {
+      await handle?.close();
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep verifier rejects manifest and receipt replacement races", async (t) => {
+  await t.test("manifest replacement after bounded approval", async () => {
+    const fixture = await createHostPrepVerifierFixture();
+    try {
+      const approval = await approveHostPrepInboundManifest(fixture.manifestPath);
+      await rename(fixture.manifestPath, `${fixture.manifestPath}.approved`);
+      await writeFile(fixture.manifestPath, "replacement\n");
+      await assert.rejects(
+        verifyApprovedHostPrepInboundManifest({
+          root: fixture.root,
+          manifestPath: fixture.manifestPath,
+          approval
+        }),
+        /manifest changed during verification/i
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("receipt basename replacement after approval and open", async () => {
+    const fixture = await createHostPrepVerifierFixture({ returned: true });
+    let handle;
+    try {
+      const approvedMetadata = await lstat(fixture.receiptPath, { bigint: true });
+      const approvedBytes = await readFile(fixture.receiptPath);
+      handle = await open(fixture.receiptPath, "r");
+      await rename(fixture.receiptPath, `${fixture.receiptPath}.approved`);
+      await writeFile(fixture.receiptPath, "replacement that must not be screened\n");
+      await assert.rejects(
+        readStableOpenedHostPrepReceipt({
+          handle,
+          receiptPath: fixture.receiptPath,
+          approvedMetadata,
+          expectedSha256: sha256Bytes(approvedBytes)
+        }),
+        /receipt changed during verification/i
+      );
+    } finally {
+      await handle?.close();
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  });
+});
+
+test("host prep verifier CLI rejects ambiguous roots, modes, and arguments", async () => {
+  const fixture = await createHostPrepVerifierFixture();
+  try {
+    const usage = `Usage: node scripts/migration/verify-usb-host-prep.mjs --handoff-root <absolute path> --mode outbound|returned\n`;
+    const scenarios = [
+      [["--handoff-root", HOST_PREP_ROOT_NAME, "--mode", "outbound"], /absolute/i],
+      [["--mode", "outbound", "--mode", "returned"], new RegExp(usage.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))],
+      [["--handoff-root", fixture.root, "--mode", "unknown"], /outbound or returned/i],
+      [["--handoff-root", fixture.root, "--mode", "outbound", "extra"], new RegExp(usage.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))]
+    ];
+    for (const [args, expected] of scenarios) {
+      const result = await runHostPrepVerifierCli(args);
+      assert.equal(result.code, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, expected);
+    }
+
+    const wrongRoot = path.join(fixture.base, "wrong-root-name");
+    await rename(fixture.root, wrongRoot);
+    await assert.rejects(
+      verifyUsbHostPrep({ handoffRoot: wrongRoot, mode: "outbound" }),
+      /root name/i
+    );
+  } finally {
+    await rm(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test("host prep verifier preserves acceptance of the unchanged returned Phase 1 fixture", async () => {
+  const usbRoot = await mkdtemp(path.join(os.tmpdir(), "project-a-phase1-verifier-regression-"));
+  try {
+    const built = await runHostPrepVerifierCliForScript(
+      path.resolve("scripts/migration/build-usb-handoff.mjs"),
+      ["--usb-root", usbRoot]
+    );
+    assert.equal(built.code, 0, built.stderr);
+    const handoff = path.join(usbRoot, "Project-A-Migration");
+    const reportName = "debian-readiness-20260729T160000Z-palziv-prod.txt";
+    const reportPath = path.join(handoff, "FROM-DEBIAN", reportName);
+    const report = "## Collection\nHostname: palziv-prod\nNode: v24.18.0\n";
+    await writeFile(reportPath, report);
+    await writeFile(`${reportPath}.sha256`, `${sha256Bytes(report)}  ${reportName}\n`);
+    const verified = await runHostPrepVerifierCliForScript(
+      path.resolve("scripts/migration/verify-usb-handoff.mjs"),
+      ["--handoff-root", handoff, "--mode", "returned"]
+    );
+    assert.equal(verified.code, 0, verified.stderr);
+    assert.equal(JSON.parse(verified.stdout).reports.length, 1);
+  } finally {
+    await rm(usbRoot, { recursive: true, force: true });
+  }
+});
+
+async function runHostPrepVerifierCliForScript(script, args) {
+  try {
+    const result = await execFile(process.execPath, [script, ...args], {
+      cwd: path.resolve("."),
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return { code: error.code, stdout: error.stdout ?? "", stderr: error.stderr ?? "" };
+  }
+}
