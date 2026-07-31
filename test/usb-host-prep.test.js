@@ -291,6 +291,7 @@ async function createHostPrepFixture({
   const bin = path.join(base, "bin");
   const stage = path.join(base, "stage");
   const scriptPath = path.join(stage, "TO-DEBIAN", "preflight-host-prep.sh");
+  const npmNodeMarker = path.join(base, "exact-node-received-npm-cli");
   await Promise.all([
     mkdir(path.join(root, "etc"), { recursive: true }),
     mkdir(path.join(root, "proc"), { recursive: true }),
@@ -317,8 +318,23 @@ async function createHostPrepFixture({
   if (prepared || partialNode) {
     const versionRoot = path.join(root, "opt", "node-v24.18.0-linux-x64");
     await mkdir(path.join(versionRoot, "bin"), { recursive: true });
-    await writeExecutable(path.join(versionRoot, "bin", "node"), "printf '%s\\n' v24.18.0\n");
+    await writeExecutable(
+      path.join(versionRoot, "bin", "node"),
+      exactNodeFixtureBody(npmNodeMarker)
+    );
     if (prepared) {
+      await mkdir(path.join(versionRoot, "lib", "node_modules", "npm", "bin"), {
+        recursive: true
+      });
+      await writeFile(
+        path.join(versionRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+        '#!/usr/bin/env node\nprocess.stdout.write("11.9.0\\n");\n',
+        { mode: 0o755 }
+      );
+      await symlink(
+        "../lib/node_modules/npm/bin/npm-cli.js",
+        path.join(versionRoot, "bin", "npm")
+      );
       await symlink("/opt/node-v24.18.0-linux-x64", path.join(root, "opt", "node"));
     }
   }
@@ -382,12 +398,13 @@ esac
   -c:%U:%G)
     case "\${3-}" in
       */opt/node) printf '%s\\n' ${badNodeLinkOwner ? "fixture:fixture" : "root:root"} ;;
+      */opt/node-v24.18.0-linux-x64/bin/npm) printf '%s\\n' root:root ;;
       *) exit 95 ;;
     esac
     ;;
   -Lc:%U:%G:%a)
     case "\${3-}" in
-      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin|*/opt/node-v24.18.0-linux-x64/bin/node) printf '%s\\n' root:root:755 ;;
+      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin|*/opt/node-v24.18.0-linux-x64/bin/node|*/opt/node-v24.18.0-linux-x64/lib|*/opt/node-v24.18.0-linux-x64/lib/node_modules|*/opt/node-v24.18.0-linux-x64/lib/node_modules/npm|*/opt/node-v24.18.0-linux-x64/lib/node_modules/npm/bin|*/opt/node-v24.18.0-linux-x64/lib/node_modules/npm/bin/npm-cli.js) printf '%s\\n' root:root:755 ;;
       */opt/palziv|*/opt/palziv/releases|*/var/backups/palziv|*/etc/palziv) printf '%s\\n' root:palziv:750 ;;
       */var/lib/palziv|*/var/lib/palziv/data) printf '%s\\n' palziv:palziv:700 ;;
       *) exit 94 ;;
@@ -396,9 +413,41 @@ esac
   *) exit 96 ;;
 esac
 `,
-    jq: `if test "\${1-}" = -e; then
-  test "\${2-}" = -r
-  shift 2
+    jq: `if test "\${1-}" = --stream; then
+  test "$#" -eq 5
+  test "$2" = -s
+  test "$3" = -e
+  token_path=$5
+  /usr/bin/node - "$token_path" <<'NODE'
+const fs = require("node:fs");
+const raw = fs.readFileSync(process.argv[2], "utf8");
+const token = JSON.parse(raw);
+const approved = [
+  "classification",
+  "createdAtEpoch",
+  "manifestFingerprint",
+  "phaseId",
+  "schemaVersion",
+  "stageRoot"
+];
+const occurrences = [...raw.matchAll(/"(classification|createdAtEpoch|manifestFingerprint|phaseId|schemaVersion|stageRoot)"\\s*:/g)]
+  .map((match) => match[1])
+  .sort();
+if (
+  !token ||
+  Array.isArray(token) ||
+  occurrences.join("\\n") !== approved.slice().sort().join("\\n")
+) {
+  process.exit(1);
+}
+process.stdout.write("true\\n");
+NODE
+  exit
+fi
+if test "\${1-}" = -s; then
+  test "\${2-}" = -e
+  test "\${3-}" = -r
+  shift 3
   phase_id=
   fingerprint=
   stage=
@@ -515,12 +564,16 @@ printf '{"schemaVersion":1,"phaseId":"%s","manifestFingerprint":"%s","stageRoot"
     `${manifestLines.join("\n")}\n`,
     { mode: 0o600 }
   );
-  return { base, root, bin, stage, scriptPath };
+  return { base, root, bin, stage, scriptPath, npmNodeMarker };
 }
 
 async function readMutationLog(fixture) {
+  return readHostPrepLog(fixture.mutationLog);
+}
+
+async function readHostPrepLog(logPath) {
   try {
-    return (await readFile(fixture.mutationLog, "utf8"))
+    return (await readFile(logPath, "utf8"))
       .trim()
       .split("\n")
       .filter(Boolean);
@@ -541,6 +594,40 @@ function mutationLogger(name, logPath) {
 `;
 }
 
+function exactNodeFixtureBody(npmMarker) {
+  return `case "$#" in
+  1)
+    test "$1" = --version
+    printf '%s\\n' v24.18.0
+    ;;
+  2)
+    case "$1" in
+      */lib/node_modules/npm/bin/npm-cli.js) ;;
+      *) exit 94 ;;
+    esac
+    test "$2" = --version
+    : > ${shellSingleQuote(npmMarker)}
+    printf '%s\\n' 11.9.0
+    ;;
+  *) exit 93 ;;
+esac
+`;
+}
+
+function sameSizeSourceRacePayload(byteLength, markerPath) {
+  const prefix = [
+    "#!/usr/bin/env bash",
+    `: > ${shellSingleQuote(markerPath)}`,
+    "return 97 2>/dev/null || exit 97",
+    "#"
+  ].join("\n");
+  const suffixLength = byteLength - Buffer.byteLength(prefix) - 1;
+  assert.ok(suffixLength >= 0);
+  const payload = `${prefix}${"x".repeat(suffixLength)}\n`;
+  assert.equal(Buffer.byteLength(payload), byteLength);
+  return payload;
+}
+
 async function createHostPrepNodeArchive(fixture, kind = "valid") {
   const archiveSource = path.join(fixture.base, `archive-source-${kind}`);
   const archiveRoot = path.join(archiveSource, "node-v24.18.0-linux-x64");
@@ -551,12 +638,17 @@ async function createHostPrepNodeArchive(fixture, kind = "valid") {
   });
   await writeExecutable(
     path.join(archiveRoot, "bin", "node"),
-    "printf '%s\\n' v24.18.0\n"
+    exactNodeFixtureBody(fixture.npmNodeMarker)
   );
   await chmod(path.join(archiveRoot, "bin", "node"), 0o755);
-  await writeExecutable(
+  await writeFile(
     path.join(archiveRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-    "printf '%s\\n' 11.9.0\n"
+    '#!/usr/bin/env node\nprocess.stdout.write("11.9.0\\n");\n',
+    { mode: 0o755 }
+  );
+  await chmod(
+    path.join(archiveRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    0o755
   );
   await symlink(
     "../lib/node_modules/npm/bin/npm-cli.js",
@@ -615,22 +707,39 @@ async function installHostPrepApplyStubs(fixture, {
   postMutationTamper = false,
   replaceArchiveAfterInspection = false,
   nodePublicationRace = false,
-  linkPublicationRace = false
+  linkPublicationRace = false,
+  sourceRace = "",
+  curlOutcome = "success"
 } = {}) {
   const stateDirectory = path.join(fixture.base, "apply-state");
   const mutationLog = path.join(fixture.base, "mutation.log");
+  const bootstrapLog = path.join(fixture.base, "bootstrap.log");
   const archivePath = await createHostPrepNodeArchive(fixture, archiveKind);
+  const expectedArchiveSize = (await stat(archivePath)).size;
   const groupMarker = path.join(stateDirectory, "group-created");
   const userMarker = path.join(stateDirectory, "user-created");
   const replacementMarker = path.join(stateDirectory, "replace-after-inspection");
   const tamperMarker = path.join(stateDirectory, "tamper-after-publication");
   const nodeRaceMarker = path.join(stateDirectory, "race-node-publication");
   const linkRaceMarker = path.join(stateDirectory, "race-link-publication");
+  const sourceRaceMarker = path.join(stateDirectory, "race-stage-source");
+  const sourceRacePayload = path.join(stateDirectory, "stage-source-payload");
+  const sourceRaceExecutedMarker = path.join(fixture.base, "stage-source-executed");
   await mkdir(stateDirectory);
   if (replaceArchiveAfterInspection) await writeFile(replacementMarker, "1\n");
   if (postMutationTamper) await writeFile(tamperMarker, "1\n");
   if (nodePublicationRace) await writeFile(nodeRaceMarker, "1\n");
   if (linkPublicationRace) await writeFile(linkRaceMarker, "1\n");
+  if (sourceRace) {
+    assert.match(sourceRace, /^(?:overwrite|replace)$/);
+    const originalPreflight = await readFile(fixture.scriptPath);
+    await writeFile(
+      sourceRacePayload,
+      sameSizeSourceRacePayload(originalPreflight.length, sourceRaceExecutedMarker),
+      { mode: 0o700 }
+    );
+    await writeFile(sourceRaceMarker, `${sourceRace}\n`);
+  }
   if (fixture.initiallyPrepared) {
     await writeFile(groupMarker, "1\n");
     await writeFile(userMarker, "1\n");
@@ -669,21 +778,74 @@ esac
   await writeExecutable(
     path.join(fixture.bin, "apply-curl"),
     `${mutationLogger("curl", mutationLog)}
-test "$#" -eq 14
-test "$1" = --disable
-test "$2" = --fail
-test "$3" = --silent
-test "$4" = --show-error
-test "$5" = --location
-test "$6" = --noproxy
-test "$7" = "*"
-test "$8" = --proto
-test "$9" = "=https"
-test "\${10}" = --proto-redir
-test "\${11}" = "=https"
-test "\${12}" = https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz
-test "\${13}" = --output
-/usr/bin/cp -- ${shellSingleQuote(archivePath)} "\${14}"
+case "$#" in
+  14)
+    test "$1" = --disable
+    test "$2" = --fail
+    test "$3" = --silent
+    test "$4" = --show-error
+    test "$5" = --location
+    test "$6" = --noproxy
+    test "$7" = "*"
+    test "$8" = --proto
+    test "$9" = "=https"
+    test "\${10}" = --proto-redir
+    test "\${11}" = "=https"
+    test "\${12}" = https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz
+    test "\${13}" = --output
+    output_path=\${14}
+    ;;
+  24)
+    test "$1" = --disable
+    test "$2" = --fail
+    test "$3" = --silent
+    test "$4" = --show-error
+    test "$5" = --location
+    test "$6" = --connect-timeout
+    test "$7" = 15
+    test "$8" = --max-time
+    test "$9" = 300
+    test "\${10}" = --speed-limit
+    test "\${11}" = 1024
+    test "\${12}" = --speed-time
+    test "\${13}" = 30
+    test "\${14}" = --max-filesize
+    test "\${15}" = 31511588
+    test "\${16}" = --noproxy
+    test "\${17}" = "*"
+    test "\${18}" = --proto
+    test "\${19}" = "=https"
+    test "\${20}" = --proto-redir
+    test "\${21}" = "=https"
+    test "\${22}" = https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz
+    test "\${23}" = --output
+    output_path=\${24}
+    ;;
+  *) exit 87 ;;
+esac
+case ${shellSingleQuote(curlOutcome)} in
+  success)
+    /usr/bin/cp -- ${shellSingleQuote(archivePath)} "$output_path"
+    ;;
+  oversized)
+    /usr/bin/cp -- ${shellSingleQuote(archivePath)} "$output_path"
+    printf x >> "$output_path"
+    ;;
+  truncated)
+    /usr/bin/head -c -1 -- ${shellSingleQuote(archivePath)} > "$output_path"
+    ;;
+  timeout)
+    exit 28
+    ;;
+  never-ending)
+    if test "$(/bin/bash -c 'ulimit -f')" = unlimited; then
+      /usr/bin/cp -- ${shellSingleQuote(archivePath)} "$output_path"
+      exit 0
+    fi
+    exec /usr/bin/dd if=/dev/zero of="$output_path" bs=65536 count=700 status=none
+    ;;
+  *) exit 89 ;;
+esac
 `
   );
   await writeExecutable(
@@ -736,17 +898,31 @@ test ! -e ${shellSingleQuote(userMarker)}
     path.join(fixture.bin, "apply-install"),
     `${mutationLogger("install", mutationLog)}
 mode=
+owner=
+group=
 last=
 while test "$#" -gt 0; do
   case "$1" in
     -m) mode=$2; shift 2 ;;
-    -o|-g) shift 2 ;;
+    -o) owner=$2; shift 2 ;;
+    -g) group=$2; shift 2 ;;
     -d|--) shift ;;
     *) last=$1; shift ;;
   esac
 done
 test -n "$mode"
+test -n "$owner"
+test -n "$group"
 test -n "$last"
+case "$last" in
+  */opt/palziv|*/opt/palziv/releases|*/var/backups/palziv|*/etc/palziv)
+    test "$owner:$group:$mode" = root:palziv:0750
+    ;;
+  */var/lib/palziv|*/var/lib/palziv/data)
+    test "$owner:$group:$mode" = palziv:palziv:0700
+    ;;
+  *) exit 86 ;;
+esac
 /usr/bin/mkdir -- "$last"
 /usr/bin/chmod "$mode" "$last"
 `
@@ -775,6 +951,15 @@ exec /usr/bin/mv "$@"
   await writeExecutable(
     path.join(fixture.bin, "apply-ln"),
     `${mutationLogger("ln", mutationLog)}
+destination=
+for destination do :; done
+case "$destination" in
+  */opt/node)
+    if test -f ${shellSingleQuote(linkRaceMarker)}; then
+      printf '%s\\n' caller-owned > "$destination"
+    fi
+    ;;
+esac
 /usr/bin/ln "$@"
 if test -f ${shellSingleQuote(tamperMarker)}; then
   /usr/bin/touch ${shellSingleQuote(
@@ -789,9 +974,63 @@ fi
 exec /usr/bin/rm "$@"
 `
   );
+  await writeExecutable(
+    path.join(fixture.bin, "apply-bootstrap-mktemp"),
+    `${mutationLogger("mktemp", bootstrapLog)}
+exec /usr/bin/mktemp "$@"
+`
+  );
+  await writeExecutable(
+    path.join(fixture.bin, "apply-bootstrap-install"),
+    `${mutationLogger("install", bootstrapLog)}
+exec /usr/bin/install "$@"
+`
+  );
+  await writeExecutable(
+    path.join(fixture.bin, "apply-bootstrap-rm"),
+    `${mutationLogger("rm", bootstrapLog)}
+exec /usr/bin/rm "$@"
+`
+  );
+  await writeExecutable(
+    path.join(fixture.bin, "apply-bootstrap-sha256sum"),
+    `${mutationLogger("sha256sum", bootstrapLog)}
+result=$(/usr/bin/sha256sum "$@")
+status=$?
+test "$status" -eq 0 || exit "$status"
+printf '%s\\n' "$result"
+snapshot_argument=
+for snapshot_argument do :; done
+case "$snapshot_argument" in
+  */project-a-host-prep-bootstrap.*/preflight-host-prep.sh)
+    if test -f ${shellSingleQuote(sourceRaceMarker)}; then
+      read -r source_race_mode < ${shellSingleQuote(sourceRaceMarker)}
+      /usr/bin/rm -f -- ${shellSingleQuote(sourceRaceMarker)}
+      case "$source_race_mode" in
+        overwrite)
+          /usr/bin/cp -- ${shellSingleQuote(sourceRacePayload)} ${shellSingleQuote(
+            fixture.scriptPath
+          )}
+          ;;
+        replace)
+          /usr/bin/mv -- ${shellSingleQuote(sourceRacePayload)} ${shellSingleQuote(
+            fixture.scriptPath
+          )}
+          ;;
+        *) exit 88 ;;
+      esac
+    fi
+    ;;
+esac
+`
+  );
 
   fixture.archivePath = archivePath;
+  fixture.expectedArchiveSize = expectedArchiveSize;
   fixture.mutationLog = mutationLog;
+  fixture.bootstrapLog = bootstrapLog;
+  fixture.sourceRaceExecutedMarker = sourceRaceExecutedMarker;
+  fixture.nodeRaceMarker = nodeRaceMarker;
 }
 
 async function createHostPrepApplyFixture({
@@ -808,6 +1047,7 @@ async function createHostPrepApplyFixture({
   await installHostPrepApplyStubs(fixture, applyStubOptions);
   const preflight = await runHostPrepScript(fixture);
   assert.equal(preflight.code, 0, preflight.stderr);
+  await rm(fixture.npmNodeMarker, { force: true });
   await chmod(fixture.base, 0o711);
   await chmod(fixture.stage, 0o711);
   await chmod(path.join(fixture.stage, "TO-DEBIAN"), 0o711);
@@ -828,6 +1068,10 @@ async function runHostPrepApply(fixture, {
     "PALZIV_HOST_PREP_TEST_MODE=1",
     `PALZIV_HOST_PREP_TEST_ROOT=${fixture.root}`,
     `PALZIV_HOST_PREP_TEST_BIN=${fixture.bin}`,
+    `PALZIV_HOST_PREP_TEST_ARCHIVE_SIZE=${fixture.expectedArchiveSize}`,
+    `PALZIV_HOST_PREP_TEST_MUTATION_LOG=${fixture.mutationLog}`,
+    `PALZIV_HOST_PREP_TEST_BOOTSTRAP_LOG=${fixture.bootstrapLog}`,
+    `PALZIV_HOST_PREP_TEST_NODE_RACE_MARKER=${fixture.nodeRaceMarker}`,
     "/bin/bash"
   ];
   if (privilegedMode) isolatedArguments.push("-p");
@@ -867,6 +1111,44 @@ async function mutateHostPrepToken(fixture, mutate) {
   const token = JSON.parse(await readFile(tokenPath, "utf8"));
   await writeFile(tokenPath, `${JSON.stringify(mutate(token))}\n`, { mode: 0o600 });
   await chmod(tokenPath, 0o600);
+}
+
+async function writeRawHostPrepToken(fixture, contents) {
+  const tokenPath = path.join(fixture.stage, ".host-prep-preflight-ok");
+  await writeFile(tokenPath, contents, { mode: 0o600 });
+  await chmod(tokenPath, 0o600);
+}
+
+async function runSourcedHostPrepWithOverride(fixture, snapshotPath, originalPath) {
+  const argumentsList = [
+    "-i",
+    "HOME=/root",
+    "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+    "PALZIV_HOST_PREP_TEST_MODE=1",
+    `PALZIV_HOST_PREP_TEST_ROOT=${fixture.root}`,
+    `PALZIV_HOST_PREP_TEST_BIN=${fixture.bin}`,
+    `PALZIV_HOST_PREP_ORIGINAL_SOURCE=${originalPath}`,
+    "/bin/bash",
+    "-p",
+    "-c",
+    '. "$1"',
+    "bash",
+    snapshotPath
+  ];
+  try {
+    const result = await execFile("/usr/bin/env", argumentsList, {
+      cwd: fixture.stage,
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return {
+      code: error.code,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? ""
+    };
+  }
 }
 
 async function addLinkedContent(root) {
@@ -1734,12 +2016,13 @@ esac
           /usr/bin/cp ${shellSingleQuote(replacementNode)} ${shellSingleQuote(nodePath)}
         fi
         ;;
+      */opt/node-v24.18.0-linux-x64/bin/npm) printf '%s\\n' root:root ;;
       *) exit 95 ;;
     esac
     ;;
   -Lc:%U:%G:%a)
     case "\${3-}" in
-      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin|*/opt/node-v24.18.0-linux-x64/bin/node) printf '%s\\n' root:root:755 ;;
+      */opt/node-v24.18.0-linux-x64|*/opt/node-v24.18.0-linux-x64/bin|*/opt/node-v24.18.0-linux-x64/bin/node|*/opt/node-v24.18.0-linux-x64/lib|*/opt/node-v24.18.0-linux-x64/lib/node_modules|*/opt/node-v24.18.0-linux-x64/lib/node_modules/npm|*/opt/node-v24.18.0-linux-x64/lib/node_modules/npm/bin|*/opt/node-v24.18.0-linux-x64/lib/node_modules/npm/bin/npm-cli.js) printf '%s\\n' root:root:755 ;;
       */opt/palziv|*/opt/palziv/releases|*/var/backups/palziv|*/etc/palziv) printf '%s\\n' root:palziv:750 ;;
       */var/lib/palziv|*/var/lib/palziv/data) printf '%s\\n' palziv:palziv:700 ;;
       *) exit 94 ;;
@@ -2341,6 +2624,75 @@ test(
 );
 
 test(
+  "host prep preflight override accepts only a verified privileged bootstrap snapshot",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    await t.test("the stage preflight cannot declare itself as a bootstrap snapshot", async () => {
+      const fixture = await createHostPrepFixture();
+      try {
+        const result = await runSourcedHostPrepWithOverride(
+          fixture,
+          fixture.scriptPath,
+          fixture.scriptPath
+        );
+        assert.notEqual(result.code, 0);
+        assert.equal(result.stdout, "");
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("a root-owned 0600 copy outside the bootstrap directory is rejected", async () => {
+      const fixture = await createHostPrepFixture();
+      const invalidSnapshot = path.join(fixture.base, "preflight-host-prep.snapshot");
+      try {
+        await copyFile(fixture.scriptPath, invalidSnapshot);
+        await chmod(invalidSnapshot, 0o600);
+        const result = await runSourcedHostPrepWithOverride(
+          fixture,
+          invalidSnapshot,
+          fixture.scriptPath
+        );
+        assert.notEqual(result.code, 0);
+        assert.equal(result.stdout, "");
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+  }
+);
+
+test(
+  "host prep apply sources only a verified snapshot across original-source races",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    for (const sourceRace of ["overwrite", "replace"]) {
+      await t.test(sourceRace, async () => {
+        const fixture = await createHostPrepApplyFixture({
+          applyStubOptions: { sourceRace }
+        });
+        try {
+          const result = await runHostPrepApply(fixture);
+          assertBoundedApplyFailure(result);
+          await assert.rejects(lstat(fixture.sourceRaceExecutedMarker), {
+            code: "ENOENT"
+          });
+          assert.deepEqual(await readMutationLog(fixture), []);
+          assert.equal(
+            (await readdir(fixture.base))
+              .filter((name) => name.startsWith("project-a-host-prep-bootstrap."))
+              .length,
+            0
+          );
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+);
+
+test(
   "host prep apply rejects invocation token bundle and changed-host failures before mutation",
   { skip: process.platform !== "linux" },
   async (t) => {
@@ -2447,6 +2799,50 @@ test(
 );
 
 test(
+  "host prep apply receipt parser is bounded duplicate-aware and single-document",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    const cases = [
+      [
+        "duplicate top-level key",
+        (valid) =>
+          valid.replace(
+            '{"schemaVersion":1,',
+            '{"phaseId":"debian-host-prep-v1","schemaVersion":1,'
+          )
+      ],
+      ["multiple JSON documents", (valid) => `${valid.trim()}\n${valid}`],
+      ["oversized otherwise-valid receipt", (valid) => `${valid.trim()}${" ".repeat(4097)}\n`],
+      ["missing final LF", (valid) => valid.trimEnd()],
+      ["carriage return", (valid) => valid.replace(/\n$/, "\r\n")],
+      [
+        "NUL byte",
+        (valid) => Buffer.concat([Buffer.from(valid.trimEnd()), Buffer.from([0]), Buffer.from("\n")])
+      ],
+      ["malformed JSON", () => '{"schemaVersion":1,\n']
+    ];
+
+    for (const [name, mutate] of cases) {
+      await t.test(name, async () => {
+        const fixture = await createHostPrepApplyFixture();
+        try {
+          const valid = await readFile(
+            path.join(fixture.stage, ".host-prep-preflight-ok"),
+            "utf8"
+          );
+          await writeRawHostPrepToken(fixture, mutate(valid));
+          const result = await runHostPrepApply(fixture);
+          assertBoundedApplyFailure(result);
+          assert.deepEqual(await readMutationLog(fixture), []);
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+);
+
+test(
   "host prep apply performs only the exact clean-host mutation allowlist",
   { skip: process.platform !== "linux" },
   async () => {
@@ -2459,49 +2855,47 @@ test(
         '{"ok":true,"phaseId":"debian-host-prep-v1","classification":"prepared","changed":true}\n'
       );
       assert.equal(result.stderr, "");
+      await lstat(fixture.npmNodeMarker);
 
       const log = await readMutationLog(fixture);
-      assert.equal(log.filter((line) => line === "apt-get\tupdate").length, 1);
-      assert.equal(
-        log.filter((line) =>
-          line ===
-          "apt-get\tinstall\t-y\t--no-install-recommends\tca-certificates\tcurl\tgit\tjq\trsync\ttar\txz-utils"
-        ).length,
-        1
-      );
-      assert.equal(log.filter((line) => line.startsWith("curl\t")).length, 1);
-      assert.match(log.find((line) => line.startsWith("curl\t")), /--noproxy\t\*\t/);
-      assert.equal(log.filter((line) => line.startsWith("sha256sum\t")).length, 1);
-      assert.equal(log.filter((line) => line.startsWith("tar\t") && line.includes("--list")).length, 1);
-      assert.equal(log.filter((line) => line.startsWith("tar\t") && line.includes("--extract")).length, 1);
-      assert.deepEqual(
-        log.filter((line) => line.startsWith("addgroup\t")),
-        ["addgroup\t--system\tpalziv"]
-      );
-      assert.deepEqual(
-        log.filter((line) => line.startsWith("adduser\t")),
-        [
-          "adduser\t--system\t--ingroup\tpalziv\t--home\t/var/lib/palziv\t--no-create-home\t--shell\t/usr/sbin/nologin\tpalziv"
-        ]
-      );
-      const installs = log.filter((line) => line.startsWith("install\t"));
-      assert.equal(installs.length, 6);
-      for (const suffix of [
-        "/opt/palziv",
-        "/opt/palziv/releases",
-        "/var/lib/palziv",
-        "/var/lib/palziv/data",
-        "/var/backups/palziv",
-        "/etc/palziv"
-      ]) {
-        assert.equal(installs.filter((line) => line.endsWith(suffix)).length, 1);
+      const escapedRoot = fixture.root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const exactLogPatterns = [
+        new RegExp(`^mktemp\\t-d\\t${escapedRoot}/var/tmp/project-a-host-prep\\.XXXXXXXX$`),
+        /^apt-get\tupdate$/,
+        /^apt-get\tinstall\t-y\t--no-install-recommends\tca-certificates\tcurl\tgit\tjq\trsync\ttar\txz-utils$/,
+        new RegExp(
+          `^curl\\t--disable\\t--fail\\t--silent\\t--show-error\\t--location\\t--connect-timeout\\t15\\t--max-time\\t300\\t--speed-limit\\t1024\\t--speed-time\\t30\\t--max-filesize\\t31511588\\t--noproxy\\t\\*\\t--proto\\t=https\\t--proto-redir\\t=https\\thttps://nodejs\\.org/dist/v24\\.18\\.0/node-v24\\.18\\.0-linux-x64\\.tar\\.xz\\t--output\\t${escapedRoot}/var/tmp/project-a-host-prep\\.[A-Za-z0-9]+/node-v24\\.18\\.0-linux-x64\\.tar\\.xz$`
+        ),
+        /^sha256sum\t\/proc\/[0-9]+\/fd\/[0-9]+$/,
+        /^tar\t--list\t--verbose\t--numeric-owner\t--full-time\t--quoting-style=escape\t--file=\/proc\/[0-9]+\/fd\/[0-9]+$/,
+        new RegExp(`^mktemp\\t-d\\t${escapedRoot}/opt/\\.node-v24\\.18\\.0-linux-x64\\.partial\\.XXXXXXXX$`),
+        new RegExp(
+          `^tar\\t--extract\\t--file=/proc/[0-9]+/fd/[0-9]+\\t--directory=${escapedRoot}/opt/\\.node-v24\\.18\\.0-linux-x64\\.partial\\.[A-Za-z0-9]+\\t--no-same-owner\\t--no-same-permissions\\t--delay-directory-restore$`
+        ),
+        /^addgroup\t--system\tpalziv$/,
+        /^adduser\t--system\t--ingroup\tpalziv\t--home\t\/var\/lib\/palziv\t--no-create-home\t--shell\t\/usr\/sbin\/nologin\tpalziv$/,
+        new RegExp(`^install\\t-d\\t-o\\troot\\t-g\\tpalziv\\t-m\\t0750\\t--\\t${escapedRoot}/opt/palziv$`),
+        new RegExp(`^install\\t-d\\t-o\\troot\\t-g\\tpalziv\\t-m\\t0750\\t--\\t${escapedRoot}/opt/palziv/releases$`),
+        new RegExp(`^install\\t-d\\t-o\\tpalziv\\t-g\\tpalziv\\t-m\\t0700\\t--\\t${escapedRoot}/var/lib/palziv$`),
+        new RegExp(`^install\\t-d\\t-o\\tpalziv\\t-g\\tpalziv\\t-m\\t0700\\t--\\t${escapedRoot}/var/lib/palziv/data$`),
+        new RegExp(`^install\\t-d\\t-o\\troot\\t-g\\tpalziv\\t-m\\t0750\\t--\\t${escapedRoot}/var/backups/palziv$`),
+        new RegExp(`^install\\t-d\\t-o\\troot\\t-g\\tpalziv\\t-m\\t0750\\t--\\t${escapedRoot}/etc/palziv$`),
+        new RegExp(
+          `^renameat2\\t${escapedRoot}/opt/\\.node-v24\\.18\\.0-linux-x64\\.partial\\.[A-Za-z0-9]+/node-v24\\.18\\.0-linux-x64\\t${escapedRoot}/opt/node-v24\\.18\\.0-linux-x64$`
+        ),
+        new RegExp(`^ln\\t-s\\t--\\t/opt/node-v24\\.18\\.0-linux-x64\\t${escapedRoot}/opt/node$`),
+        new RegExp(`^rm\\t-rf\\t--\\t${escapedRoot}/opt/\\.node-v24\\.18\\.0-linux-x64\\.partial\\.[A-Za-z0-9]+$`),
+        new RegExp(`^rm\\t-rf\\t--\\t${escapedRoot}/var/tmp/project-a-host-prep\\.[A-Za-z0-9]+$`)
+      ];
+      assert.equal(log.length, exactLogPatterns.length, log.join("\n"));
+      for (let index = 0; index < exactLogPatterns.length; index += 1) {
+        assert.match(log[index], exactLogPatterns[index]);
       }
-      assert.equal(log.filter((line) => line.startsWith("mv\t")).length, 2);
-      assert.equal(log.filter((line) => line.startsWith("ln\t")).length, 1);
       assert.doesNotMatch(
         log.join("\n"),
-        /systemctl|firewall|cloudflare|npm(?:\tinstall|\tci)|server\.js|palzivalerts|itotexpress|proxmox/i
+        /systemctl|firewall|cloudflare|npm(?:\tinstall|\tci)|server\.js|palzivalerts|itotexpress|proxmox|\tmv(?:\t|$)/i
       );
+      assert.ok((await readHostPrepLog(fixture.bootstrapLog)).length >= 4);
 
       const nodeTarget = path.join(fixture.root, "opt", "node-v24.18.0-linux-x64");
       assert.equal((await lstat(nodeTarget)).isDirectory(), true);
@@ -2545,9 +2939,89 @@ test(
       );
       assert.equal(result.stderr, "");
       assert.deepEqual(await readMutationLog(fixture), []);
+      await lstat(fixture.npmNodeMarker);
       assert.deepEqual(await readdir(path.join(fixture.root, "var", "tmp")), []);
     } finally {
       await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep apply independently rejects drift from the prepared Node and npm topology",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    const cases = [
+      [
+        "missing npm CLI",
+        (fixture) =>
+          rm(
+            path.join(
+              fixture.root,
+              "opt",
+              "node-v24.18.0-linux-x64",
+              "lib",
+              "node_modules",
+              "npm",
+              "bin",
+              "npm-cli.js"
+            )
+          )
+      ],
+      [
+        "npm launcher is no longer the exact symlink",
+        async (fixture) => {
+          const npmPath = path.join(
+            fixture.root,
+            "opt",
+            "node-v24.18.0-linux-x64",
+            "bin",
+            "npm"
+          );
+          await rm(npmPath);
+          await writeFile(npmPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        }
+      ]
+    ];
+    for (const [name, mutate] of cases) {
+      await t.test(name, async () => {
+        const fixture = await createHostPrepApplyFixture({ prepared: true });
+        try {
+          await mutate(fixture);
+          const result = await runHostPrepApply(fixture);
+          assertBoundedApplyFailure(result);
+          assert.deepEqual(await readMutationLog(fixture), []);
+          await assert.rejects(lstat(fixture.npmNodeMarker), { code: "ENOENT" });
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+);
+
+test(
+  "host prep apply enforces exact download size and resource bounds before hashing",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    for (const curlOutcome of ["oversized", "truncated", "timeout", "never-ending"]) {
+      await t.test(curlOutcome, async () => {
+        const fixture = await createHostPrepApplyFixture({
+          applyStubOptions: { curlOutcome }
+        });
+        try {
+          const result = await runHostPrepApply(fixture);
+          assertBoundedApplyFailure(result);
+          const log = await readMutationLog(fixture);
+          assert.equal(log.filter((line) => line.startsWith("curl\t")).length, 1);
+          assert.equal(log.filter((line) => line.startsWith("sha256sum\t")).length, 0);
+          assert.equal(log.filter((line) => line.startsWith("tar\t")).length, 0);
+          assert.equal(log.filter((line) => line.startsWith("addgroup\t")).length, 0);
+          assert.deepEqual(await readdir(path.join(fixture.root, "var", "tmp")), []);
+        } finally {
+          await rm(fixture.base, { recursive: true, force: true });
+        }
+      });
     }
   }
 );
@@ -2774,7 +3248,7 @@ test(
         const result = await runHostPrepApply(fixture);
         assertBoundedApplyFailure(result);
         const log = await readMutationLog(fixture);
-        const publicationIndex = log.findLastIndex((line) => line.startsWith("mv\t"));
+        const publicationIndex = log.findLastIndex((line) => line.startsWith("ln\t"));
         assert.ok(publicationIndex >= 0);
         assert.equal(
           log.slice(publicationIndex + 1).every((line) => line.startsWith("rm\t")),

@@ -12,10 +12,56 @@ readonly HOST_PREP_MIN_FREE_BYTES="10737418240" # 10 GiB
 readonly HOST_PREP_NODE_VERSION="v24.18.0"
 readonly HOST_PREP_NODE_DIRECTORY="/opt/node-v24.18.0-linux-x64"
 readonly HOST_PREP_NODE_LINK="/opt/node"
+readonly HOST_PREP_PACKAGE_EXECUTABLE_NAME="n""pm"
+readonly HOST_PREP_PACKAGE_LINK_TARGET="../lib/node_modules/$HOST_PREP_PACKAGE_EXECUTABLE_NAME/bin/${HOST_PREP_PACKAGE_EXECUTABLE_NAME}-cli.js"
+readonly HOST_PREP_PACKAGE_CLI_RELATIVE="lib/node_modules/$HOST_PREP_PACKAGE_EXECUTABLE_NAME/bin/${HOST_PREP_PACKAGE_EXECUTABLE_NAME}-cli.js"
 readonly SAFE_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
 readonly HOST_PREP_MAX_COMMAND_OUTPUT="512"
 
 HOST_PREP_SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+HOST_PREP_ORIGINAL_SOURCE_OVERRIDE="${PALZIV_HOST_PREP_ORIGINAL_SOURCE-}"
+if [[ -n "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" ]]; then
+  HOST_PREP_SNAPSHOT_SOURCE="$HOST_PREP_SCRIPT_SOURCE"
+  [[ "$-" == *p* && EUID -eq 0 && "${BASH_SOURCE[0]}" != "$0" ]] || return 1
+  [[ "$HOST_PREP_SNAPSHOT_SOURCE" == /* &&
+    "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" == /* &&
+    ! "$HOST_PREP_SNAPSHOT_SOURCE" =~ [[:cntrl:]] &&
+    ! "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" =~ [[:cntrl:]] ]] || return 1
+  HOST_PREP_SNAPSHOT_CANONICAL=$(
+    /usr/bin/readlink -e -- "$HOST_PREP_SNAPSHOT_SOURCE" 2>/dev/null
+  ) || return 1
+  HOST_PREP_ORIGINAL_CANONICAL=$(
+    /usr/bin/readlink -e -- "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" 2>/dev/null
+  ) || return 1
+  [[ "$HOST_PREP_SNAPSHOT_CANONICAL" == "$HOST_PREP_SNAPSHOT_SOURCE" &&
+    "$HOST_PREP_ORIGINAL_CANONICAL" == "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" &&
+    -f "$HOST_PREP_SNAPSHOT_SOURCE" &&
+    ! -L "$HOST_PREP_SNAPSHOT_SOURCE" &&
+    -f "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" &&
+    ! -L "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" ]] || return 1
+  HOST_PREP_SNAPSHOT_PARENT="${HOST_PREP_SNAPSHOT_SOURCE%/*}"
+  [[ "$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "$HOST_PREP_SNAPSHOT_SOURCE" 2>/dev/null)" == "0:0:600:regular file" ]] ||
+    return 1
+  [[ "$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "$HOST_PREP_SNAPSHOT_PARENT" 2>/dev/null)" == "0:0:700:directory" ]] ||
+    return 1
+  if [[ "${PALZIV_HOST_PREP_TEST_MODE-}" == "1" ]]; then
+    case "$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE" in
+      /tmp/project-a-host-prep-test.*/stage/TO-DEBIAN/preflight-host-prep.sh) ;;
+      *) return 1 ;;
+    esac
+    HOST_PREP_OVERRIDE_TEST_BASE="${HOST_PREP_ORIGINAL_SOURCE_OVERRIDE%%/stage/TO-DEBIAN/preflight-host-prep.sh}"
+    case "$HOST_PREP_SNAPSHOT_SOURCE" in
+      "$HOST_PREP_OVERRIDE_TEST_BASE"/project-a-host-prep-bootstrap.*/preflight-host-prep.sh) ;;
+      *) return 1 ;;
+    esac
+  else
+    case "$HOST_PREP_SNAPSHOT_SOURCE" in
+      /var/tmp/project-a-host-prep-bootstrap.*/preflight-host-prep.sh) ;;
+      *) return 1 ;;
+    esac
+  fi
+  HOST_PREP_SCRIPT_SOURCE="$HOST_PREP_ORIGINAL_SOURCE_OVERRIDE"
+fi
 if [[ "$HOST_PREP_SCRIPT_SOURCE" != /* ]]; then
   HOST_PREP_SCRIPT_SOURCE="$PWD/$HOST_PREP_SCRIPT_SOURCE"
 fi
@@ -31,6 +77,10 @@ unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
 unset http_proxy https_proxy all_proxy no_proxy
 unset SSL_CERT_FILE SSL_CERT_DIR SSLKEYLOGFILE
 unset PALZIV_HOST_PREP_TEST_MODE PALZIV_HOST_PREP_TEST_ROOT PALZIV_HOST_PREP_TEST_BIN
+unset PALZIV_HOST_PREP_ORIGINAL_SOURCE
+unset HOST_PREP_ORIGINAL_SOURCE_OVERRIDE HOST_PREP_SNAPSHOT_SOURCE
+unset HOST_PREP_SNAPSHOT_CANONICAL HOST_PREP_ORIGINAL_CANONICAL
+unset HOST_PREP_SNAPSHOT_PARENT HOST_PREP_OVERRIDE_TEST_BASE
 umask 077
 
 PATH="$SAFE_PATH"
@@ -921,19 +971,34 @@ host_prep_capture_node_chain() {
   local version_path
   local bin_path
   local node_path
+  local lib_path
+  local node_modules_path
+  local package_root_path
+  local package_bin_path
+  local package_cli_path
   local -n identities_reference="$identities_name"
 
   host_prep_system_path "$HOST_PREP_NODE_DIRECTORY/bin/node" >/dev/null || return 1
   node_path="$HOST_PREP_MAPPED_PATH"
   bin_path="${node_path%/node}"
   version_path="${bin_path%/bin}"
+  lib_path="$version_path/lib"
+  node_modules_path="$lib_path/node_modules"
+  package_root_path="$node_modules_path/$HOST_PREP_PACKAGE_EXECUTABLE_NAME"
+  package_bin_path="$package_root_path/bin"
+  package_cli_path="$version_path/$HOST_PREP_PACKAGE_CLI_RELATIVE"
   [[ "$version_path" == "${HOST_PREP_SYSTEM_ROOT%/}$HOST_PREP_NODE_DIRECTORY" ]] || return 1
   identities_reference=()
   for specification in \
     "${HOST_PREP_SYSTEM_ROOT%/}/opt|directory" \
     "$version_path|directory" \
     "$bin_path|directory" \
-    "$node_path|file"; do
+    "$node_path|file" \
+    "$lib_path|directory" \
+    "$node_modules_path|directory" \
+    "$package_root_path|directory" \
+    "$package_bin_path|directory" \
+    "$package_cli_path|file"; do
     IFS='|' read -r candidate expected_type <<< "$specification"
     [[ -n "$candidate" ]] || candidate="/"
     host_prep_capture_path_identity "$candidate" "$expected_type" || return 1
@@ -942,6 +1007,10 @@ host_prep_capture_node_chain() {
   HOST_PREP_NODE_VERSION_PATH="$version_path"
   HOST_PREP_NODE_BIN_PATH="$bin_path"
   HOST_PREP_NODE_EXECUTABLE_PATH="$node_path"
+  HOST_PREP_PACKAGE_LINK_PATH="$bin_path/$HOST_PREP_PACKAGE_EXECUTABLE_NAME"
+  HOST_PREP_PACKAGE_ROOT_PATH="$package_root_path"
+  HOST_PREP_PACKAGE_BIN_PATH="$package_bin_path"
+  HOST_PREP_PACKAGE_CLI_PATH="$package_cli_path"
 }
 
 host_prep_node_chain_matches() {
@@ -972,59 +1041,111 @@ host_prep_node_is_exact() {
   local bin_path
   local link_path
   local node_path
+  local package_link_path
+  local package_cli_path
   local link_before
   local link_after
   local link_target
+  local package_link_before
+  local package_link_after
+  local package_link_target
+  local package_resolved
+  local first_line
+  local metadata_path
   local -a chain_before=()
 
   host_prep_capture_node_chain chain_before || return 1
   version_path="$HOST_PREP_NODE_VERSION_PATH"
   bin_path="$HOST_PREP_NODE_BIN_PATH"
   node_path="$HOST_PREP_NODE_EXECUTABLE_PATH"
+  package_link_path="$HOST_PREP_PACKAGE_LINK_PATH"
+  package_cli_path="$HOST_PREP_PACKAGE_CLI_PATH"
   host_prep_system_path "$HOST_PREP_NODE_LINK" 1 >/dev/null || return 1
   link_path="$HOST_PREP_MAPPED_PATH"
-  [[ -L "$link_path" ]] || return 1
+  [[ -L "$link_path" && -L "$package_link_path" ]] || return 1
   link_before=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
     return 1
-  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$version_path" ||
-    return 1
-  host_prep_node_chain_matches chain_before || return 1
-  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$bin_path" ||
-    return 1
-  host_prep_node_chain_matches chain_before || return 1
-  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$node_path" ||
-    return 1
-  host_prep_node_chain_matches chain_before || return 1
+  package_link_before=$(
+    /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$package_link_path" 2>/dev/null
+  ) || return 1
+  for metadata_path in \
+    "$version_path" \
+    "$bin_path" \
+    "$node_path" \
+    "$version_path/lib" \
+    "$version_path/lib/node_modules" \
+    "$HOST_PREP_PACKAGE_ROOT_PATH" \
+    "$HOST_PREP_PACKAGE_BIN_PATH" \
+    "$package_cli_path"; do
+    host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$metadata_path" ||
+      return 1
+    host_prep_node_chain_matches chain_before || return 1
+  done
   host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path" || return 1
+  host_prep_node_chain_matches chain_before || return 1
+  host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$package_link_path" ||
+    return 1
   host_prep_node_chain_matches chain_before || return 1
   link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
     return 1
   [[ "$link_before" == "$link_after" ]] || return 1
   link_target=$(/usr/bin/readlink -- "$link_path" 2>/dev/null) || return 1
   [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]] || return 1
+  package_link_after=$(
+    /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$package_link_path" 2>/dev/null
+  ) || return 1
+  [[ "$package_link_after" == "$package_link_before" ]] || return 1
+  package_link_target=$(/usr/bin/readlink -- "$package_link_path" 2>/dev/null) ||
+    return 1
+  [[ "$package_link_target" == "$HOST_PREP_PACKAGE_LINK_TARGET" ]] || return 1
+  package_resolved=$(/usr/bin/readlink -e -- "$package_link_path" 2>/dev/null) || return 1
+  [[ "$package_resolved" == "$package_cli_path" ]] || return 1
+  IFS= read -r first_line < "$package_cli_path" || return 1
+  [[ "$first_line" == '#!/usr/bin/env node' ]] || return 1
+  host_prep_node_chain_matches chain_before || return 1
 
   host_prep_run_path_bounded 64 "$node_path" --version || return 1
   [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
     "$HOST_PREP_BOUNDED_OUTPUT" == "$HOST_PREP_NODE_VERSION"$'\n' ]] || return 1
 
   host_prep_node_chain_matches chain_before || return 1
+  host_prep_run_path_bounded 64 "$node_path" "$package_cli_path" --version || return 1
+  [[ "$HOST_PREP_BOUNDED_STATUS" -eq 0 &&
+    "$HOST_PREP_BOUNDED_OUTPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$'\n'$ ]] || return 1
+  host_prep_node_chain_matches chain_before || return 1
   host_prep_system_path "$HOST_PREP_NODE_LINK" 1 >/dev/null || return 1
-  [[ "$HOST_PREP_MAPPED_PATH" == "$link_path" && -L "$link_path" ]] || return 1
+  [[ "$HOST_PREP_MAPPED_PATH" == "$link_path" &&
+    -L "$link_path" &&
+    -L "$package_link_path" ]] || return 1
   link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
     return 1
   [[ "$link_before" == "$link_after" ]] || return 1
   link_target=$(/usr/bin/readlink -- "$link_path" 2>/dev/null) || return 1
   [[ "$link_target" == "$HOST_PREP_NODE_DIRECTORY" ]] || return 1
-  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$version_path" ||
+  package_link_after=$(
+    /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$package_link_path" 2>/dev/null
+  ) || return 1
+  [[ "$package_link_after" == "$package_link_before" ]] || return 1
+  package_link_target=$(/usr/bin/readlink -- "$package_link_path" 2>/dev/null) ||
     return 1
-  host_prep_node_chain_matches chain_before || return 1
-  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$bin_path" ||
-    return 1
-  host_prep_node_chain_matches chain_before || return 1
-  host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$node_path" ||
-    return 1
-  host_prep_node_chain_matches chain_before || return 1
+  [[ "$package_link_target" == "$HOST_PREP_PACKAGE_LINK_TARGET" ]] || return 1
+  for metadata_path in \
+    "$version_path" \
+    "$bin_path" \
+    "$node_path" \
+    "$version_path/lib" \
+    "$version_path/lib/node_modules" \
+    "$HOST_PREP_PACKAGE_ROOT_PATH" \
+    "$HOST_PREP_PACKAGE_BIN_PATH" \
+    "$package_cli_path"; do
+    host_prep_observer_exact_line "root:root:755" 64 stat -Lc '%U:%G:%a' "$metadata_path" ||
+      return 1
+    host_prep_node_chain_matches chain_before || return 1
+  done
   host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$link_path" || return 1
+  host_prep_node_chain_matches chain_before || return 1
+  host_prep_observer_exact_line "root:root" 64 stat -c '%U:%G' "$package_link_path" ||
+    return 1
   host_prep_node_chain_matches chain_before || return 1
   link_after=$(/usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_path" 2>/dev/null) ||
     return 1
