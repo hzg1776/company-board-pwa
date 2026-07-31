@@ -5191,6 +5191,12 @@ test("host prep instructions provide the stand-alone fail-closed local operator 
     new URL("../deploy/usb-host-prep/ISOLATION-BOUNDARY.txt", import.meta.url),
     "utf8"
   );
+  const preflight = await readFile(HOST_PREP_SCRIPT_URL, "utf8");
+  const apply = await readFile(HOST_PREP_APPLY_SCRIPT_URL, "utf8");
+  const plan = await readFile(
+    new URL("../docs/superpowers/plans/2026-07-30-usb-debian-host-prep.md", import.meta.url),
+    "utf8"
+  );
   assert.match(readme, /Project-A-Migration-Phase-2-Host-Prep/);
   assert.doesNotMatch(readme, /Project-A-Migration(?:\s|["'\/])/);
   assert.match(readme, /before-project-a-host-prep-YYYYMMDD-HHMM/);
@@ -5200,8 +5206,25 @@ test("host prep instructions provide the stand-alone fail-closed local operator 
   assert.match(readme, /sha256sum --check CHECKSUMS\/PHASE-2-HOST-PREP\.sha256/g);
   assert.ok((readme.match(/sha256sum --check CHECKSUMS\/PHASE-2-HOST-PREP\.sha256/g) ?? []).length >= 2);
   assert.match(readme, /mktemp -d "\$HOME\/project-a-host-prep\.XXXXXX"/);
-  assert.match(readme, /\/usr\/bin\/env -i[\s\S]*preflight-host-prep\.sh/);
-  assert.match(readme, /apply-host-prep\.sh --apply/);
+  assert.match(preflight, /\[\[ "\$-" == \*p\* \]\] \|\|/);
+  assert.match(apply, /\[\[ "\$-" == \*p\* \]\] \|\| exit 1/);
+  assert.match(readme, /\/bin\/bash -p TO-DEBIAN\/preflight-host-prep\.sh/);
+  assert.match(readme, /\/bin\/bash -p TO-DEBIAN\/apply-host-prep\.sh --apply/);
+  assert.match(plan, /\/bin\/bash -p TO-DEBIAN\/preflight-host-prep\.sh/);
+  assert.match(plan, /\/bin\/bash -p TO-DEBIAN\/apply-host-prep\.sh --apply/);
+  assert.doesNotMatch(
+    plan,
+    /\/bin\/bash (?!-p\b)TO-DEBIAN\/(?:preflight|apply)-host-prep\.sh/
+  );
+  assert.match(readme, /lsblk -o NAME,PATH,TYPE,FSTYPE,RM,TRAN,PKNAME,MODEL,SERIAL,SIZE/);
+  assert.match(readme, /lsblk -dn -o PKNAME -- "\$USB_DEVICE"/);
+  assert.match(readme, /readlink -e -- "\/dev\/\$USB_PARENT_NAME"/);
+  assert.match(readme, /lsblk -dn -o TYPE,RM,TRAN -- "\$USB_PARENT_DEVICE"/);
+  assert.match(
+    readme,
+    /"\$USB_PARENT_TYPE" == 'disk'[\s\S]*"\$USB_PARENT_RM" == '1'[\s\S]*"\$USB_PARENT_TRAN" == 'usb'/
+  );
+  assert.match(readme, /passthrough[\s\S]*STOP[\s\S]*observed device data[\s\S]*do not weaken/i);
   assert.match(readme, /collect-host-prep-evidence\.sh[\s\\]*--usb-root "\$HANDOFF_ROOT"/);
   assert.match(readme, /noexec[^\n]+does not block \/bin\/bash/i);
   assert.match(readme, /out-of-band fingerprint/i);
@@ -5232,6 +5255,7 @@ async function createHostPrepReadmeHarness(scenario = {}) {
   const home = path.join(base, "home");
   const deviceDirectory = path.join(base, "devices");
   const device = path.join(deviceDirectory, "usb-partition");
+  const parentDevice = path.join(deviceDirectory, "usb-parent");
   const mountPoint = path.join(base, "mount");
   const handoffRoot = path.join(mountPoint, HOST_PREP_ROOT_NAME);
   const stateFile = path.join(base, "mounted.state");
@@ -5248,6 +5272,7 @@ async function createHostPrepReadmeHarness(scenario = {}) {
     mkdir(deviceDirectory)
   ]);
   await writeFile(device, "fixture device\n");
+  await writeFile(parentDevice, "fixture parent device\n");
   await writeFile(deviceInput, `${device}\n`);
   await writeFile(fingerprintInput, `${fingerprint}\n`);
   await writeFile(applyInput, "APPLY\n");
@@ -5314,9 +5339,11 @@ esac
 `);
   await writeHostPrepReadmeExecutable(path.join(fakeBin, "lsblk"), `#!/bin/bash
 case " $* " in
+  *' TYPE,RM,TRAN '*) printf 'disk %s %s\\n' "\${FAKE_PARENT_RM:-1}" "\${FAKE_PARENT_TRAN:-usb}" ;;
+  *' PKNAME '*) printf 'usb-parent\\n' ;;
   *' TYPE '*) printf 'part\\n' ;;
   *' FSTYPE '*) printf '%s\\n' "\${FAKE_DEVICE_FSTYPE:-vfat}" ;;
-  *) printf 'fixture vfat\\n' ;;
+  *) printf 'NAME PATH TYPE FSTYPE RM TRAN PKNAME MODEL SERIAL SIZE\\nusb-partition ${device} part vfat 1 usb usb-parent fixture serial 1G\\n' ;;
 esac
 `);
   await writeHostPrepReadmeExecutable(path.join(fakeBin, "id"), `#!/bin/bash
@@ -5368,6 +5395,18 @@ printf 'sync\\n' >> ${shellSingleQuote(logFile)}
     '[[ "$USB_DEVICE" == /dev/* && -b "$USB_DEVICE" ]]',
     `[[ "$USB_DEVICE" == ${shellSingleQuote(deviceDirectory)}/* && -e "$USB_DEVICE" ]]`
   );
+  script = script.replace(
+    'USB_PARENT_DEVICE="$(readlink -e -- "/dev/$USB_PARENT_NAME")"',
+    `USB_PARENT_DEVICE="$(readlink -e -- ${shellSingleQuote(parentDevice)})"`
+  );
+  script = script.replace(
+    'current_parent_device="$(readlink -e -- "/dev/$current_parent_name")"',
+    `current_parent_device="$(readlink -e -- ${shellSingleQuote(parentDevice)})"`
+  );
+  script = script.replace(
+    '[[ "$USB_PARENT_DEVICE" == /dev/* && -b "$USB_PARENT_DEVICE" ]]',
+    `[[ "$USB_PARENT_DEVICE" == ${shellSingleQuote(deviceDirectory)}/* && -e "$USB_PARENT_DEVICE" ]]`
+  );
   await writeFile(scriptPath, script);
 
   let result;
@@ -5382,6 +5421,8 @@ printf 'sync\\n' >> ${shellSingleQuote(logFile)}
         FAKE_SIGNAL_AFTER_MOUNT: scenario.signalAfterMount ? "1" : "0",
         FAKE_MOUNT_SOURCE: scenario.mountedSource || device,
         FAKE_MOUNT_FSTYPE: scenario.mountedFsType || "vfat",
+        FAKE_PARENT_RM: scenario.parentRemovable || "1",
+        FAKE_PARENT_TRAN: scenario.parentTransport || "usb",
         FAKE_MOUNT_OPTIONS: scenario.mountOptions || "rw,nodev,nosuid,noexec,uid=1001,gid=1002,umask=0077",
         FAKE_CHECKSUM_FAIL_AT: scenario.checksumFailAt || "0",
         FAKE_COPY_FAIL: scenario.copyFails ? "1" : "0",
@@ -5434,6 +5475,8 @@ test("host prep instructions fail closed across mount, copy, command, sync, unmo
     ["redirected mountpoint", { redirectedMount: true }, /mountpoint/i],
     ["non-directory mountpoint", { mountPointFile: true }, /mountpoint/i],
     ["already-mounted target", { alreadyMounted: true }, /already mounted/i],
+    ["non-removable parent", { parentRemovable: "0" }, /approved removable USB identity/i],
+    ["non-USB parent", { parentTransport: "sata" }, /approved removable USB identity/i],
     ["failed mount", { mountFails: true }, /mount/i],
     ["wrong mounted source", { mountedSource: "/wrong/source" }, /mounted source/i],
     ["wrong mounted filesystem", { mountedFsType: "ext4" }, /filesystem/i],

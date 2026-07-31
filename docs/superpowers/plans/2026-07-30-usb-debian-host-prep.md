@@ -298,7 +298,7 @@ git commit -m "feat: add host prep integrity profile"
 
 **Interfaces:**
 - Consumes: a locally copied Phase 2 root with a verified manifest
-- CLI: `/bin/bash TO-DEBIAN/preflight-host-prep.sh`
+- CLI: `/bin/bash -p TO-DEBIAN/preflight-host-prep.sh`
 - Produces: `<stage-root>/.host-prep-preflight-ok` only on `clean` or `already-prepared`
 - Produces shell functions when sourced: `host_prep_stage_root`, `host_prep_manifest_fingerprint`, `host_prep_classify`, `host_prep_verify_safety_state`
 - Test-only fixture boundary: `PALZIV_HOST_PREP_TEST_MODE=1`, `PALZIV_HOST_PREP_TEST_ROOT=/tmp/project-a-host-prep-test.*`, and `PALZIV_HOST_PREP_TEST_BIN=/tmp/project-a-host-prep-test.*`
@@ -462,7 +462,7 @@ git commit -m "feat: add Debian host prep preflight"
 
 **Interfaces:**
 - Consumes: sourced functions and a fresh token from `preflight-host-prep.sh`
-- CLI: `sudo /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash TO-DEBIAN/apply-host-prep.sh --apply`
+- CLI: `sudo /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -p TO-DEBIAN/apply-host-prep.sh --apply`
 - Produces: exact Node.js installation, `palziv` account/group, and six directories
 - Mutates no USB file and emits no success receipt
 
@@ -956,12 +956,12 @@ sha256sum --check CHECKSUMS/PHASE-2-HOST-PREP.sha256
 /usr/bin/env -i \
   HOME="$HOME" \
   PATH="/usr/sbin:/usr/bin:/sbin:/bin" \
-  /bin/bash TO-DEBIAN/preflight-host-prep.sh
+  /bin/bash -p TO-DEBIAN/preflight-host-prep.sh
 
 sudo /usr/bin/env -i \
   HOME=/root \
   PATH="/usr/sbin:/usr/bin:/sbin:/bin" \
-  /bin/bash TO-DEBIAN/apply-host-prep.sh --apply
+  /bin/bash -p TO-DEBIAN/apply-host-prep.sh --apply
 
 /usr/bin/env -i \
   HOME="$HOME" \

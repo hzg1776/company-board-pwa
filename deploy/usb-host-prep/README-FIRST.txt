@@ -23,8 +23,13 @@ pattern immediately before the --apply command:
 
 before-project-a-host-prep-YYYYMMDD-HHMM
 
-Run lsblk -f locally. Identify the expected removable FAT32 partition without
-guessing. Stop if it could be the system disk, a data disk, or a backup disk.
+Run the detailed lsblk view in the block locally. Identify the expected
+removable FAT32 partition without guessing. Stop if it could be the system disk,
+a data disk, or a backup disk. The block resolves the partition's PKNAME parent
+and requires TYPE=disk, RM=1, and TRAN=usb before mounting. If USB passthrough
+reports different RM/TRAN semantics, STOP and record the observed device data.
+Adapt this exact identity check to the observed passthrough identity; do not
+weaken or bypass it.
 The command block below prompts for that literal partition and mounts it with
 nodev,nosuid,noexec and a restrictive mask. The noexec option does not block /bin/bash script.sh.
 Authenticity comes from the out-of-band fingerprint, the
@@ -44,6 +49,8 @@ umask 077
 readonly MOUNT_POINT='/mnt/project-a-host-prep-usb'
 readonly HANDOFF_ROOT="$MOUNT_POINT/Project-A-Migration-Phase-2-Host-Prep"
 USB_DEVICE=''
+USB_PARENT_NAME=''
+USB_PARENT_DEVICE=''
 MOUNT_ATTEMPTED=0
 UNMOUNT_ATTEMPTED=0
 STAGE_ROOT=''
@@ -79,6 +86,30 @@ verify_mount_source() {
     stop 'the mounted source could not be canonicalized.'
   [[ "$source" == "$USB_DEVICE" ]] ||
     stop 'the mounted source does not match the selected partition.'
+}
+
+verify_removable_parent() {
+  local current_parent_name=''
+  local current_parent_device=''
+  local current_identity=''
+  local current_type=''
+  local current_rm=''
+  local current_tran=''
+  current_parent_name="$(lsblk -dn -o PKNAME -- "$USB_DEVICE")" ||
+    stop 'the selected partition parent could not be re-read.'
+  [[ "$current_parent_name" == "$USB_PARENT_NAME" ]] ||
+    stop 'the selected partition parent changed.'
+  current_parent_device="$(readlink -e -- "/dev/$current_parent_name")" ||
+    stop 'the selected partition parent could not be re-canonicalized.'
+  [[ "$current_parent_device" == "$USB_PARENT_DEVICE" ]] ||
+    stop 'the selected partition parent identity changed.'
+  current_identity="$(lsblk -dn -o TYPE,RM,TRAN -- "$current_parent_device")" ||
+    stop 'the selected partition parent identity could not be re-read.'
+  [[ "$current_identity" != *$'\n'* ]] ||
+    stop 'the selected partition resolved to an ambiguous parent identity.'
+  read -r current_type current_rm current_tran <<< "$current_identity"
+  [[ "$current_type" == 'disk' && "$current_rm" == '1' && "$current_tran" == 'usb' ]] ||
+    stop 'the selected partition parent is not the approved removable USB identity.'
 }
 
 remove_owned_stage_once() {
@@ -137,13 +168,30 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-lsblk -f || stop 'lsblk failed.'
+lsblk -o NAME,PATH,TYPE,FSTYPE,RM,TRAN,PKNAME,MODEL,SERIAL,SIZE || stop 'lsblk failed.'
 IFS= read -r -p 'Enter the exact removable FAT32 partition shown by lsblk: ' USB_DEVICE < /dev/tty ||
   stop 'the partition could not be read.'
 USB_DEVICE="$(readlink -e -- "$USB_DEVICE")" || stop 'the partition could not be canonicalized.'
 [[ "$USB_DEVICE" == /dev/* && -b "$USB_DEVICE" ]] || stop 'the selection is not a block device beneath /dev.'
 [[ "$(lsblk -dn -o TYPE -- "$USB_DEVICE")" == 'part' ]] || stop 'the selection is not a partition.'
 [[ "$(lsblk -dn -o FSTYPE -- "$USB_DEVICE")" == 'vfat' ]] || stop 'the selected partition is not FAT32/vfat.'
+USB_PARENT_NAME="$(lsblk -dn -o PKNAME -- "$USB_DEVICE")" ||
+  stop 'the selected partition parent could not be read.'
+[[ "$USB_PARENT_NAME" =~ ^[A-Za-z0-9._-]+$ ]] ||
+  stop 'the selected partition parent name is empty or ambiguous.'
+USB_PARENT_DEVICE="$(readlink -e -- "/dev/$USB_PARENT_NAME")" ||
+  stop 'the selected partition parent could not be canonicalized.'
+[[ "$USB_PARENT_DEVICE" == /dev/* && -b "$USB_PARENT_DEVICE" ]] ||
+  stop 'the selected partition parent is not a block device beneath /dev.'
+USB_PARENT_IDENTITY="$(lsblk -dn -o TYPE,RM,TRAN -- "$USB_PARENT_DEVICE")" ||
+  stop 'the selected partition parent identity could not be read.'
+[[ "$USB_PARENT_IDENTITY" != *$'\n'* ]] ||
+  stop 'the selected partition resolved to an ambiguous parent identity.'
+read -r USB_PARENT_TYPE USB_PARENT_RM USB_PARENT_TRAN <<< "$USB_PARENT_IDENTITY"
+[[ "$USB_PARENT_TYPE" == 'disk' && "$USB_PARENT_RM" == '1' && "$USB_PARENT_TRAN" == 'usb' ]] ||
+  stop 'the selected partition parent is not the approved removable USB identity; STOP and adapt from observed device data, do not weaken the check.'
+printf 'Approved USB partition %s has parent %s (TYPE=%s RM=%s TRAN=%s).\n' \
+  "$USB_DEVICE" "$USB_PARENT_DEVICE" "$USB_PARENT_TYPE" "$USB_PARENT_RM" "$USB_PARENT_TRAN"
 
 FINDMNT_STATUS=0
 findmnt -rn --mountpoint "$MOUNT_POINT" >/dev/null 2>&1 || FINDMNT_STATUS=$?
@@ -166,6 +214,7 @@ readonly OPERATOR_UID OPERATOR_GID
 REQUESTED_OPTIONS="nodev,nosuid,noexec,uid=$OPERATOR_UID,gid=$OPERATOR_GID,umask=077"
 readonly REQUESTED_OPTIONS
 require_literal_mount_directory
+verify_removable_parent
 MOUNT_ATTEMPTED=1
 sudo mount -t vfat -o "$REQUESTED_OPTIONS" -- "$USB_DEVICE" "$MOUNT_POINT" ||
   stop 'the restrictive vfat mount failed.'
@@ -209,7 +258,7 @@ sha256sum --check CHECKSUMS/PHASE-2-HOST-PREP.sha256 || stop 'local checksum ver
 /usr/bin/env -i \
   HOME="$HOME" \
   PATH="/usr/sbin:/usr/bin:/sbin:/bin" \
-  /bin/bash TO-DEBIAN/preflight-host-prep.sh || stop 'host preparation preflight failed.'
+  /bin/bash -p TO-DEBIAN/preflight-host-prep.sh || stop 'host preparation preflight failed.'
 
 printf '%s\n' 'STOP unless the Proxmox snapshot before-project-a-host-prep-YYYYMMDD-HHMM now exists.'
 IFS= read -r -p 'Type APPLY after confirming the snapshot exists: ' APPLY_CONFIRMATION < /dev/tty ||
@@ -220,7 +269,7 @@ set +e
 sudo /usr/bin/env -i \
   HOME=/root \
   PATH="/usr/sbin:/usr/bin:/sbin:/bin" \
-  /bin/bash TO-DEBIAN/apply-host-prep.sh --apply
+  /bin/bash -p TO-DEBIAN/apply-host-prep.sh --apply
 APPLY_STATUS=$?
 set -e
 
