@@ -583,6 +583,25 @@ async function readHostPrepLog(logPath) {
   }
 }
 
+function normalizeHostPrepBootstrapLog(log, fixture) {
+  return log.map((line) => {
+    const fields = line.split("\t");
+    return fields.map((field, index) => {
+      let normalized = field;
+      if (field === fixture.base || field.startsWith(`${fixture.base}/`)) {
+        normalized = `<fixture>${field.slice(fixture.base.length)}`;
+      }
+      if (!(fields[0] === "mktemp" && index === 2)) {
+        normalized = normalized.replace(
+          /project-a-host-prep-bootstrap\.[A-Za-z0-9]{8}(?=\/|$)/g,
+          "project-a-host-prep-bootstrap.<owned>"
+        );
+      }
+      return normalized;
+    }).join("\t");
+  });
+}
+
 function mutationLogger(name, logPath) {
   return `{
   printf '%s' ${shellSingleQuote(name)}
@@ -977,24 +996,55 @@ exec /usr/bin/rm "$@"
   await writeExecutable(
     path.join(fixture.bin, "apply-bootstrap-mktemp"),
     `${mutationLogger("mktemp", bootstrapLog)}
+test "$#" -eq 2
+test "$1" = -d
+test "$2" = ${shellSingleQuote(
+  path.join(fixture.base, "project-a-host-prep-bootstrap.XXXXXXXX")
+)}
 exec /usr/bin/mktemp "$@"
 `
   );
   await writeExecutable(
     path.join(fixture.bin, "apply-bootstrap-install"),
     `${mutationLogger("install", bootstrapLog)}
+test "$#" -eq 9
+test "$1" = -o
+test "$2" = root
+test "$3" = -g
+test "$4" = root
+test "$5" = -m
+test "$6" = 0600
+test "$7" = --
+test "$8" = ${shellSingleQuote(fixture.scriptPath)}
+case "$9" in
+  ${shellSingleQuote(fixture.base)}/project-a-host-prep-bootstrap.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]/preflight-host-prep.sh) ;;
+  *) exit 85 ;;
+esac
 exec /usr/bin/install "$@"
 `
   );
   await writeExecutable(
     path.join(fixture.bin, "apply-bootstrap-rm"),
     `${mutationLogger("rm", bootstrapLog)}
+test "$#" -eq 3
+test "$1" = -rf
+test "$2" = --
+case "$3" in
+  ${shellSingleQuote(fixture.base)}/project-a-host-prep-bootstrap.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) ;;
+  *) exit 84 ;;
+esac
 exec /usr/bin/rm "$@"
 `
   );
   await writeExecutable(
     path.join(fixture.bin, "apply-bootstrap-sha256sum"),
     `${mutationLogger("sha256sum", bootstrapLog)}
+test "$#" -eq 2
+test "$1" = --
+case "$2" in
+  ${shellSingleQuote(fixture.base)}/project-a-host-prep-bootstrap.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]/preflight-host-prep.sh) ;;
+  *) exit 83 ;;
+esac
 result=$(/usr/bin/sha256sum "$@")
 status=$?
 test "$status" -eq 0 || exit "$status"
@@ -2895,7 +2945,32 @@ test(
         log.join("\n"),
         /systemctl|firewall|cloudflare|npm(?:\tinstall|\tci)|server\.js|palzivalerts|itotexpress|proxmox|\tmv(?:\t|$)/i
       );
-      assert.ok((await readHostPrepLog(fixture.bootstrapLog)).length >= 4);
+      const rawBootstrapLog = await readHostPrepLog(fixture.bootstrapLog);
+      const bootstrapLog = normalizeHostPrepBootstrapLog(rawBootstrapLog, fixture);
+      assert.deepEqual(bootstrapLog, [
+        "mktemp\t-d\t<fixture>/project-a-host-prep-bootstrap.XXXXXXXX",
+        "install\t-o\troot\t-g\troot\t-m\t0600\t--\t<fixture>/stage/TO-DEBIAN/preflight-host-prep.sh\t<fixture>/project-a-host-prep-bootstrap.<owned>/preflight-host-prep.sh",
+        "sha256sum\t--\t<fixture>/project-a-host-prep-bootstrap.<owned>/preflight-host-prep.sh",
+        "sha256sum\t--\t<fixture>/project-a-host-prep-bootstrap.<owned>/preflight-host-prep.sh",
+        "sha256sum\t--\t<fixture>/project-a-host-prep-bootstrap.<owned>/preflight-host-prep.sh",
+        "sha256sum\t--\t<fixture>/project-a-host-prep-bootstrap.<owned>/preflight-host-prep.sh",
+        "sha256sum\t--\t<fixture>/project-a-host-prep-bootstrap.<owned>/preflight-host-prep.sh",
+        "rm\t-rf\t--\t<fixture>/project-a-host-prep-bootstrap.<owned>"
+      ]);
+      assert.equal(
+        log.some((line) => line.includes(`${fixture.base}/project-a-host-prep-bootstrap.`)),
+        false,
+        log.join("\n")
+      );
+      assert.equal(
+        rawBootstrapLog.some((line) =>
+          /^(?:apt-get|curl|tar|addgroup|adduser|renameat2|ln)\t/.test(line) ||
+          line.includes(`${fixture.root}/var/tmp/project-a-host-prep.`) ||
+          line.includes(`${fixture.root}/opt/.node-`)
+        ),
+        false,
+        rawBootstrapLog.join("\n")
+      );
 
       const nodeTarget = path.join(fixture.root, "opt", "node-v24.18.0-linux-x64");
       assert.equal((await lstat(nodeTarget)).isDirectory(), true);
