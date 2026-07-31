@@ -4,6 +4,7 @@ set -Eeuo pipefail
 readonly EVIDENCE_PHASE_ID="debian-host-prep-v1"
 readonly EVIDENCE_ROOT_NAME="Project-A-Migration-Phase-2-Host-Prep"
 readonly EVIDENCE_MAX_REPORT_BYTES="67108864"
+readonly EVIDENCE_MAX_PHASE_INPUT_BYTES="65536"
 readonly EVIDENCE_MIN_MEMORY_KIB="3584000"
 readonly EVIDENCE_MIN_FREE_BYTES="10737418240"
 readonly EVIDENCE_SAFE_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -196,7 +197,11 @@ evidence_observe() {
     return 0
   }
   set +e
-  output=$("$executable" "$@" 2>/dev/null | /usr/bin/head -c "$((max_bytes + 1))")
+  output=$(
+    /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
+      "$executable" "$@" 2>/dev/null |
+      /usr/bin/head -c "$((max_bytes + 1))"
+  )
   status=$?
   set -e
   EVIDENCE_OBSERVATION="$output"
@@ -221,7 +226,10 @@ evidence_validate_top_level() {
   local name
   local seen=0
   shopt -s nullglob
-  for candidate in "$EVIDENCE_USB_ROOT"/* "$EVIDENCE_USB_ROOT"/.[!.]*; do
+  for candidate in \
+    "$EVIDENCE_USB_ROOT"/* \
+    "$EVIDENCE_USB_ROOT"/.[!.]* \
+    "$EVIDENCE_USB_ROOT"/..?*; do
     name="${candidate##*/}"
     case "$name" in
       CHECKSUMS|FROM-DEBIAN|SECRETS-ENCRYPTED|TO-DEBIAN)
@@ -238,11 +246,35 @@ evidence_validate_top_level() {
   (( seen == 7 ))
 }
 
+evidence_validate_phase_input() {
+  local input_path="$EVIDENCE_USB_ROOT/PHASE-2-INPUT.json"
+  local input_size
+  local identity_before
+  local identity_after
+  local phase_match
+  [[ -f "$input_path" && ! -L "$input_path" ]] || return 1
+  input_size=$(/usr/bin/stat -c '%s' -- "$input_path" 2>/dev/null) || return 1
+  [[ "$input_size" =~ ^[0-9]+$ ]] || return 1
+  (( input_size > 0 && input_size <= EVIDENCE_MAX_PHASE_INPUT_BYTES )) || return 1
+  identity_before=$(evidence_identity "$input_path") || return 1
+  phase_match=$(
+    /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
+      /usr/bin/grep -aoE '"phaseId"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      "$input_path" 2>/dev/null |
+      /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
+        /usr/bin/tr -d '[:space:]'
+  ) || return 1
+  identity_after=$(evidence_identity "$input_path") || return 1
+  [[ "$identity_before" == "$identity_after" ]] || return 1
+  [[ "$phase_match" == "\"phaseId\":\"$EVIDENCE_PHASE_ID\"" ]]
+}
+
 evidence_validate_root() {
   [[ "${1##*/}" == "$EVIDENCE_ROOT_NAME" ]] || return 1
   evidence_validate_canonical_directory "$1" || return 1
   EVIDENCE_USB_ROOT="$1"
   evidence_validate_top_level || return 1
+  evidence_validate_phase_input || return 1
   EVIDENCE_FROM_DIR="$EVIDENCE_USB_ROOT/FROM-DEBIAN"
   evidence_validate_canonical_directory "$EVIDENCE_FROM_DIR" || return 1
   [[ "${EVIDENCE_FROM_DIR%/*}" == "$EVIDENCE_USB_ROOT" && -w "$EVIDENCE_FROM_DIR" ]]
@@ -295,10 +327,15 @@ evidence_space_threshold() {
 }
 
 evidence_package_state() {
-  evidence_observe 160 dpkg-query --show '--showformat=${Version}' "$1" || return 1
+  local installed_prefix=$'install ok installed\t'
+  local version
+  evidence_observe 192 dpkg-query --show \
+    '--showformat=${db:Status}\t${Version}' "$1" || return 1
+  version="${EVIDENCE_OBSERVATION#"$installed_prefix"}"
   if [[ "$EVIDENCE_OBSERVATION_STATUS" -eq 0 &&
-    "$EVIDENCE_OBSERVATION" =~ ^[A-Za-z0-9.+:~_-]{1,128}$ ]]; then
-    printf 'installed %s\n' "$EVIDENCE_OBSERVATION"
+    "$EVIDENCE_OBSERVATION" == "$installed_prefix"* &&
+    "$version" =~ ^[A-Za-z0-9.+:~_-]{1,128}$ ]]; then
+    printf 'installed %s\n' "$version"
   else
     printf 'absent\n'
   fi
@@ -562,9 +599,11 @@ evidence_publish() {
   (
     cd -- "$EVIDENCE_FROM_DIR"
     if (( EVIDENCE_TEST_MODE == 1 )); then
-      "$EVIDENCE_TEST_BIN/sha256sum" -- "$EVIDENCE_REPORT_NAME"
+      /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
+        "$EVIDENCE_TEST_BIN/sha256sum" -- "$EVIDENCE_REPORT_NAME"
     else
-      /usr/bin/sha256sum -- "$EVIDENCE_REPORT_NAME"
+      /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
+        /usr/bin/sha256sum -- "$EVIDENCE_REPORT_NAME"
     fi
   ) > "$EVIDENCE_SIDECAR_TEMP" 2>/dev/null || {
     evidence_fail checksum-command

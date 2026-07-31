@@ -3362,7 +3362,93 @@ const HOST_PREP_EVIDENCE_HOST = "fixture-host";
 const HOST_PREP_EVIDENCE_REPORT =
   `debian-host-prep-${HOST_PREP_EVIDENCE_TIMESTAMP}-${HOST_PREP_EVIDENCE_HOST}.txt`;
 
-async function createHostPrepEvidenceFixture({ state = "clean", sensitiveOutput = false } = {}) {
+function expectedHostPrepEvidenceReport(state) {
+  const values = {
+    clean: {
+      package: "absent",
+      node: "absent",
+      npm: "absent",
+      account: "absent",
+      directories: [
+        "Directory /opt/palziv: type=absent owner=- group=- mode=-",
+        "Directory /opt/palziv/releases: type=absent owner=- group=- mode=-",
+        "Directory /var/lib/palziv: type=absent owner=- group=- mode=-",
+        "Directory /var/lib/palziv/data: type=absent owner=- group=- mode=-",
+        "Directory /var/backups/palziv: type=absent owner=- group=- mode=-",
+        "Directory /etc/palziv: type=absent owner=- group=- mode=-"
+      ],
+      listener: "absent",
+      classification: "not-applied"
+    },
+    prepared: {
+      package: "installed 1.2.3-fixture",
+      node: "v24.18.0",
+      npm: "11.9.0",
+      account: "present",
+      directories: [
+        "Directory /opt/palziv: type=directory owner=root group=palziv mode=750",
+        "Directory /opt/palziv/releases: type=directory owner=root group=palziv mode=750",
+        "Directory /var/lib/palziv: type=directory owner=palziv group=palziv mode=700",
+        "Directory /var/lib/palziv/data: type=directory owner=palziv group=palziv mode=700",
+        "Directory /var/backups/palziv: type=directory owner=root group=palziv mode=750",
+        "Directory /etc/palziv: type=directory owner=root group=palziv mode=750"
+      ],
+      listener: "present",
+      classification: "prepared"
+    },
+    partial: {
+      package: "absent",
+      node: "other",
+      npm: "absent",
+      account: "present",
+      directories: [
+        "Directory /opt/palziv: type=directory owner=root group=palziv mode=750",
+        "Directory /opt/palziv/releases: type=absent owner=- group=- mode=-",
+        "Directory /var/lib/palziv: type=absent owner=- group=- mode=-",
+        "Directory /var/lib/palziv/data: type=absent owner=- group=- mode=-",
+        "Directory /var/backups/palziv: type=absent owner=- group=- mode=-",
+        "Directory /etc/palziv: type=absent owner=- group=- mode=-"
+      ],
+      listener: "absent",
+      classification: "partial"
+    }
+  }[state];
+  return [
+    "Project-A Debian Host Preparation Receipt",
+    "Collection UTC: 2026-07-31T12:34:56Z",
+    "OS: Debian 13",
+    "Architecture: x86_64",
+    "CPU threshold: pass",
+    "Memory threshold: pass",
+    "Root free-space threshold: pass",
+    `Package ca-certificates: ${values.package}`,
+    `Package curl: ${values.package}`,
+    `Package git: ${values.package}`,
+    `Package jq: ${values.package}`,
+    `Package rsync: ${values.package}`,
+    `Package tar: ${values.package}`,
+    `Package xz-utils: ${values.package}`,
+    `Node: ${values.node}`,
+    `npm: ${values.npm}`,
+    `Palziv user: ${values.account}`,
+    `Palziv group: ${values.account}`,
+    ...values.directories,
+    "Service palziv: enabled=not-found active=not-found",
+    "Service cloudflared: enabled=not-found active=not-found",
+    "Timer palziv-backup: enabled=not-found active=not-found",
+    "Timer palziv-health: enabled=not-found active=not-found",
+    "UFW: inactive",
+    `TCP 3116 listener: ${values.listener}`,
+    `Classification: ${values.classification}`,
+    ""
+  ].join("\n");
+}
+
+async function createHostPrepEvidenceFixture({
+  state = "clean",
+  sensitiveOutput = false,
+  packageStatus = "installed"
+} = {}) {
   const base = await mkdtemp("/tmp/project-a-host-prep-evidence-test.");
   const usbRoot = path.join(base, HOST_PREP_ROOT_NAME);
   const systemRoot = path.join(base, "system-root");
@@ -3423,7 +3509,17 @@ async function createHostPrepEvidenceFixture({ state = "clean", sensitiveOutput 
   }
 
   const packageBody = prepared
-    ? "test \"$1\" = --show\ntest \"$2\" = '--showformat=${Version}'\ncase \"$3\" in ca-certificates|curl|git|jq|rsync|tar|xz-utils) printf '%s\\n' '1.2.3-fixture' ;; *) exit 1 ;; esac\n"
+    ? `test "$1" = --show
+test "$2" = '--showformat=\${db:Status}\\t\${Version}'
+case "$3" in
+  ca-certificates|curl|git|jq|rsync|tar|xz-utils)
+    printf '%b\\n' '${packageStatus === "installed"
+      ? "install ok installed\\t1.2.3-fixture"
+      : "deinstall ok config-files\\t1.2.3-fixture"}'
+    ;;
+  *) exit 1 ;;
+esac
+`
     : "exit 1\n";
   const accountBody = prepared || partial
     ? `case "\${1-}:\${2-}" in
@@ -3444,6 +3540,8 @@ esac
 esac
 `,
     hostname: `test "$#" -eq 0
+test -z "\${PALZIV_SECRET_FIXTURE-}"
+test -z "\${PALZIV_BASH_ENV_SECRET-}"
 printf '%s\\n' '${HOST_PREP_EVIDENCE_HOST}'
 `,
     uname: "test \"${1-}\" = -m\nprintf '%s\\n' x86_64\n",
@@ -3478,7 +3576,10 @@ esac
     ss: sensitiveOutput
       ? "printf '%s\\n' 'LISTEN 0 4096 10.77.66.2:3116 0.0.0.0:* users:((seeded-process-argument))'\n"
       : ":\n",
-    sha256sum: "exec /usr/bin/sha256sum \"$@\"\n"
+    sha256sum: `test -z "\${PALZIV_SECRET_FIXTURE-}"
+test -z "\${PALZIV_BASH_ENV_SECRET-}"
+exec /usr/bin/sha256sum "$@"
+`
   };
   for (const [name, body] of Object.entries(commandBodies)) {
     await writeExecutable(path.join(bin, name), body);
@@ -3488,41 +3589,59 @@ esac
 
 async function runHostPrepEvidence(fixture, extraEnvironment = {}, usbRoot = fixture.usbRoot) {
   const hostileMarker = path.join(fixture.base, "hostile-bash-env-fired");
+  const hostileCommandMarker = path.join(fixture.base, "hostile-command-fired");
   const hostileBashEnv = path.join(fixture.base, "hostile-bash-env");
-  await writeFile(hostileBashEnv, `: > ${shellSingleQuote(hostileMarker)}\n`);
-  const isolatedEnvironment = [
-    "-i",
-    "HOME=/tmp",
-    "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-    "PALZIV_HOST_PREP_EVIDENCE_TEST_MODE=1",
-    `PALZIV_HOST_PREP_EVIDENCE_TEST_ROOT=${fixture.systemRoot}`,
-    `PALZIV_HOST_PREP_EVIDENCE_TEST_BIN=${fixture.bin}`,
-    ...Object.entries(extraEnvironment).map(([name, value]) => `${name}=${value}`),
-    "/bin/bash",
-    "-p",
-    fixture.scriptPath,
-    "--usb-root",
-    usbRoot
-  ];
+  const hostilePath = path.join(fixture.base, "hostile-path");
+  await mkdir(hostilePath, { recursive: true });
+  await writeExecutable(
+    path.join(hostilePath, "date"),
+    `: > ${shellSingleQuote(hostileCommandMarker)}
+printf '%s\\n' hostile
+`
+  );
+  await writeFile(
+    hostileBashEnv,
+    `: > ${shellSingleQuote(hostileMarker)}
+export PALZIV_BASH_ENV_SECRET='seeded-bash-env-value'
+export PATH=${shellSingleQuote(hostilePath)}
+`
+  );
   try {
-    const result = await execFile("/usr/bin/env", isolatedEnvironment, {
+    const result = await execFile("/bin/bash", [
+      fixture.scriptPath,
+      "--usb-root",
+      usbRoot
+    ], {
       cwd: fixture.usbRoot,
       env: {
         ...process.env,
+        HOME: "/tmp",
+        PATH: hostilePath,
         BASH_ENV: hostileBashEnv,
         ENV: hostileBashEnv,
-        PALZIV_SECRET_FIXTURE: "seeded-environment-value"
+        PALZIV_SECRET_FIXTURE: "seeded-environment-value",
+        PALZIV_HOST_PREP_EVIDENCE_TEST_MODE: "1",
+        PALZIV_HOST_PREP_EVIDENCE_TEST_ROOT: fixture.systemRoot,
+        PALZIV_HOST_PREP_EVIDENCE_TEST_BIN: fixture.bin,
+        ...extraEnvironment
       },
       timeout: 20_000,
       maxBuffer: 1024 * 1024
     });
-    return { code: 0, stdout: result.stdout, stderr: result.stderr, hostileMarker };
+    return {
+      code: 0,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      hostileMarker,
+      hostileCommandMarker
+    };
   } catch (error) {
     return {
       code: error.code,
       stdout: error.stdout ?? "",
       stderr: error.stderr ?? "",
-      hostileMarker
+      hostileMarker,
+      hostileCommandMarker
     };
   }
 }
@@ -3587,15 +3706,13 @@ test(
             path.join(fixture.fromDir, HOST_PREP_EVIDENCE_REPORT),
             "utf8"
           );
-          assert.match(
-            report,
-            new RegExp(
-              `^Project-A Debian Host Preparation Receipt\\n[\\s\\S]*\\nClassification: ${expected}\\n$`
-            )
-          );
+          assert.equal(expectedHostPrepEvidenceReport(state).endsWith(`Classification: ${expected}\n`), true);
+          assert.equal(report, expectedHostPrepEvidenceReport(state));
+          assert.equal(report.split("\n").length - 1, 31);
           for (const sensitive of [
             "seeded-secret-value", "10.77.66.1", "10.77.66.2", "nameserver",
-            "seeded-process-argument", "seeded-environment-value", "seeded-log-text",
+            "seeded-process-argument", "seeded-environment-value", "seeded-bash-env-value",
+            "seeded-log-text",
             "security.json", "resolv.conf", "cmdline", "fixture.log"
           ]) {
             assert.equal(report.includes(sensitive), false, sensitive);
@@ -3608,7 +3725,8 @@ test(
             ),
             `${expectedHash}  ${HOST_PREP_EVIDENCE_REPORT}\n`
           );
-          await assert.rejects(lstat(result.hostileMarker), { code: "ENOENT" });
+          await lstat(result.hostileMarker);
+          await assert.rejects(lstat(result.hostileCommandMarker), { code: "ENOENT" });
         } finally {
           await rm(fixture.base, { recursive: true, force: true });
         }
@@ -3665,6 +3783,70 @@ test(
       } finally {
         await rm(fixture.base, { recursive: true, force: true });
         await rm(aliasBase, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("phase metadata is bounded and binds the exact phase ID", async () => {
+      const wrongPhaseFixture = await createHostPrepEvidenceFixture();
+      const oversizedFixture = await createHostPrepEvidenceFixture();
+      try {
+        await writeFile(
+          path.join(wrongPhaseFixture.usbRoot, "PHASE-2-INPUT.json"),
+          '{"schemaVersion":1,"phaseId":"wrong-phase"}\n'
+        );
+        const wrongPhase = await runHostPrepEvidence(wrongPhaseFixture);
+        assert.notEqual(wrongPhase.code, 0);
+        assert.deepEqual(await readdir(wrongPhaseFixture.fromDir), []);
+
+        await writeFile(
+          path.join(oversizedFixture.usbRoot, "PHASE-2-INPUT.json"),
+          `{"phaseId":"debian-host-prep-v1","padding":"${"x".repeat(65_536)}"}\n`
+        );
+        const oversized = await runHostPrepEvidence(oversizedFixture);
+        assert.notEqual(oversized.code, 0);
+        assert.deepEqual(await readdir(oversizedFixture.fromDir), []);
+      } finally {
+        await rm(wrongPhaseFixture.base, { recursive: true, force: true });
+        await rm(oversizedFixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("a two-dot unexpected root entry fails closed", async () => {
+      const fixture = await createHostPrepEvidenceFixture();
+      try {
+        await writeFile(path.join(fixture.usbRoot, "..unexpected"), "caller-owned\n");
+        const result = await runHostPrepEvidence(fixture);
+        assert.notEqual(result.code, 0);
+        assert.deepEqual(await readdir(fixture.fromDir), []);
+        assert.equal(
+          await readFile(path.join(fixture.usbRoot, "..unexpected"), "utf8"),
+          "caller-owned\n"
+        );
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
+      }
+    });
+
+    await t.test("a configured but uninstalled package is reported absent", async () => {
+      const fixture = await createHostPrepEvidenceFixture({
+        state: "prepared",
+        packageStatus: "config-files"
+      });
+      try {
+        const result = await runHostPrepEvidence(fixture);
+        assert.equal(result.code, 0, result.stderr);
+        const report = await readFile(
+          path.join(fixture.fromDir, HOST_PREP_EVIDENCE_REPORT),
+          "utf8"
+        );
+        for (const packageName of [
+          "ca-certificates", "curl", "git", "jq", "rsync", "tar", "xz-utils"
+        ]) {
+          assert.match(report, new RegExp(`^Package ${packageName}: absent$`, "m"));
+          assert.equal(report.includes(`Package ${packageName}: installed`), false);
+        }
+      } finally {
+        await rm(fixture.base, { recursive: true, force: true });
       }
     });
 
