@@ -1,0 +1,7 @@
+PROJECT-A DEBIAN HOST PREPARATION - ISOLATION BOUNDARY
+
+Codex has no remote access to Debian or Proxmox. The operator runs every server command locally.
+This bundle may install only the approved Debian packages, Node.js v24.18.0, the palziv system account, and six empty restricted directories.
+This bundle must not contain or inspect application data, secrets, credentials, environment files, Cloudflare material, logs, SSH material, or Proxmox authentication material.
+This bundle must not deploy or start Project-A, change a firewall or network setting, install Cloudflare, create or enable a service/timer, probe the public application, or alter the Windows production host.
+Stop on any checksum, fingerprint, mount, preflight, apply, collector, sync, or unmount error. Do not retry.
