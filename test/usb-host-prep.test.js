@@ -3455,6 +3455,7 @@ async function createHostPrepEvidenceFixture({
   const bin = path.join(base, "bin");
   const fromDir = path.join(usbRoot, "FROM-DEBIAN");
   const scriptPath = path.join(usbRoot, "TO-DEBIAN", "collect-host-prep-evidence.sh");
+  const npmNodeMarker = path.join(base, "npm-resolved-through-pinned-node");
   await Promise.all([
     mkdir(path.join(usbRoot, "CHECKSUMS"), { recursive: true }),
     mkdir(fromDir, { recursive: true }),
@@ -3510,7 +3511,7 @@ async function createHostPrepEvidenceFixture({
 
   const packageBody = prepared
     ? `test "$1" = --show
-test "$2" = '--showformat=\${db:Status}\\t\${Version}'
+test "$2" = '--showformat=\${Status}\\t\${Version}'
 case "$3" in
   ca-certificates|curl|git|jq|rsync|tar|xz-utils)
     printf '%b\\n' '${packageStatus === "installed"
@@ -3549,7 +3550,7 @@ printf '%s\\n' '${HOST_PREP_EVIDENCE_HOST}'
     df: "test \"$#\" -eq 3\ntest \"$1\" = -B1\ntest \"$2\" = --output=avail\nprintf 'Avail\\n10737418240\\n'\n",
     "dpkg-query": packageBody,
     node: prepared
-      ? "test \"${1-}\" = --version\nprintf '%s\\n' v24.18.0\n"
+      ? "case \"$#:${1-}:${2-}\" in\n  1:--version:) printf '%s\\n' v24.18.0 ;;\n  2:*/bin/npm:--version) : > \"${0%/bin/node}/npm-resolved-through-pinned-node\"; printf '%s\\n' 11.9.0 ;;\n  *) exit 94 ;;\nesac\n"
       : partial
       ? "test \"${1-}\" = --version\nprintf '%s\\n' v23.0.0\n"
       : "exit 127\n",
@@ -3584,7 +3585,11 @@ exec /usr/bin/sha256sum "$@"
   for (const [name, body] of Object.entries(commandBodies)) {
     await writeExecutable(path.join(bin, name), body);
   }
-  return { base, usbRoot, systemRoot, bin, fromDir, scriptPath };
+  if (prepared) {
+    await writeFile(path.join(bin, "npm"), "#!/usr/bin/env node\n");
+    await chmod(path.join(bin, "npm"), 0o700);
+  }
+  return { base, usbRoot, systemRoot, bin, fromDir, scriptPath, npmNodeMarker };
 }
 
 async function runHostPrepEvidence(fixture, extraEnvironment = {}, usbRoot = fixture.usbRoot) {
@@ -3727,6 +3732,9 @@ test(
           );
           await lstat(result.hostileMarker);
           await assert.rejects(lstat(result.hostileCommandMarker), { code: "ENOENT" });
+          if (state === "prepared") {
+            await lstat(fixture.npmNodeMarker);
+          }
         } finally {
           await rm(fixture.base, { recursive: true, force: true });
         }
@@ -3788,6 +3796,8 @@ test(
 
     await t.test("phase metadata is bounded and binds the exact phase ID", async () => {
       const wrongPhaseFixture = await createHostPrepEvidenceFixture();
+      const spacedValueFixture = await createHostPrepEvidenceFixture();
+      const structuralWhitespaceFixture = await createHostPrepEvidenceFixture();
       const oversizedFixture = await createHostPrepEvidenceFixture();
       try {
         await writeFile(
@@ -3799,6 +3809,21 @@ test(
         assert.deepEqual(await readdir(wrongPhaseFixture.fromDir), []);
 
         await writeFile(
+          path.join(spacedValueFixture.usbRoot, "PHASE-2-INPUT.json"),
+          '{"schemaVersion":1,"phaseId":"debian-host- prep-v1"}\n'
+        );
+        const spacedValue = await runHostPrepEvidence(spacedValueFixture);
+        assert.notEqual(spacedValue.code, 0);
+        assert.deepEqual(await readdir(spacedValueFixture.fromDir), []);
+
+        await writeFile(
+          path.join(structuralWhitespaceFixture.usbRoot, "PHASE-2-INPUT.json"),
+          '{\n  "schemaVersion": 1,\n  "phaseId"\n    :\n  "debian-host-prep-v1"\n}\n'
+        );
+        const structuralWhitespace = await runHostPrepEvidence(structuralWhitespaceFixture);
+        assert.equal(structuralWhitespace.code, 0, structuralWhitespace.stderr);
+
+        await writeFile(
           path.join(oversizedFixture.usbRoot, "PHASE-2-INPUT.json"),
           `{"phaseId":"debian-host-prep-v1","padding":"${"x".repeat(65_536)}"}\n`
         );
@@ -3807,6 +3832,8 @@ test(
         assert.deepEqual(await readdir(oversizedFixture.fromDir), []);
       } finally {
         await rm(wrongPhaseFixture.base, { recursive: true, force: true });
+        await rm(spacedValueFixture.base, { recursive: true, force: true });
+        await rm(structuralWhitespaceFixture.base, { recursive: true, force: true });
         await rm(oversizedFixture.base, { recursive: true, force: true });
       }
     });

@@ -186,6 +186,7 @@ evidence_observe() {
   local max_bytes="$1"
   local name="$2"
   local executable
+  local observation_path="$EVIDENCE_SAFE_PATH"
   local output
   local status
   shift 2
@@ -196,9 +197,16 @@ evidence_observe() {
     EVIDENCE_OBSERVATION_STATUS=127
     return 0
   }
+  if [[ "$name" == "npm" ]]; then
+    if (( EVIDENCE_TEST_MODE == 1 )); then
+      observation_path="$EVIDENCE_TEST_BIN:$EVIDENCE_SAFE_PATH"
+    else
+      observation_path="/opt/node/bin:$EVIDENCE_SAFE_PATH"
+    fi
+  fi
   set +e
   output=$(
-    /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
+    /usr/bin/env -i PATH="$observation_path" LC_ALL=C LANG=C \
       "$executable" "$@" 2>/dev/null |
       /usr/bin/head -c "$((max_bytes + 1))"
   )
@@ -251,22 +259,98 @@ evidence_validate_phase_input() {
   local input_size
   local identity_before
   local identity_after
-  local phase_match
+  local contents=""
+  local token
+  local value
+  local char
+  local index=0
+  local cursor
+  local length
+  local closed
+  local escaped
+  local phase_count=0
   [[ -f "$input_path" && ! -L "$input_path" ]] || return 1
   input_size=$(/usr/bin/stat -c '%s' -- "$input_path" 2>/dev/null) || return 1
   [[ "$input_size" =~ ^[0-9]+$ ]] || return 1
   (( input_size > 0 && input_size <= EVIDENCE_MAX_PHASE_INPUT_BYTES )) || return 1
   identity_before=$(evidence_identity "$input_path") || return 1
-  phase_match=$(
-    /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
-      /usr/bin/grep -aoE '"phaseId"[[:space:]]*:[[:space:]]*"[^"]*"' \
-      "$input_path" 2>/dev/null |
-      /usr/bin/env -i PATH="$EVIDENCE_SAFE_PATH" LC_ALL=C LANG=C \
-        /usr/bin/tr -d '[:space:]'
-  ) || return 1
+  if IFS= read -r -d '' contents < "$input_path"; then
+    return 1
+  fi
+  length=${#contents}
+  (( length == input_size )) || return 1
+  while (( index < length )); do
+    char="${contents:index:1}"
+    if [[ "$char" != '"' ]]; then
+      (( index += 1 ))
+      continue
+    fi
+    token=""
+    escaped=0
+    closed=0
+    (( index += 1 ))
+    while (( index < length )); do
+      char="${contents:index:1}"
+      if [[ "$char" == '\\' ]]; then
+        escaped=1
+        (( index += 1 ))
+        (( index < length )) || return 1
+        token+="${contents:index:1}"
+      elif [[ "$char" == '"' ]]; then
+        closed=1
+        (( index += 1 ))
+        break
+      else
+        token+="$char"
+      fi
+      (( index += 1 ))
+    done
+    (( closed == 1 )) || return 1
+    [[ "$token" == "phaseId" && "$escaped" -eq 0 ]] || continue
+    cursor=$index
+    while (( cursor < length )); do
+      case "${contents:cursor:1}" in
+        ' '|$'\t'|$'\n'|$'\r') (( cursor += 1 )) ;;
+        *) break ;;
+      esac
+    done
+    [[ "${contents:cursor:1}" == ":" ]] || continue
+    (( cursor += 1 ))
+    while (( cursor < length )); do
+      case "${contents:cursor:1}" in
+        ' '|$'\t'|$'\n'|$'\r') (( cursor += 1 )) ;;
+        *) break ;;
+      esac
+    done
+    [[ "${contents:cursor:1}" == '"' ]] || return 1
+    value=""
+    escaped=0
+    closed=0
+    (( cursor += 1 ))
+    while (( cursor < length )); do
+      char="${contents:cursor:1}"
+      if [[ "$char" == '\\' ]]; then
+        escaped=1
+        (( cursor += 1 ))
+        (( cursor < length )) || return 1
+        value+="${contents:cursor:1}"
+      elif [[ "$char" == '"' ]]; then
+        closed=1
+        (( cursor += 1 ))
+        break
+      else
+        value+="$char"
+      fi
+      (( cursor += 1 ))
+    done
+    (( closed == 1 )) || return 1
+    (( phase_count += 1 ))
+    [[ "$escaped" -eq 0 && "$value" == "$EVIDENCE_PHASE_ID" ]] || return 1
+    index=$cursor
+  done
   identity_after=$(evidence_identity "$input_path") || return 1
   [[ "$identity_before" == "$identity_after" ]] || return 1
-  [[ "$phase_match" == "\"phaseId\":\"$EVIDENCE_PHASE_ID\"" ]]
+  (( phase_count == 1 ))
 }
 
 evidence_validate_root() {
@@ -330,7 +414,7 @@ evidence_package_state() {
   local installed_prefix=$'install ok installed\t'
   local version
   evidence_observe 192 dpkg-query --show \
-    '--showformat=${db:Status}\t${Version}' "$1" || return 1
+    '--showformat=${Status}\t${Version}' "$1" || return 1
   version="${EVIDENCE_OBSERVATION#"$installed_prefix"}"
   if [[ "$EVIDENCE_OBSERVATION_STATUS" -eq 0 &&
     "$EVIDENCE_OBSERVATION" == "$installed_prefix"* &&
