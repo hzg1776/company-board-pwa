@@ -4951,6 +4951,11 @@ test("host prep PowerShell wrapper is a guarded verify-build-verify handoff", {
   assert.match(wrapper, /build-usb-host-prep\.mjs/);
   assert.match(wrapper, /verify-usb-host-prep\.mjs/);
   assert.match(wrapper, /verify-usb-handoff\.mjs/);
+  assert.match(
+    wrapper,
+    /\$nodeCandidates\s*=\s*@\(Get-Command node\.exe -CommandType Application -All -ErrorAction Stop\)/
+  );
+  assert.match(wrapper, /\$node\s*=\s*\$nodeCandidates\[0\]/);
   const validationOrder = [
     wrapper.indexOf("QueryDosDevice"),
     wrapper.indexOf("Get-PSDrive"),

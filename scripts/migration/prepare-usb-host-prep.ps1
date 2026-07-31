@@ -170,7 +170,8 @@ function Invoke-HostPrepWorkflow {
     $approvedDevice = & $GetDeviceSnapshot $UsbDrive
     Assert-HostPrepSnapshotSafe -Snapshot $approvedDevice -ExpectedDrive $UsbDrive
 
-    $node = Get-Command node.exe -CommandType Application -ErrorAction Stop
+    $nodeCandidates = @(Get-Command node.exe -CommandType Application -All -ErrorAction Stop)
+    $node = $nodeCandidates[0]
     $nodeVersionResult = & $InvokeNode $node.Source @('--version')
     if ($nodeVersionResult.ExitCode -ne 0 -or $nodeVersionResult.Lines.Count -ne 1) {
         throw 'Could not determine the Node.js version.'
