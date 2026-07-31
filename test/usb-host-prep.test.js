@@ -4842,6 +4842,52 @@ test("host prep builder rejects linked, oversized, and replaced repository sourc
       await rm(sourceRoot, { recursive: true, force: true });
     }
   });
+
+  await t.test("cleanup refuses a substituted predictable staging path", {
+    skip: process.platform === "win32"
+      ? "Windows prevents renaming the staging directory while its destination file is open."
+      : false
+  }, async () => {
+    const fixture = await createReturnedPhase1Fixture();
+    const sourceRoot = await createHostPrepBuilderSourceFixture();
+    const readmeSource = path.join(sourceRoot, "deploy", "usb-host-prep", "README-FIRST.txt");
+    const phase1Before = await snapshotFixtureTree(fixture.phase1Root);
+    let displacedStaging;
+    try {
+      await writeFile(readmeSource, Buffer.alloc(64 * 1024 * 1024, 0x52));
+      const { buildUsbHostPrep } = await import("../scripts/migration/build-usb-host-prep.mjs");
+      const build = buildUsbHostPrep({ usbRoot: fixture.usbRoot, sourceRoot });
+      build.catch(() => {});
+      const copiedReadme = await waitForHostPrepStagingFile(
+        fixture.usbRoot,
+        "README-FIRST.txt"
+      );
+      const stagingPath = path.dirname(path.dirname(copiedReadme));
+      displacedStaging = path.join(fixture.usbRoot, "displaced-builder-owned-staging");
+
+      await rename(readmeSource, `${readmeSource}.approved`);
+      await writeFile(readmeSource, "replacement source\n");
+      await rename(stagingPath, displacedStaging);
+      await mkdir(path.join(stagingPath, "Project-A-Migration"), { recursive: true });
+      const callerMarker = path.join(
+        stagingPath,
+        "Project-A-Migration",
+        "caller-owned-phase1-like-data.txt"
+      );
+      await writeFile(callerMarker, "caller-owned and must survive\n");
+
+      await assert.rejects(build, /cleanup|staging.*changed|source changed/i);
+      assert.equal(
+        await readFile(callerMarker, "utf8"),
+        "caller-owned and must survive\n"
+      );
+      assert.deepEqual(await snapshotFixtureTree(fixture.phase1Root), phase1Before);
+      assert.ok((await readdir(displacedStaging)).includes(HOST_PREP_ROOT_NAME));
+    } finally {
+      await rm(fixture.usbRoot, { recursive: true, force: true });
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 test("host prep PowerShell wrapper is a guarded verify-build-verify handoff", {
@@ -4874,6 +4920,220 @@ test("host prep PowerShell wrapper is a guarded verify-build-verify handoff", {
   assert.deepEqual(validationOrder, [...validationOrder].sort((left, right) => left - right));
   assert.equal(wrapper.match(/build-usb-host-prep\.mjs/g)?.length, 1);
   assert.doesNotMatch(wrapper, /Format-Volume|Remove-Item|Clear-Disk|Repair-Volume|Dismount-Volume|Invoke-WebRequest|Invoke-RestMethod/);
+});
+
+async function runHostPrepPowerShellHarness({
+  scenario = "success",
+  usbDrive = "Q:"
+} = {}) {
+  const base = await mkdtemp(path.join(os.tmpdir(), "project-a-host-prep-powershell-"));
+  const mediaRoot = path.join(base, "media");
+  const phase1Root = path.join(mediaRoot, "Project-A-Migration");
+  const wrapperPath = path.join(base, "prepare-usb-host-prep.ps1");
+  const logPath = path.join(base, "node-boundary.log");
+  await mkdir(phase1Root, { recursive: true });
+  const wrapperSource = await readFile(
+    new URL("../scripts/migration/prepare-usb-host-prep.ps1", import.meta.url),
+    "utf8"
+  );
+  const invocationMarker = "Invoke-HostPrepWorkflow -UsbDrive $UsbDrive";
+  assert.equal(
+    wrapperSource.split(invocationMarker).length,
+    2,
+    "wrapper must expose one workflow invocation seam"
+  );
+  const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+  const harnessInvocation = String.raw`
+$script:FixtureSnapshotCount = 0
+$fixtureSnapshot = {
+    param([string]$Drive)
+    $script:FixtureSnapshotCount += 1
+    $scenario = $env:HOST_PREP_PS_SCENARIO
+    $dosTarget = '\Device\HarddiskVolume99'
+    $provider = 'FileSystem'
+    $displayRoot = $null
+    $rootIsReparse = $false
+    $driveType = 2
+    $fileSystem = 'FAT32'
+    [uint64]$freeSpace = 209715200
+    $serial = 'A1B2C3D4'
+    $volumeDeviceId = '\\?\Volume{11111111-2222-3333-4444-555555555555}\'
+    switch ($scenario) {
+        'network' { $dosTarget = '\Device\Mup\server\share' }
+        'subst' { $dosTarget = '\??\C:\fixture' }
+        'reparse' { $rootIsReparse = $true }
+        'non-removable' { $driveType = 3 }
+        'non-fat32' { $fileSystem = 'NTFS' }
+        'low-space' { [uint64]$freeSpace = 104857599 }
+    }
+    if (
+        ($scenario -eq 'replace-prewrite' -and $script:FixtureSnapshotCount -ge 2) -or
+        ($scenario -eq 'replace-postbuild' -and $script:FixtureSnapshotCount -ge 3) -or
+        ($scenario -eq 'replace-after-phase2' -and $script:FixtureSnapshotCount -ge 4) -or
+        ($scenario -eq 'replace-after-phase1' -and $script:FixtureSnapshotCount -ge 5)
+    ) {
+        $serial = 'DEADBEEF'
+        $dosTarget = '\Device\HarddiskVolume100'
+        $volumeDeviceId = '\\?\Volume{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}\'
+    }
+    [pscustomobject]@{
+        Drive = $Drive
+        DosDeviceTarget = $dosTarget
+        PsProviderName = $provider
+        PsDisplayRoot = $displayRoot
+        RootIsReparse = $rootIsReparse
+        LogicalDeviceId = $Drive
+        DriveType = $driveType
+        FileSystem = $fileSystem
+        FreeSpace = $freeSpace
+        VolumeSerialNumber = $serial
+        VolumeDeviceId = $volumeDeviceId
+    }
+}
+$fixtureNode = {
+    param([string]$NodePath, [string[]]$Arguments)
+    $operation = if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '--version') {
+        'node-version'
+    } elseif ($Arguments[0] -like '*build-usb-host-prep.mjs') {
+        'builder'
+    } elseif ($Arguments[0] -like '*verify-usb-host-prep.mjs') {
+        'phase2-verifier'
+    } elseif ($Arguments[0] -like '*verify-usb-handoff.mjs') {
+        'phase1-verifier'
+    } else {
+        'unexpected-node-call'
+    }
+    Add-Content -LiteralPath ${psQuote(logPath)} -Value $operation
+    if ($operation -eq 'node-version') {
+        $version = if ($env:HOST_PREP_PS_SCENARIO -eq 'old-node') { 'v21.9.0' } else { 'v24.18.0' }
+        return [pscustomobject]@{ ExitCode = 0; Lines = @($version) }
+    }
+    if ($operation -eq 'builder') {
+        New-Item -ItemType Directory -Path (Join-Path ${psQuote(mediaRoot)} 'Project-A-Migration-Phase-2-Host-Prep') -ErrorAction Stop | Out-Null
+        $json = [ordered]@{
+            rootName = 'Project-A-Migration-Phase-2-Host-Prep'
+            fileCount = 6
+            manifestFingerprint = ('a' * 64)
+            phase1ReportFileName = 'debian-readiness-20260730T192552Z-palziv-prod.txt'
+            phase1ReportSha256 = ('b' * 64)
+            phase1Unchanged = $true
+        } | ConvertTo-Json -Compress
+        return [pscustomobject]@{ ExitCode = 0; Lines = @($json) }
+    }
+    return [pscustomobject]@{ ExitCode = 0; Lines = @('{}') }
+}
+Invoke-HostPrepWorkflow -UsbDrive $UsbDrive -GetDeviceSnapshot $fixtureSnapshot -InvokeNode $fixtureNode
+`;
+  await writeFile(wrapperPath, wrapperSource.replace(invocationMarker, harnessInvocation));
+
+  const driveName = usbDrive.match(/^[A-Za-z]:$/) ? usbDrive[0].toUpperCase() : "Q";
+  const command = [
+    `$existing = Get-PSDrive -Name ${driveName} -ErrorAction SilentlyContinue`,
+    `if ($existing) { throw 'Fixture drive ${driveName}: is already in use.' }`,
+    `New-PSDrive -Name ${driveName} -PSProvider FileSystem -Root ${psQuote(mediaRoot)} | Out-Null`,
+    `try { & ${psQuote(wrapperPath)} -UsbDrive ${psQuote(usbDrive)} } finally { Remove-PSDrive -Name ${driveName} -Force -ErrorAction SilentlyContinue }`
+  ].join("\n");
+  let result;
+  try {
+    const output = await execFile("powershell.exe", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      command
+    ], {
+      env: { ...process.env, HOST_PREP_PS_SCENARIO: scenario },
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    result = { code: 0, stdout: output.stdout, stderr: output.stderr };
+  } catch (error) {
+    result = { code: error.code, stdout: error.stdout ?? "", stderr: error.stderr ?? "" };
+  }
+  let operations = [];
+  try {
+    operations = (await readFile(logPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return {
+    base,
+    cleanup: () => rm(base, { recursive: true, force: true }),
+    operations,
+    result
+  };
+}
+
+test("host prep PowerShell behavior rejects unsafe destinations before Node and pins device identity", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async (t) => {
+  const preNodeScenarios = [
+    ["UNC", "success", "\\\\server\\share"],
+    ["relative", "success", "Q"],
+    ["non-root", "success", "Q:\\folder"],
+    ["network", "network", "Q:"],
+    ["SUBST", "subst", "Q:"],
+    ["reparse", "reparse", "Q:"],
+    ["non-removable", "non-removable", "Q:"],
+    ["non-FAT32", "non-fat32", "Q:"],
+    ["low-space", "low-space", "Q:"]
+  ];
+  for (const [name, scenario, usbDrive] of preNodeScenarios) {
+    await t.test(name, async () => {
+      const harness = await runHostPrepPowerShellHarness({ scenario, usbDrive });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.deepEqual(harness.operations, []);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+
+  await t.test("old Node stops before builder", async () => {
+    const harness = await runHostPrepPowerShellHarness({ scenario: "old-node" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.deepEqual(harness.operations, ["node-version"]);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("success builds once then verifies Phase 2 and Phase 1 in order", async () => {
+    const harness = await runHostPrepPowerShellHarness();
+    try {
+      assert.equal(harness.result.code, 0, harness.result.stderr);
+      assert.deepEqual(harness.operations, [
+        "node-version",
+        "builder",
+        "phase2-verifier",
+        "phase1-verifier"
+      ]);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  for (const [name, expectedOperations] of [
+    ["replace-prewrite", ["node-version"]],
+    ["replace-postbuild", ["node-version", "builder"]],
+    ["replace-after-phase2", ["node-version", "builder", "phase2-verifier"]],
+    ["replace-after-phase1", ["node-version", "builder", "phase2-verifier", "phase1-verifier"]]
+  ]) {
+    await t.test(name, async () => {
+      const harness = await runHostPrepPowerShellHarness({ scenario: name });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.deepEqual(harness.operations, expectedOperations);
+        assert.match(harness.result.stderr, /device|volume|identity|changed/i);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
 });
 
 test("host prep instructions provide the stand-alone fail-closed local operator flow", async () => {
@@ -4935,7 +5195,7 @@ async function createHostPrepReadmeHarness(scenario = {}) {
   const fingerprintInput = path.join(base, "fingerprint-input");
   const applyInput = path.join(base, "apply-input");
   const scriptPath = path.join(base, "operator.sh");
-  const fingerprint = "8".repeat(64);
+  const fingerprint = sha256Bytes("fixture manifest\n");
   await Promise.all([
     mkdir(fakeBin),
     mkdir(home),
@@ -5026,12 +5286,16 @@ if [[ "\${1:-}" == --check ]]; then
   [[ "\${FAKE_CHECKSUM_FAIL_AT:-0}" != "$count" ]] || exit 75
   exit 0
 fi
-printf '%s  %s\\n' ${fingerprint} "\${1:-}"
+exec /usr/bin/sha256sum "$@"
 `);
   await writeHostPrepReadmeExecutable(path.join(fakeBin, "cp"), `#!/bin/bash
 printf 'copy:%s\\n' "$*" >> ${shellSingleQuote(logFile)}
 [[ "\${FAKE_COPY_FAIL:-0}" != 1 ]] || exit 76
-exec /usr/bin/cp "$@"
+/usr/bin/cp "$@"
+if [[ "\${FAKE_COPY_MANIFEST_SUBSTITUTION:-0}" == 1 ]]; then
+  destination="\${@: -1}"
+  printf 'substituted copied manifest\\n' > "$destination/CHECKSUMS/PHASE-2-HOST-PREP.sha256"
+fi
 `);
   await writeHostPrepReadmeExecutable(path.join(fakeBin, "sync"), `#!/bin/bash
 printf 'sync\\n' >> ${shellSingleQuote(logFile)}
@@ -5075,6 +5339,7 @@ printf 'sync\\n' >> ${shellSingleQuote(logFile)}
         FAKE_MOUNT_OPTIONS: scenario.mountOptions || "rw,nodev,nosuid,noexec,uid=1001,gid=1002,umask=0077",
         FAKE_CHECKSUM_FAIL_AT: scenario.checksumFailAt || "0",
         FAKE_COPY_FAIL: scenario.copyFails ? "1" : "0",
+        FAKE_COPY_MANIFEST_SUBSTITUTION: scenario.copyManifestSubstitution ? "1" : "0",
         FAKE_SYNC_FAIL: scenario.syncFails ? "1" : "0",
         FAKE_UNMOUNT_FAIL: scenario.unmountFails ? "1" : "0"
       },
@@ -5129,6 +5394,7 @@ test("host prep instructions fail closed across mount, copy, command, sync, unmo
     ["missing mount option", { mountOptions: "rw,nodev,nosuid,uid=1001,gid=1002,umask=0077" }, /mount options/i],
     ["failed media checksum", { checksumFailAt: "1" }, /checksum/i],
     ["failed copy", { copyFails: true }, /staging copy/i],
+    ["copied manifest substitution", { copyManifestSubstitution: true }, /copied manifest fingerprint/i],
     ["failed local checksum", { checksumFailAt: "2" }, /local checksum/i],
     ["failed preflight", { preflightFails: true }, /preflight/i],
     ["failed apply", { applyFails: true }, /apply failed/i],

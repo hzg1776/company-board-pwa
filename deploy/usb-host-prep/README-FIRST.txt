@@ -200,6 +200,10 @@ sha256sum --check CHECKSUMS/PHASE-2-HOST-PREP.sha256 || stop 'media checksum ver
 STAGE_ROOT="$(mktemp -d "$HOME/project-a-host-prep.XXXXXX")" || stop 'the local stage could not be created.'
 cp -a -- "$HANDOFF_ROOT/." "$STAGE_ROOT/" || stop 'the verified local staging copy failed.'
 cd -- "$STAGE_ROOT" || stop 'the local stage could not be entered.'
+COPIED_MANIFEST_FINGERPRINT="$(sha256sum CHECKSUMS/PHASE-2-HOST-PREP.sha256 | awk '{print $1}')" ||
+  stop 'copied manifest fingerprinting failed.'
+[[ "$COPIED_MANIFEST_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]] ||
+  stop 'the copied manifest fingerprint does not match the approved out-of-band value.'
 sha256sum --check CHECKSUMS/PHASE-2-HOST-PREP.sha256 || stop 'local checksum verification failed.'
 
 /usr/bin/env -i \
