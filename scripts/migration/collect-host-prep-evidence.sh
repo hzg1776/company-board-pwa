@@ -366,11 +366,28 @@ evidence_validate_root() {
 
 evidence_read_os() {
   local os_file
+  local os_identity_before
+  local os_identity_after
+  local link_file
+  local link_identity_before=""
+  local link_identity_after=""
+  local link_target_before=""
+  local link_target_after=""
   local line
   local id=""
   local version=""
   os_file=$(evidence_system_path "/etc/os-release") || return 1
+  if [[ -L "$os_file" ]]; then
+    link_file="$os_file"
+    link_target_before=$(/usr/bin/readlink -- "$link_file" 2>/dev/null) || return 1
+    [[ "$link_target_before" == "../usr/lib/os-release" ]] || return 1
+    link_identity_before=$(
+      /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_file" 2>/dev/null
+    ) || return 1
+    os_file=$(evidence_system_path "/usr/lib/os-release") || return 1
+  fi
   [[ -f "$os_file" && ! -L "$os_file" ]] || return 1
+  os_identity_before=$(evidence_identity "$os_file") || return 1
   (( $(/usr/bin/stat -c '%s' -- "$os_file" 2>/dev/null) <= 4096 )) || return 1
   while IFS= read -r line; do
     case "$line" in
@@ -378,6 +395,16 @@ evidence_read_os() {
       VERSION_ID=13|VERSION_ID=\"13\") version="13" ;;
     esac
   done < "$os_file"
+  os_identity_after=$(evidence_identity "$os_file") || return 1
+  [[ "$os_identity_before" == "$os_identity_after" ]] || return 1
+  if [[ -n "$link_identity_before" ]]; then
+    link_target_after=$(/usr/bin/readlink -- "$link_file" 2>/dev/null) || return 1
+    link_identity_after=$(
+      /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$link_file" 2>/dev/null
+    ) || return 1
+    [[ "$link_target_before" == "$link_target_after" &&
+      "$link_identity_before" == "$link_identity_after" ]] || return 1
+  fi
   [[ "$id" == "debian" && "$version" == "13" ]]
 }
 

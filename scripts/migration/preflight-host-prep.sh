@@ -710,14 +710,48 @@ host_prep_read_mapped_text() {
   printf '%s' "$HOST_PREP_MAPPED_TEXT"
 }
 
-host_prep_read_os_release() {
+host_prep_read_os_release_text() {
   local os_release
+  local link_identity_before
+  local link_identity_after
+  local link_target_before
+  local link_target_after
+  local contents
+
+  HOST_PREP_MAPPED_TEXT=""
+  host_prep_system_path "/etc/os-release" 1 >/dev/null || return 1
+  os_release="$HOST_PREP_MAPPED_PATH"
+  if [[ ! -L "$os_release" ]]; then
+    host_prep_read_mapped_text "/etc/os-release" 65536 >/dev/null
+    return
+  fi
+
+  link_target_before=$(/usr/bin/readlink -- "$os_release" 2>/dev/null) || return 1
+  [[ "$link_target_before" == "../usr/lib/os-release" ]] || return 1
+  link_identity_before=$(
+    /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$os_release" 2>/dev/null
+  ) || return 1
+  host_prep_read_mapped_text "/usr/lib/os-release" 65536 >/dev/null || return 1
+  contents="$HOST_PREP_MAPPED_TEXT"
+  link_target_after=$(/usr/bin/readlink -- "$os_release" 2>/dev/null) || return 1
+  link_identity_after=$(
+    /usr/bin/stat -c '%d:%i:%u:%g:%s:%Y:%Z:%f' -- "$os_release" 2>/dev/null
+  ) || return 1
+  [[ "$link_target_before" == "$link_target_after" &&
+    "$link_identity_before" == "$link_identity_after" ]] || return 1
+  if (( HOST_PREP_TEST_MODE == 1 )); then
+    host_prep_validate_mapped_path "/etc/os-release" 1 || return 1
+  fi
+  HOST_PREP_MAPPED_TEXT="$contents"
+}
+
+host_prep_read_os_release() {
   local contents
   local key
   local value
   local id=""
   local version_id=""
-  host_prep_read_mapped_text "/etc/os-release" 65536 >/dev/null || return 1
+  host_prep_read_os_release_text || return 1
   contents="$HOST_PREP_MAPPED_TEXT"
   while IFS='=' read -r key value; do
     value="${value%\"}"

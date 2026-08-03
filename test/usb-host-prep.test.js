@@ -80,6 +80,23 @@ async function writeExecutable(filePath, body) {
   await chmod(filePath, 0o700);
 }
 
+async function useCanonicalDebianOsReleaseSymlink(systemRoot) {
+  const etcOsRelease = path.join(systemRoot, "etc", "os-release");
+  const usrLib = path.join(systemRoot, "usr", "lib");
+  const usrLibOsRelease = path.join(usrLib, "os-release");
+  await mkdir(usrLib, { recursive: true });
+  await rename(etcOsRelease, usrLibOsRelease);
+  await symlink("../usr/lib/os-release", etcOsRelease);
+}
+
+async function useUnexpectedOsReleaseSymlink(systemRoot) {
+  const etcOsRelease = path.join(systemRoot, "etc", "os-release");
+  const varLib = path.join(systemRoot, "var", "lib");
+  await mkdir(varLib, { recursive: true });
+  await rename(etcOsRelease, path.join(varLib, "os-release"));
+  await symlink("../var/lib/os-release", etcOsRelease);
+}
+
 function assertBoundedPreflightFailure(result) {
   assert.notEqual(result.code, 0);
   assert.equal(
@@ -1500,6 +1517,49 @@ test(
           await rm(fixture.base, { recursive: true, force: true });
         }
       });
+    }
+  }
+);
+
+test(
+  "host prep preflight accepts Debian's canonical os-release symlink",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture();
+    try {
+      await useCanonicalDebianOsReleaseSymlink(fixture.root);
+      const before = await snapshotFixtureTree(fixture.root);
+      const result = await runHostPrepScript(fixture);
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout.trim()), {
+        ok: true,
+        phaseId: HOST_PREP_PHASE_ID,
+        classification: "clean",
+        tokenCreated: true
+      });
+      assert.deepEqual(await snapshotFixtureTree(fixture.root), before);
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep preflight rejects an unexpected os-release symlink target",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepFixture();
+    try {
+      await useUnexpectedOsReleaseSymlink(fixture.root);
+      const result = await runHostPrepScript(fixture);
+      assertBoundedPreflightFailure(result);
+      assert.match(result.stderr, /step=baseline/);
+      await assert.rejects(
+        lstat(path.join(fixture.stage, ".host-prep-preflight-ok")),
+        { code: "ENOENT" }
+      );
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
     }
   }
 );
@@ -3746,6 +3806,43 @@ test(
           await rm(fixture.base, { recursive: true, force: true });
         }
       });
+    }
+  }
+);
+
+test(
+  "host prep evidence accepts Debian's canonical os-release symlink",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepEvidenceFixture();
+    try {
+      await useCanonicalDebianOsReleaseSymlink(fixture.systemRoot);
+      const result = await runHostPrepEvidence(fixture);
+      assert.equal(result.code, 0, result.stderr);
+      const report = await readFile(
+        path.join(fixture.fromDir, HOST_PREP_EVIDENCE_REPORT),
+        "utf8"
+      );
+      assert.match(report, /^OS: Debian 13$/m);
+      assert.match(report, /^Classification: not-applied$/m);
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  "host prep evidence rejects an unexpected os-release symlink target",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const fixture = await createHostPrepEvidenceFixture();
+    try {
+      await useUnexpectedOsReleaseSymlink(fixture.systemRoot);
+      const result = await runHostPrepEvidence(fixture);
+      assert.notEqual(result.code, 0);
+      assert.deepEqual(await readdir(fixture.fromDir), []);
+    } finally {
+      await rm(fixture.base, { recursive: true, force: true });
     }
   }
 );
