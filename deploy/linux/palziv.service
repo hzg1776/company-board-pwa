@@ -1,0 +1,32 @@
+[Unit]
+Description=Palziv Communications and Alert Center
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=palziv
+Group=palziv
+WorkingDirectory=/opt/palziv/current
+EnvironmentFile=/etc/palziv/palziv.env
+ExecStart=/opt/node/bin/node /opt/palziv/current/server.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/palziv/data
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

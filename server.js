@@ -23,6 +23,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || "").trim();
 const PUBLIC_DIR = process.env.PUBLIC_DIR ? path.resolve(process.env.PUBLIC_DIR) : path.join(__dirname, "public");
 const LOCAL_SECRETS_DIR = path.join(__dirname, "local-secrets");
 const LOCAL_BOOTSTRAP_TOKEN_FILE = path.join(LOCAL_SECRETS_DIR, "bootstrap-token.txt");
@@ -3233,6 +3234,7 @@ setInterval(() => {
   });
 }, WEATHER_AUTO_REFRESH_MS);
 
-server.listen(PORT, () => {
-  console.log(`${displayBrandName(siteConfig)} running at http://localhost:${PORT} (${boardStore.backend} storage)`);
+server.listen(HOST ? { port: PORT, host: HOST } : { port: PORT }, () => {
+  const displayHost = HOST || "localhost";
+  console.log(`${displayBrandName(siteConfig)} running at http://${displayHost}:${PORT} (${boardStore.backend} storage)`);
 });
