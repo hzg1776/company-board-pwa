@@ -119,6 +119,89 @@ async function requireEmptyDirectory(directory, label) {
   }
 }
 
+async function requireExactDirectoryFiles(directory, expected, label) {
+  const entries = (await readdir(directory)).sort();
+  const wanted = [...expected].sort();
+  if (JSON.stringify(entries) !== JSON.stringify(wanted)) {
+    throw new Error(`${label} has an unexpected tree: ${entries.join(", ")}`);
+  }
+}
+
+async function requireChecksums(directory, manifestName, expectedFiles) {
+  const raw = await readFile(path.join(directory, manifestName), "utf8");
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  const actualNames = [];
+  for (const line of lines) {
+    const match = /^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$/.exec(line);
+    if (!match) throw new Error(`Invalid checksum line in ${manifestName}`);
+    const fileName = match[2];
+    actualNames.push(fileName);
+    if (digest(await readFile(path.join(directory, fileName))) !== match[1]) {
+      throw new Error(`Checksum mismatch for ${fileName}`);
+    }
+  }
+  actualNames.sort();
+  const wanted = [...expectedFiles].sort();
+  if (JSON.stringify(actualNames) !== JSON.stringify(wanted)) {
+    throw new Error(`${manifestName} does not cover the exact expected files`);
+  }
+}
+
+async function verifyStageReturn(bundleRoot, includeCutover) {
+  const returnRoot = path.join(bundleRoot, "FROM-DEBIAN");
+  const expected = ["STAGE-SUCCESS.json", "STAGE-SUCCESS.sha256", "age-recipient.txt"];
+  if (includeCutover) expected.push("CUTOVER-SUCCESS.json", "CUTOVER-SUCCESS.sha256");
+  await requireExactDirectoryFiles(returnRoot, expected, "FROM-DEBIAN");
+  await requireChecksums(returnRoot, "STAGE-SUCCESS.sha256", ["STAGE-SUCCESS.json", "age-recipient.txt"]);
+  const recipient = await readFile(path.join(returnRoot, "age-recipient.txt"), "utf8");
+  if (!/^age1[ac-hj-np-z02-9]{58}\r?\n$/.test(recipient)) throw new Error("Invalid age recipient");
+  const receipt = JSON.parse(await readFile(path.join(returnRoot, "STAGE-SUCCESS.json"), "utf8"));
+  if (receipt.schemaVersion !== 1 || receipt.phaseId !== TWO_PHASE_PHASE_ID || receipt.classification !== "staged" ||
+      receipt.cloudflared !== "disabled-inactive" || !/^[a-f0-9]{40}$/.test(receipt.releaseSha)) {
+    throw new Error("Invalid stage receipt");
+  }
+  let cutoverReceipt = null;
+  if (includeCutover) {
+    await requireChecksums(returnRoot, "CUTOVER-SUCCESS.sha256", ["CUTOVER-SUCCESS.json"]);
+    cutoverReceipt = JSON.parse(await readFile(path.join(returnRoot, "CUTOVER-SUCCESS.json"), "utf8"));
+    if (cutoverReceipt.schemaVersion !== 1 || cutoverReceipt.phaseId !== TWO_PHASE_PHASE_ID ||
+        cutoverReceipt.classification !== "cutover-complete" || cutoverReceipt.cloudflared !== "active") {
+      throw new Error("Invalid cutover receipt");
+    }
+  }
+  return { receipt, cutoverReceipt };
+}
+
+async function verifyFinalEncrypted(bundleRoot) {
+  const finalRoot = path.join(bundleRoot, "FINAL-ENCRYPTED");
+  const encrypted = [
+    "cloudflared-config.age",
+    "cloudflared-credential.age",
+    "production-env.age",
+    "runtime.tar.gz.age"
+  ];
+  await requireExactDirectoryFiles(
+    finalRoot,
+    [...encrypted, "CUTOVER-AUTHORIZATION.json", "FINAL-ENCRYPTED.sha256"],
+    "FINAL-ENCRYPTED"
+  );
+  await requireChecksums(finalRoot, "FINAL-ENCRYPTED.sha256", encrypted);
+  const authorization = JSON.parse(await readFile(path.join(finalRoot, "CUTOVER-AUTHORIZATION.json"), "utf8"));
+  if (authorization.schemaVersion !== 1 || authorization.phaseId !== TWO_PHASE_PHASE_ID ||
+      authorization.classification !== "cutover-authorized" ||
+      !/^[a-f0-9]{64}$/.test(authorization.stageReceiptSha256) ||
+      !/^[a-f0-9]{64}$/.test(authorization.ageRecipientSha256) ||
+      !/^[a-f0-9]{64}$/.test(authorization.runtimeArchivePlaintextSha256)) {
+    throw new Error("Invalid cutover authorization");
+  }
+  const stageReceipt = await readFile(path.join(bundleRoot, "FROM-DEBIAN", "STAGE-SUCCESS.json"));
+  const recipient = await readFile(path.join(bundleRoot, "FROM-DEBIAN", "age-recipient.txt"));
+  if (authorization.stageReceiptSha256 !== digest(stageReceipt) || authorization.ageRecipientSha256 !== digest(recipient)) {
+    throw new Error("Cutover authorization does not match the staged Debian host");
+  }
+  return authorization;
+}
+
 async function readBundleMetadata(bundleRoot) {
   const raw = await readFile(path.join(bundleRoot, "BUNDLE.json"), "utf8");
   const parsed = JSON.parse(raw);
@@ -195,9 +278,20 @@ export async function verifyTwoPhaseUsb({ bundleRoot, mode }) {
   await readBundleMetadata(root);
   const files = await verifyManifest(root);
 
+  let stageReceipt = null;
+  let cutoverReceipt = null;
   if (mode === "outbound") {
     await requireEmptyDirectory(path.join(root, "FROM-DEBIAN"), "FROM-DEBIAN");
     await requireEmptyDirectory(path.join(root, "FINAL-ENCRYPTED"), "FINAL-ENCRYPTED");
+  } else if (mode === "staged-return") {
+    ({ receipt: stageReceipt } = await verifyStageReturn(root, false));
+    await requireEmptyDirectory(path.join(root, "FINAL-ENCRYPTED"), "FINAL-ENCRYPTED");
+  } else if (mode === "cutover-ready") {
+    ({ receipt: stageReceipt } = await verifyStageReturn(root, false));
+    await verifyFinalEncrypted(root);
+  } else {
+    ({ receipt: stageReceipt, cutoverReceipt } = await verifyStageReturn(root, true));
+    await verifyFinalEncrypted(root);
   }
 
   return {
@@ -205,7 +299,7 @@ export async function verifyTwoPhaseUsb({ bundleRoot, mode }) {
     phaseId: TWO_PHASE_PHASE_ID,
     mode,
     inboundFiles: files.length,
-    stageReceipt: null,
-    cutoverReceipt: null
+    stageReceipt,
+    cutoverReceipt
   };
 }

@@ -160,3 +160,17 @@ test("two-phase builder publishes a verified no-clobber bundle", async () => {
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+test("two-phase Debian scripts preserve the stage-before-cutover boundary", async () => {
+  const stage = await readFile(new URL("../scripts/migration/1-STAGE-DEBIAN.sh", import.meta.url), "utf8");
+  const cutover = await readFile(new URL("../scripts/migration/2-CUTOVER-DEBIAN.sh", import.meta.url), "utf8");
+  const windowsPrep = await readFile(new URL("../scripts/migration/prepare-two-phase-cutover.ps1", import.meta.url), "utf8");
+
+  assert.match(stage, /ERROR line=%s status=%s command=%q/);
+  assert.match(stage, /systemctl disable --now cloudflared\.service/);
+  assert.match(stage, /classification:\"staged\"/);
+  assert.doesNotMatch(stage, /\baddgroup\b/);
+  assert.ok(cutover.indexOf('for route in "${LOCAL_ROUTES[@]}"') < cutover.indexOf("systemctl enable --now cloudflared.service"));
+  assert.match(cutover, /classification:\"cutover-complete\"/);
+  assert.match(windowsPrep, /Explicit cutover authorization is required/);
+});
