@@ -175,7 +175,7 @@ apply_resolve_mutator() {
       curl) candidate="/usr/bin/curl" ;;
       sha256sum) candidate="/usr/bin/sha256sum" ;;
       tar) candidate="/usr/bin/tar" ;;
-      addgroup) candidate="/usr/sbin/addgroup" ;;
+      groupadd) candidate="/usr/sbin/groupadd" ;;
       adduser) candidate="/usr/sbin/adduser" ;;
       install) candidate="/usr/bin/install" ;;
       ln) candidate="/usr/bin/ln" ;;
@@ -1512,7 +1512,7 @@ apply_main() {
   apply_observe_runtime_topology "$extracted_tree" || return 1
 
   APPLY_STEP="group"
-  apply_run_quiet addgroup --system palziv || return 1
+  apply_run_quiet groupadd --system palziv || return 1
   APPLY_STEP="account"
   apply_run_quiet adduser \
     --system \

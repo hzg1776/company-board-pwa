@@ -932,8 +932,8 @@ exit "$status"
 `
   );
   await writeExecutable(
-    path.join(fixture.bin, "apply-addgroup"),
-    `${mutationLogger("addgroup", mutationLog)}
+    path.join(fixture.bin, "apply-groupadd"),
+    `${mutationLogger("groupadd", mutationLog)}
 test "$*" = '--system palziv'
 test ! -e ${shellSingleQuote(groupMarker)}
 : > ${shellSingleQuote(groupMarker)}
@@ -948,6 +948,7 @@ test ! -e ${shellSingleQuote(userMarker)}
 : > ${shellSingleQuote(userMarker)}
 `
   );
+  await symlink("apply-adduser", path.join(fixture.bin, "apply-addgroup"));
   await writeExecutable(
     path.join(fixture.bin, "apply-install"),
     `${mutationLogger("install", mutationLog)}
@@ -3000,7 +3001,7 @@ test(
         new RegExp(
           `^tar\\t--extract\\t--file=/proc/[0-9]+/fd/[0-9]+\\t--directory=${escapedRoot}/opt/\\.node-v24\\.18\\.0-linux-x64\\.partial\\.[A-Za-z0-9]+\\t--no-same-owner\\t--no-same-permissions\\t--delay-directory-restore$`
         ),
-        /^addgroup\t--system\tpalziv$/,
+        /^groupadd\t--system\tpalziv$/,
         /^adduser\t--system\t--ingroup\tpalziv\t--home\t\/var\/lib\/palziv\t--no-create-home\t--shell\t\/usr\/sbin\/nologin\tpalziv$/,
         new RegExp(`^install\\t-d\\t-o\\troot\\t-g\\tpalziv\\t-m\\t0750\\t--\\t${escapedRoot}/opt/palziv$`),
         new RegExp(`^install\\t-d\\t-o\\troot\\t-g\\tpalziv\\t-m\\t0750\\t--\\t${escapedRoot}/opt/palziv/releases$`),
@@ -3042,7 +3043,7 @@ test(
       );
       assert.equal(
         rawBootstrapLog.some((line) =>
-          /^(?:apt-get|curl|tar|addgroup|adduser|renameat2|ln)\t/.test(line) ||
+          /^(?:apt-get|curl|tar|groupadd|adduser|renameat2|ln)\t/.test(line) ||
           line.includes(`${fixture.root}/var/tmp/project-a-host-prep.`) ||
           line.includes(`${fixture.root}/opt/.node-`)
         ),
@@ -3169,7 +3170,7 @@ test(
           assert.equal(log.filter((line) => line.startsWith("curl\t")).length, 1);
           assert.equal(log.filter((line) => line.startsWith("sha256sum\t")).length, 0);
           assert.equal(log.filter((line) => line.startsWith("tar\t")).length, 0);
-          assert.equal(log.filter((line) => line.startsWith("addgroup\t")).length, 0);
+          assert.equal(log.filter((line) => line.startsWith("groupadd\t")).length, 0);
           assert.deepEqual(await readdir(path.join(fixture.root, "var", "tmp")), []);
         } finally {
           await rm(fixture.base, { recursive: true, force: true });
@@ -3208,7 +3209,7 @@ test(
             log.filter((line) => line.startsWith("tar\t") && line.includes("--extract")).length,
             0
           );
-          assert.equal(log.filter((line) => line.startsWith("addgroup\t")).length, 0);
+          assert.equal(log.filter((line) => line.startsWith("groupadd\t")).length, 0);
           assert.equal(log.filter((line) => line.startsWith("mv\t")).length, 0);
           await assert.rejects(
             lstat(path.join(fixture.root, "opt", "node-v24.18.0-linux-x64")),
