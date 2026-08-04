@@ -9,6 +9,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   TWO_PHASE_PHASE_ID,
   TWO_PHASE_ROOT_NAME,
@@ -81,7 +82,7 @@ export async function buildTwoPhaseUsb({ repositoryRoot, destinationRoot }) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]?.replaceAll("\\", "/")}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const repositoryIndex = process.argv.indexOf("--repository-root");
     const destinationIndex = process.argv.indexOf("--destination-root");

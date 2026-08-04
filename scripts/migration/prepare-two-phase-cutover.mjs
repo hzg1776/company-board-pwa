@@ -14,6 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 
 import { createRuntimeBackup, RUNTIME_FILES } from "../linux/runtime-backup-lib.mjs";
 import { TWO_PHASE_PHASE_ID, verifyTwoPhaseUsb } from "./two-phase-usb-lib.mjs";
@@ -156,7 +157,7 @@ function argumentValue(name) {
   return process.argv[index + 1];
 }
 
-if (import.meta.url === `file://${process.argv[1]?.replaceAll("\\", "/")}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const result = await prepareTwoPhaseCutover({
       bundleRoot: argumentValue("--bundle-root"),
