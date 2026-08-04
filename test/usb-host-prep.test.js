@@ -516,6 +516,13 @@ process.stdout.write(\`\${token.classification}\\t\${token.createdAtEpoch}\\n\`)
 NODE
   exit
 fi
+compact_output=0
+case "\${1-}" in
+  -c|--compact-output)
+    compact_output=1
+    shift
+    ;;
+esac
 test "\${1-}" = -n
 shift
 phase_id=
@@ -553,7 +560,11 @@ test "\${#manifest_fingerprint}" -eq 64
 test -n "$stage_root"
 case "$classification" in clean|already-prepared) ;; *) exit 92 ;; esac
 case "$created_at_epoch" in *[!0-9]*|'') exit 91 ;; esac
-printf '{"schemaVersion":1,"phaseId":"%s","manifestFingerprint":"%s","stageRoot":"%s","classification":"%s","createdAtEpoch":%s}\\n' "$phase_id" "$manifest_fingerprint" "$stage_root" "$classification" "$created_at_epoch"
+if test "$compact_output" -eq 1; then
+  printf '{"schemaVersion":1,"phaseId":"%s","manifestFingerprint":"%s","stageRoot":"%s","classification":"%s","createdAtEpoch":%s}\\n' "$phase_id" "$manifest_fingerprint" "$stage_root" "$classification" "$created_at_epoch"
+else
+  printf '{\\n  "schemaVersion": 1,\\n  "phaseId": "%s",\\n  "manifestFingerprint": "%s",\\n  "stageRoot": "%s",\\n  "classification": "%s",\\n  "createdAtEpoch": %s\\n}\\n' "$phase_id" "$manifest_fingerprint" "$stage_root" "$classification" "$created_at_epoch"
+fi
 `,
     ufw: "test \"${1-}\" = status\nprintf '%s\\n' 'Status: inactive'\n"
   };
