@@ -2,10 +2,8 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import {
-  copyFile,
   lstat,
   mkdir,
-  readFile,
   rename,
   rm,
   writeFile
@@ -19,18 +17,20 @@ import {
 } from "./two-phase-usb-lib.mjs";
 
 const execFile = promisify(execFileCallback);
-const EXCLUDED = /^(?:\.git|\.worktrees|node_modules|local-secrets|runtime|backups)(?:\/|$)|^(?:analytics|board|push|security)\.json$/;
+const EXCLUDED = /^(?:\.agents|\.git|\.github|\.worktrees|node_modules|local-secrets|runtime|backups|test|docs\/superpowers|docs\/manual-artifacts|scripts\/migration|scripts\/proxmox)(?:\/|$)|^(?:analytics|board|push|security)\.json$/;
 
-async function trackedFiles(repositoryRoot) {
-  const { stdout } = await execFile("git", ["-C", repositoryRoot, "ls-files", "-z"], { encoding: "buffer" });
+async function trackedFiles(repositoryRoot, releaseSha) {
+  const { stdout } = await execFile("git", ["-C", repositoryRoot, "ls-tree", "-r", "-z", "--name-only", releaseSha], { encoding: "buffer" });
   return stdout.toString("utf8").split("\0").filter(Boolean).map((entry) => entry.split(path.sep).join("/")).filter((entry) => !EXCLUDED.test(entry));
 }
 
-async function copyRegular(source, destination) {
-  const metadata = await lstat(source);
-  if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`Release source is not a regular file: ${source}`);
+async function copyCommitted(repositoryRoot, releaseSha, relativePath, destination) {
+  const { stdout } = await execFile("git", ["-C", repositoryRoot, "show", `${releaseSha}:${relativePath}`], {
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024
+  });
   await mkdir(path.dirname(destination), { recursive: true });
-  await copyFile(source, destination);
+  await writeFile(destination, stdout, { flag: "wx" });
 }
 
 export async function buildTwoPhaseUsb({ repositoryRoot, destinationRoot }) {
@@ -50,21 +50,22 @@ export async function buildTwoPhaseUsb({ repositoryRoot, destinationRoot }) {
     await mkdir(path.join(partialRoot, "FINAL-ENCRYPTED"));
     await mkdir(path.join(partialRoot, "FROM-DEBIAN"));
 
-    for (const relativePath of await trackedFiles(repository)) {
-      await copyRegular(
-        path.join(repository, ...relativePath.split("/")),
-        path.join(partialRoot, "PAYLOAD", "release", ...relativePath.split("/"))
-      );
+    for (const relativePath of await trackedFiles(repository, releaseSha)) {
+      await copyCommitted(repository, releaseSha, relativePath, path.join(partialRoot, "PAYLOAD", "release", ...relativePath.split("/")));
     }
     for (const [sourceName, destinationName] of [
       ["1-STAGE-DEBIAN.sh", "1-STAGE-DEBIAN.sh"],
       ["2-CUTOVER-DEBIAN.sh", "2-CUTOVER-DEBIAN.sh"],
       ["ROLLBACK-WINDOWS.ps1", "ROLLBACK-WINDOWS.ps1"]
     ]) {
-      await copyRegular(path.join(repository, "scripts", "migration", sourceName), path.join(partialRoot, destinationName));
+      await copyCommitted(repository, releaseSha, `scripts/migration/${sourceName}`, path.join(partialRoot, destinationName));
     }
-    const readmeSource = path.join(repository, "docs", "USB-TWO-PHASE-MIGRATION-EASY-INSTRUCTIONS.txt");
-    await copyRegular(readmeSource, path.join(partialRoot, "README-FIRST.txt"));
+    await copyCommitted(
+      repository,
+      releaseSha,
+      "docs/USB-TWO-PHASE-MIGRATION-EASY-INSTRUCTIONS.txt",
+      path.join(partialRoot, "README-FIRST.txt")
+    );
     await writeFile(
       path.join(partialRoot, "BUNDLE.json"),
       `${JSON.stringify({ schemaVersion: 1, phaseId: TWO_PHASE_PHASE_ID, releaseSha })}\n`

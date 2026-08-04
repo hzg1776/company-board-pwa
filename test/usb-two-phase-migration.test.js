@@ -174,3 +174,11 @@ test("two-phase Debian scripts preserve the stage-before-cutover boundary", asyn
   assert.match(cutover, /classification:\"cutover-complete\"/);
   assert.match(windowsPrep, /Explicit cutover authorization is required/);
 });
+
+test("two-phase operator instructions stay short and copy-ready", async () => {
+  const instructions = await readFile(new URL("../docs/USB-TWO-PHASE-MIGRATION-EASY-INSTRUCTIONS.txt", import.meta.url), "utf8");
+  assert.match(instructions, /Project-A-Migration-Two-Phase\/1-STAGE-DEBIAN\.sh/);
+  assert.match(instructions, /STOP\. Do not rerun the script\./);
+  assert.match(instructions, /Do not run 2-CUTOVER-DEBIAN\.sh yet\./);
+  assert.doesNotMatch(instructions, /<<['"]|\w+\(\)\s*\{/);
+});

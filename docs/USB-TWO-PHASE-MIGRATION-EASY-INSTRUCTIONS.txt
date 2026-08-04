@@ -1,0 +1,52 @@
+PROJECT-A MIGRATION - EASY INSTRUCTIONS
+=======================================
+
+PHASE 1 - DO THIS NOW
+
+1. Attach this USB drive to the Debian VM in Proxmox.
+
+2. At the Debian prompt, run:
+
+   lsblk -o NAME,PATH,TYPE,FSTYPE,RM,TRAN,PKNAME,MODEL,SERIAL,SIZE
+
+   The USB must appear as a removable FAT32 partition whose parent has RM=1
+   and TRAN=usb. For the approved drive, the partition was /dev/sdb1.
+
+3. Run these two lines:
+
+   sudo mkdir -p /mnt/project-a-migration && sudo mount -o rw,nosuid,nodev,noexec /dev/sdb1 /mnt/project-a-migration
+
+   sudo bash /mnt/project-a-migration/Project-A-Migration-Two-Phase/1-STAGE-DEBIAN.sh
+
+4. Wait for this exact beginning:
+
+   STAGE COMPLETE:
+
+5. Then run:
+
+   sudo umount /mnt/project-a-migration
+
+   Remove the USB and put it back in the Windows computer.
+
+IF ANY ERROR APPEARS
+
+STOP. Do not rerun the script. Copy the complete ERROR line and return the USB
+to Windows. The new script reports the actual failed command and line number.
+
+IMPORTANT
+
+- Windows stays live during Phase 1.
+- Debian Cloudflare remains stopped during Phase 1.
+- No production data or production secrets are on this outbound USB.
+- Do not run 2-CUTOVER-DEBIAN.sh yet.
+
+PHASE 2 - NOT AVAILABLE YET
+
+Phase 2 becomes available only after the returned Phase 1 receipt is verified
+on Windows and the owner explicitly authorizes cutover. At that time the same
+mount line is used, followed by:
+
+   sudo bash /mnt/project-a-migration/Project-A-Migration-Two-Phase/2-CUTOVER-DEBIAN.sh
+
+Do not run that command until you are specifically told the encrypted cutover
+payload is ready.
