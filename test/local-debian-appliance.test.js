@@ -228,6 +228,239 @@ printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE' >&2
   };
 }
 
+async function runGuestVerifierHarness({ phase = "post-reboot", scenario = "success" } = {}) {
+  const created = await runWsl("mktemp -d /tmp/palziv-verifier.XXXXXXXX");
+  assert.equal(created.code, 0, created.output);
+  const fixtureRoot = created.output.trim();
+  assert.match(fixtureRoot, /^\/tmp\/palziv-verifier\.[A-Za-z0-9]+$/);
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-verifier-wrapper-"));
+  const wrapperPath = path.join(base, "run-verifier-fixture.sh");
+  const verifier = toWslPath(path.resolve("scripts/appliance/verify-debian-appliance.sh"));
+  await writeFile(wrapperPath, String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+fixture_root="$1"
+scenario="$2"
+verifier="$3"
+release_sha="$4"
+phase="$5"
+root="$fixture_root/root"
+receipt_root="$fixture_root/receipt"
+bin_root="$fixture_root/bin"
+
+install -d -m 0700 "$root" "$receipt_root" "$bin_root"
+install -d -m 0755 "$root/etc" "$root/etc/systemd/system" "$root/opt" "$root/var" "$root/usr-local"
+printf '%s\n' 'ID=debian' 'VERSION_ID="13"' > "$root/etc/os-release"
+printf '%s\n' 'root:x:0:0:root:/root:/bin/bash' 'palziv:x:45678:45678::/var/lib/palziv:/usr/sbin/nologin' 'palziv-build:x:45679:45679::/home/palziv-build:/bin/bash' 'cloudflared:x:45680:45680::/var/lib/cloudflared:/usr/sbin/nologin' > "$root/etc/passwd"
+printf '%s\n' 'root:x:0:' 'palziv:x:45678:' 'palziv-build:x:45679:' 'cloudflared:x:45680:' > "$root/etc/group"
+
+install -d -o root -g root -m 0755 "$root/opt/node/bin"
+cat > "$root/opt/node/bin/node" <<'NODE'
+#!/usr/bin/env bash
+if [[ "$PALZIV_VERIFIER_SCENARIO" == 'bad-node' ]]; then printf '%s\n' 'v24.17.0'; else printf '%s\n' 'v24.18.0'; fi
+NODE
+chmod 0755 "$root/opt/node/bin/node"
+install -d -o root -g 45678 -m 0750 "$root/opt/palziv/releases"
+install -d -o root -g 45678 -m 0750 "$root/opt/palziv/releases/$release_sha"
+ln -s "/opt/palziv/releases/$release_sha" "$root/opt/palziv/current"
+install -d -o root -g 45678 -m 0750 "$root/etc/palziv"
+install -d -o root -g 45680 -m 0750 "$root/etc/cloudflared"
+install -o root -g 45678 -m 0640 /dev/null "$root/etc/palziv/palziv.env"
+printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE-NEVER-READ' > "$root/etc/palziv/migration-age.key"
+chown root:root "$root/etc/palziv/migration-age.key"
+chmod 0600 "$root/etc/palziv/migration-age.key"
+install -d -o 45678 -g 45678 -m 0700 "$root/var/lib/palziv/data"
+install -d -o root -g 45678 -m 0750 "$root/var/backups/palziv"
+install -d -o root -g root -m 0755 "$root/var/tmp"
+install -d -o root -g root -m 0755 "$root/usr-local/sbin"
+install -o root -g root -m 0750 /dev/null "$root/usr-local/sbin/palziv-run-backup"
+for unit in palziv.service palziv-backup.service palziv-backup.timer palziv-health.service palziv-health.timer cloudflared.service; do
+  install -o root -g root -m 0644 /dev/null "$root/etc/systemd/system/$unit"
+done
+install -d -o root -g root -m 0755 "$root/etc/systemd/journald.conf.d"
+install -o root -g root -m 0644 /dev/null "$root/etc/systemd/journald.conf.d/palziv.conf"
+
+cat > "$bin_root/systemctl" <<'SYSTEMCTL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >> "$PALZIV_VERIFIER_FIXTURE_ROOT/systemctl.log"
+case "$*" in
+  'is-active --quiet qemu-guest-agent.service') [[ "$PALZIV_VERIFIER_SCENARIO" != 'qga-inactive' ]] ;;
+  'is-active --quiet systemd-timesyncd.service') exit 0 ;;
+  'is-active --quiet palziv.service') exit 0 ;;
+  'is-enabled --quiet cloudflared.service') [[ "$PALZIV_VERIFIER_SCENARIO" == 'cloudflared-enabled' ]] ;;
+  'is-active --quiet cloudflared.service') [[ "$PALZIV_VERIFIER_SCENARIO" == 'cloudflared-active' ]] ;;
+  *) exit 64 ;;
+esac
+SYSTEMCTL
+cat > "$bin_root/ss" <<'SS'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >> "$PALZIV_VERIFIER_FIXTURE_ROOT/ss.log"
+if [[ "$PALZIV_VERIFIER_SCENARIO" == 'public-listener' ]]; then
+  printf '%s\n' 'LISTEN 0 511 0.0.0.0:3116 0.0.0.0:*'
+else
+  printf '%s\n' 'LISTEN 0 511 127.0.0.1:3116 0.0.0.0:*'
+fi
+SS
+cat > "$bin_root/curl" <<'CURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+url=''
+for argument in "$@"; do url="$argument"; done
+printf '%s\n' "$url" >> "$PALZIV_VERIFIER_FIXTURE_ROOT/routes.log"
+if [[ "$PALZIV_VERIFIER_SCENARIO" == 'route-failure' && "$url" == */palzivalerts/hr ]]; then exit 22; fi
+CURL
+cat > "$bin_root/age-keygen" <<'AGE'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "$#" -eq 2 && "$1" == '-y' && "$2" == '/etc/palziv/migration-age.key' ]]
+printf 'age1'; printf 'q%.0s' {1..58}; printf '\n'
+AGE
+chmod 0755 "$bin_root/systemctl" "$bin_root/ss" "$bin_root/curl" "$bin_root/age-keygen"
+
+case "$scenario" in
+  bad-permission) chmod 0644 "$root/etc/palziv/palziv.env" ;;
+  forbidden-runtime) install -d -m 0750 "$root/opt/palziv/releases/$release_sha/runtime"; : > "$root/opt/palziv/releases/$release_sha/runtime/board.json" ;;
+  bad-os) printf '%s\n' 'ID=debian' 'VERSION_ID="12"' > "$root/etc/os-release" ;;
+esac
+
+cat > "$fixture_root/run-in-namespace.sh" <<'INNER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+fixture_root="$1"
+verifier="$2"
+release_sha="$3"
+phase="$4"
+receipt_root="$5"
+mount --bind "$fixture_root/root/etc" /etc
+mount --bind "$fixture_root/root/opt" /opt
+mount --bind "$fixture_root/root/var" /var
+mount --bind "$fixture_root/root/usr-local" /usr/local
+export PATH="$fixture_root/bin:/usr/bin:/bin"
+exec bash "$verifier" "$release_sha" "$phase" "$receipt_root"
+INNER
+chmod 0700 "$fixture_root/run-in-namespace.sh"
+export PALZIV_VERIFIER_FIXTURE_ROOT="$fixture_root"
+export PALZIV_VERIFIER_SCENARIO="$scenario"
+exec unshare --mount --propagation private bash "$fixture_root/run-in-namespace.sh" "$fixture_root" "$verifier" "$release_sha" "$phase" "$receipt_root"
+`);
+  const result = await runProcess("wsl.exe", [
+    "--distribution", "Ubuntu-24.04",
+    "--user", "root",
+    "--",
+    "bash", toWslPath(wrapperPath), fixtureRoot, scenario, verifier, RELEASE_SHA, phase
+  ], 15000);
+  const readLinux = async (relativePath) => {
+    const candidate = `${fixtureRoot}/${relativePath}`;
+    const read = await runWsl(`if [[ -f ${shellQuote(candidate)} ]]; then cat -- ${shellQuote(candidate)}; fi`);
+    assert.equal(read.code, 0, read.output);
+    return read.output;
+  };
+  return {
+    base,
+    fixtureRoot,
+    receiptRoot: `${fixtureRoot}/receipt`,
+    result,
+    readLinux,
+    cleanup: async () => {
+      await runWsl(`case ${shellQuote(fixtureRoot)} in /tmp/palziv-verifier.*) rm -rf -- ${shellQuote(fixtureRoot)} ;; *) exit 64 ;; esac`);
+      await rm(base, { recursive: true, force: true });
+    }
+  };
+}
+
+test("guest verifier enforces the complete local production contract with bounded metadata-only receipts", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  const expectedRoutes = [
+    "/api/health", "/palzivalerts/", "/palzivalerts/employee",
+    "/palzivalerts/hr", "/palzivalerts/webmaster", "/palzivalerts/it",
+    "/sw.js", "/manifest.webmanifest"
+  ];
+
+  await t.test("pre-reboot validates the contract without publishing receipts", async () => {
+    const harness = await runGuestVerifierHarness({ phase: "pre-reboot" });
+    try {
+      assert.equal(harness.result.code, 0, harness.result.output);
+      const verification = JSON.parse(harness.result.output);
+      assert.equal(verification.phase, "pre-reboot");
+      assert.equal(verification.classification, "pass");
+      assert.equal(verification.releaseSha, RELEASE_SHA);
+      assert.equal(verification.nodeVersion, "v24.18.0");
+      assert.equal(verification.routeCount, 8);
+      assert.deepEqual(verification.services, {
+        app: "active",
+        cloudflared: "disabled-inactive",
+        qemuGuestAgent: "active",
+        systemdTimesyncd: "active"
+      });
+      assert.equal(await harness.readLinux("receipt/VERIFY-LOCAL.json"), "");
+      const routes = (await harness.readLinux("routes.log")).trim().split("\n");
+      assert.deepEqual(routes, expectedRoutes.map((route) => `http://127.0.0.1:3116${route}`));
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("post-reboot publishes exact two-phase-compatible receipts atomically", async () => {
+    const harness = await runGuestVerifierHarness();
+    try {
+      assert.equal(harness.result.code, 0, harness.result.output);
+      assert.ok(Buffer.byteLength(harness.result.output) <= 16384);
+      assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN|password|credential|tunnel/i);
+      const verifyRaw = await harness.readLinux("receipt/VERIFY-LOCAL.json");
+      assert.ok(Buffer.byteLength(verifyRaw) <= 16384);
+      assert.doesNotMatch(verifyRaw.slice(0, -1), /[\x00-\x1f\x7f]/);
+      assert.deepEqual(JSON.parse(verifyRaw), JSON.parse(harness.result.output));
+      const stageRaw = await harness.readLinux("receipt/STAGE-SUCCESS.json");
+      assert.deepEqual(JSON.parse(stageRaw), {
+        schemaVersion: 1,
+        phaseId: "project-a-two-phase-v1",
+        classification: "staged",
+        releaseSha: RELEASE_SHA,
+        nodeVersion: "v24.18.0",
+        app: "active",
+        cloudflared: "disabled-inactive",
+        routeCount: 8,
+        completedAt: JSON.parse(stageRaw).completedAt
+      });
+      assert.match(JSON.parse(stageRaw).completedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      assert.equal(await harness.readLinux("receipt/age-recipient.txt"), `age1${"q".repeat(58)}\n`);
+      const checksum = await runWsl(`cd ${shellQuote(harness.receiptRoot)} && sha256sum --check --strict STAGE-SUCCESS.sha256`);
+      assert.equal(checksum.code, 0, checksum.output);
+      const tree = await runWsl(`find ${shellQuote(harness.receiptRoot)} -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort`);
+      assert.equal(tree.code, 0, tree.output);
+      assert.equal(tree.output, "STAGE-SUCCESS.json\nSTAGE-SUCCESS.sha256\nVERIFY-LOCAL.json\nage-recipient.txt\n");
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  for (const [name, scenario] of [
+    ["public listener", "public-listener"],
+    ["inactive guest agent", "qga-inactive"],
+    ["enabled Cloudflare", "cloudflared-enabled"],
+    ["route failure", "route-failure"],
+    ["unsafe configuration permission", "bad-permission"],
+    ["forbidden runtime metadata", "forbidden-runtime"],
+    ["wrong Debian release", "bad-os"],
+    ["wrong Node release", "bad-node"]
+  ]) {
+    await t.test(`rejects ${name}`, async () => {
+      const harness = await runGuestVerifierHarness({ scenario });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.ok(Buffer.byteLength(harness.result.output) < 4096, harness.result.output);
+        assert.match(harness.result.output, /Appliance verification failed/i);
+        assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN=/);
+        assert.equal(await harness.readLinux("receipt/STAGE-SUCCESS.json"), "");
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+});
+
 async function runBashControllerHarness({
   scenario = "success",
   precreateCacheImage,
@@ -332,16 +565,69 @@ if [[ "$*" == *'provision-debian-appliance.sh'* || "$*" == *'bash -s'* ]]; then
   [[ "$FIXTURE_SCENARIO" != 'provision-failure' ]] || exit 42
   exit 0
 fi
-[[ "$FIXTURE_SCENARIO" != 'active-shutdown-failure' ]] || exit 43
-pid="$(<"$FIXTURE_ROOT/qemu.pid")"
-kill -TERM "$pid"
-exit 0
+if [[ "$*" == *'palziv-verify-appliance '* && "$*" == *' pre-reboot '* ]]; then
+  printf '%s\n' '{"schemaVersion":1,"phase":"pre-reboot","classification":"pass","releaseSha":"${RELEASE_SHA}","nodeVersion":"v24.18.0","routeCount":8,"services":{"app":"active","cloudflared":"disabled-inactive","qemuGuestAgent":"active","systemdTimesyncd":"active"},"completedAt":"2026-08-05T12:00:00Z"}'
+  exit 0
+fi
+if [[ "$*" == *'systemctl restart palziv.service'* ]]; then
+  [[ "$FIXTURE_SCENARIO" != 'restart-failure' ]] || exit 45
+  [[ "$*" == *'curl --fail --silent --show-error --max-time 15 http://127.0.0.1:3116/api/health'* ]]
+  exit 0
+fi
+if [[ "$*" == *'systemctl reboot'* ]]; then
+  : > "$FIXTURE_ROOT/reboot-issued"
+  exit 255
+fi
+if [[ "$*" == *'palziv-build@127.0.0.1 true' ]]; then
+  [[ -f "$FIXTURE_ROOT/reboot-issued" ]] || exit 64
+  if [[ "$FIXTURE_SCENARIO" == 'reboot-never-down' ]]; then exit 0; fi
+  if [[ ! -f "$FIXTURE_ROOT/reboot-down" ]]; then
+    printf '%s\n' 'down' > "$FIXTURE_ROOT/reboot-down"
+    exit 255
+  fi
+  if [[ "$FIXTURE_SCENARIO" == 'reboot-never-up' ]]; then exit 255; fi
+  printf '%s\n' 'up' > "$FIXTURE_ROOT/reboot-up"
+  exit 0
+fi
+if [[ "$*" == *'palziv-verify-appliance '* && "$*" == *' post-reboot '* ]]; then
+  [[ -f "$FIXTURE_ROOT/reboot-up" ]]
+  [[ "$FIXTURE_SCENARIO" != 'post-verify-failure' ]] || exit 46
+  install -d -m 0700 "$FIXTURE_ROOT/remote-receipts"
+  route_count=8
+  [[ "$FIXTURE_SCENARIO" != 'bad-stage-receipt' ]] || route_count=9
+  printf '%s\n' '{"schemaVersion":1,"phase":"post-reboot","classification":"pass","releaseSha":"${RELEASE_SHA}","nodeVersion":"v24.18.0","routeCount":8,"services":{"app":"active","cloudflared":"disabled-inactive","qemuGuestAgent":"active","systemdTimesyncd":"active"},"completedAt":"2026-08-05T12:00:00Z"}' > "$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json"
+  printf '{"schemaVersion":1,"phaseId":"project-a-two-phase-v1","classification":"staged","releaseSha":"${RELEASE_SHA}","nodeVersion":"v24.18.0","app":"active","cloudflared":"disabled-inactive","routeCount":%s,"completedAt":"2026-08-05T12:00:00Z"}\n' "$route_count" > "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.json"
+  (printf 'age1'; printf 'q%.0s' {1..58}; printf '\n') > "$FIXTURE_ROOT/remote-receipts/age-recipient.txt"
+  (cd "$FIXTURE_ROOT/remote-receipts" && sha256sum STAGE-SUCCESS.json age-recipient.txt > STAGE-SUCCESS.sha256)
+  cat "$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json"
+  exit 0
+fi
+if [[ "$*" == *'chmod 0750 '*'palziv-appliance-receipts-'* ]]; then
+  exit 0
+fi
+if [[ "$*" == *'systemctl poweroff'* ]]; then
+  [[ "$FIXTURE_SCENARIO" != 'active-shutdown-failure' ]] || exit 43
+  pid="$(<"$FIXTURE_ROOT/qemu.pid")"
+  kill -TERM "$pid"
+  exit 0
+fi
+exit 64
 `);
   await writeCommandFixture(binRoot, "scp", String.raw`
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/scp.log"
 printf 'scp %s\n' "$*" >> "$FIXTURE_ROOT/transfer-operations.log"
 if [[ "$FIXTURE_SCENARIO" == 'hanging-scp' ]]; then sleep 3; fi
 [[ "$FIXTURE_SCENARIO" != 'scp-failure' ]] || exit 41
+if [[ "$*" == *'palziv-build@127.0.0.1:/var/tmp/palziv-appliance-receipts-'* ]]; then
+  [[ "$FIXTURE_SCENARIO" != 'receipt-copy-failure' ]] || exit 44
+  destination="${"$"}{!#}"
+  for argument in "$@"; do
+    if [[ "$argument" == palziv-build@127.0.0.1:* ]]; then
+      source_path="${"$"}{argument#*:}"
+      cp -- "$FIXTURE_ROOT/remote-receipts/${"$"}{source_path##*/}" "$destination/"
+    fi
+  done
+fi
 `);
   const qemuSource = path.join(fixtureRoot, "qemu-fixture.c");
   await writeFile(qemuSource, String.raw`#include <errno.h>
@@ -486,6 +772,7 @@ export PALZIV_APPLIANCE_SSH_TIMEOUT_SECONDS=2
 export PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS=1
 export PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS=1
 export PALZIV_APPLIANCE_PROVISION_TIMEOUT_SECONDS=1
+export PALZIV_APPLIANCE_REBOOT_TIMEOUT_SECONDS=2
 export PATH="$fixture_root/../bin:/usr/bin:/bin"
 if [[ "$scenario" == 'missing-kvm' ]]; then export PALZIV_APPLIANCE_KVM_DEVICE=/dev/palziv-missing-kvm; fi
 controller_args=(bash ${shellQuote(controller)} \
@@ -908,6 +1195,7 @@ test("WSL controller provisions only outside boot-only mode over pinned SSH and 
       assert.match(scpLog, /UserKnownHostsFile=/);
       assert.match(scpLog, /project-a-release\.tar/);
       assert.match(scpLog, /provision-debian-appliance\.sh/);
+      assert.match(scpLog, /verify-debian-appliance\.sh/);
       assert.match(scpLog, new RegExp(`palziv-build@127\\.0\\.0\\.1:/var/tmp/palziv-appliance-upload-${BUILD_ID}/$`, "m"));
       const sshLog = await harness.readLog("ssh.log");
       assert.match(sshLog, new RegExp(`mkdir -m 0700 -- /var/tmp/palziv-appliance-upload-${BUILD_ID}`));
@@ -916,22 +1204,39 @@ test("WSL controller provisions only outside boot-only mode over pinned SSH and 
       assert.match(sshLog, /StrictHostKeyChecking=yes/);
       assert.match(sshLog, new RegExp(sha256(await readFile(path.join(harness.buildRoot, "project-a-release.tar")))));
       assert.match(sshLog, new RegExp(sha256(await readFile(path.resolve("scripts/appliance/provision-debian-appliance.sh")))));
+      assert.match(sshLog, new RegExp(sha256(await readFile(path.resolve("scripts/appliance/verify-debian-appliance.sh")))));
+      assert.match(sshLog, new RegExp(`palziv-verify-appliance ${RELEASE_SHA} pre-reboot /var/tmp/palziv-appliance-receipts-${BUILD_ID}`));
+      assert.match(sshLog, /systemctl restart palziv\.service/);
+      assert.match(sshLog, /curl --fail --silent --show-error --max-time 15 http:\/\/127\.0\.0\.1:3116\/api\/health/);
+      assert.match(sshLog, /systemctl reboot/);
+      assert.match(sshLog, new RegExp(`palziv-verify-appliance ${RELEASE_SHA} post-reboot /var/tmp/palziv-appliance-receipts-${BUILD_ID}`));
       const snapshotScript = await harness.readLog("provision-stdin.log");
       assert.match(snapshotScript, /mv -- .*project-a-release\.tar.*release\.tar/);
       assert.match(snapshotScript, /chown root:root/);
       assert.match(snapshotScript, /chmod 0600/);
       assert.match(snapshotScript, /sha256sum --check --strict/);
       assert.match(snapshotScript, /bash .*provision-debian-appliance\.sh.*release\.tar/);
+      assert.match(snapshotScript, /install .*palziv-verify-appliance/);
       const snapshotFixtureId = `${process.pid}-${Date.now()}`;
       const snapshotScriptPath = path.join(harness.base, "root-snapshot.sh");
       const snapshotProvisionerPath = path.join(harness.base, "snapshot-provisioner.sh");
+      const snapshotVerifierPath = path.join(harness.base, "snapshot-verifier.sh");
+      const snapshotNamespacePath = path.join(harness.base, "snapshot-namespace.sh");
       const snapshotUpload = `/var/tmp/palziv-appliance-upload-fixture-${snapshotFixtureId}`;
       const snapshotStage = `/var/tmp/palziv-appliance-stage-fixture-${snapshotFixtureId}`;
       const snapshotMarker = `/tmp/palziv-appliance-snapshot-marker-${snapshotFixtureId}`;
+      const snapshotUsrLocal = `/tmp/palziv-appliance-usr-local-${snapshotFixtureId}`;
       t.after(async () => {
-        await runWsl(`rm -rf -- ${shellQuote(snapshotUpload)} ${shellQuote(`${snapshotUpload}-bad`)} ${shellQuote(`${snapshotUpload}-substituted`)} ${shellQuote(snapshotStage)} ${shellQuote(`${snapshotStage}-bad`)} ${shellQuote(`${snapshotStage}-substituted`)}; rm -f -- ${shellQuote(snapshotMarker)} ${shellQuote(`${snapshotMarker}-bad`)} ${shellQuote(`${snapshotMarker}-substituted`)}`);
+        await runWsl(`rm -rf -- ${shellQuote(snapshotUpload)} ${shellQuote(`${snapshotUpload}-bad`)} ${shellQuote(`${snapshotUpload}-substituted`)} ${shellQuote(snapshotStage)} ${shellQuote(`${snapshotStage}-bad`)} ${shellQuote(`${snapshotStage}-substituted`)} ${shellQuote(snapshotUsrLocal)}; rm -f -- ${shellQuote(snapshotMarker)} ${shellQuote(`${snapshotMarker}-bad`)} ${shellQuote(`${snapshotMarker}-substituted`)}`);
       });
       await writeFile(snapshotScriptPath, snapshotScript);
+      await writeFile(snapshotNamespacePath, String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+usr_local="$1"
+shift
+mount --bind "$usr_local" /usr/local
+exec "$@"
+`);
       await writeFile(snapshotProvisionerPath, String.raw`#!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s|%s|%s|%s\n' "$1" "$2" "$(stat -Lc '%u:%a' -- "$0")" "$(stat -Lc '%u:%a' -- "$1")" > "$PALZIV_SNAPSHOT_MARKER"
@@ -942,12 +1247,16 @@ if [[ -n "${"$"}{PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD:-}" ]]; then
   printf '%s\n' 'preserve-upload-replacement' > "$PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD/operator-marker.txt"
 fi
 `);
+      await writeFile(snapshotVerifierPath, "#!/usr/bin/env bash\nexit 0\n");
+      const usrLocalSetup = await runWsl(`mkdir -m 0700 -- ${shellQuote(snapshotUsrLocal)}; mkdir -m 0755 -- ${shellQuote(`${snapshotUsrLocal}/sbin`)}`);
+      assert.equal(usrLocalSetup.code, 0, usrLocalSetup.output);
       const snapshotReleaseDigest = sha256(await readFile(path.join(harness.buildRoot, "project-a-release.tar")));
       const snapshotProvisionerDigest = sha256(await readFile(snapshotProvisionerPath));
-      const setupSnapshotFixture = async (upload, stage) => runWsl(`mkdir -m 0700 -- ${shellQuote(upload)}; chown 65534:65534 ${shellQuote(upload)}; mkdir -m 0700 -- ${shellQuote(stage)}; chown root:root ${shellQuote(stage)}; cp -- ${shellQuote(toWslPath(path.join(harness.buildRoot, "project-a-release.tar")))} ${shellQuote(`${upload}/project-a-release.tar`)}; cp -- ${shellQuote(toWslPath(snapshotProvisionerPath))} ${shellQuote(`${upload}/provision-debian-appliance.sh`)}`);
+      const snapshotVerifierDigest = sha256(await readFile(snapshotVerifierPath));
+      const setupSnapshotFixture = async (upload, stage) => runWsl(`mkdir -m 0700 -- ${shellQuote(upload)}; chown 65534:65534 ${shellQuote(upload)}; mkdir -m 0700 -- ${shellQuote(stage)}; chown root:root ${shellQuote(stage)}; cp -- ${shellQuote(toWslPath(path.join(harness.buildRoot, "project-a-release.tar")))} ${shellQuote(`${upload}/project-a-release.tar`)}; cp -- ${shellQuote(toWslPath(snapshotProvisionerPath))} ${shellQuote(`${upload}/provision-debian-appliance.sh`)}; cp -- ${shellQuote(toWslPath(snapshotVerifierPath))} ${shellQuote(`${upload}/verify-debian-appliance.sh`)}`);
       const validSetup = await setupSnapshotFixture(snapshotUpload, snapshotStage);
       assert.equal(validSetup.code, 0, validSetup.output);
-      const snapshotRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(snapshotMarker)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(snapshotUpload)} ${shellQuote(snapshotStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
+      const snapshotRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(snapshotMarker)}; unshare --mount --propagation private bash ${shellQuote(toWslPath(snapshotNamespacePath))} ${shellQuote(snapshotUsrLocal)} bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(snapshotUpload)} ${shellQuote(snapshotStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${snapshotVerifierDigest} ${RELEASE_SHA}`);
       assert.equal(snapshotRun.code, 0, snapshotRun.output);
       const snapshotEvidence = await runWsl(`cat -- ${shellQuote(snapshotMarker)}; test ! -e ${shellQuote(snapshotUpload)}; test ! -e ${shellQuote(snapshotStage)}`);
       assert.equal(snapshotEvidence.code, 0, snapshotEvidence.output);
@@ -958,7 +1267,7 @@ fi
       const badMarker = `${snapshotMarker}-bad`;
       const badSetup = await setupSnapshotFixture(badUpload, badStage);
       assert.equal(badSetup.code, 0, badSetup.output);
-      const rejectedSnapshot = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(badMarker)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(badUpload)} ${shellQuote(badStage)} ${"0".repeat(64)} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
+      const rejectedSnapshot = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(badMarker)}; unshare --mount --propagation private bash ${shellQuote(toWslPath(snapshotNamespacePath))} ${shellQuote(snapshotUsrLocal)} bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(badUpload)} ${shellQuote(badStage)} ${"0".repeat(64)} ${snapshotProvisionerDigest} ${snapshotVerifierDigest} ${RELEASE_SHA}`);
       assert.notEqual(rejectedSnapshot.code, 0);
       const rejectionEvidence = await runWsl(`test ! -e ${shellQuote(badMarker)}; test ! -e ${shellQuote(badUpload)}; test ! -e ${shellQuote(badStage)}; rm -f -- ${shellQuote(snapshotMarker)}`);
       assert.equal(rejectionEvidence.code, 0, rejectionEvidence.output);
@@ -968,17 +1277,32 @@ fi
       const substitutedMarker = `${snapshotMarker}-substituted`;
       const substitutedSetup = await setupSnapshotFixture(substitutedUpload, substitutedStage);
       assert.equal(substitutedSetup.code, 0, substitutedSetup.output);
-      const substitutedRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(substitutedMarker)}; export PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD=${shellQuote(substitutedUpload)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(substitutedUpload)} ${shellQuote(substitutedStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
+      const substitutedRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(substitutedMarker)}; export PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD=${shellQuote(substitutedUpload)}; unshare --mount --propagation private bash ${shellQuote(toWslPath(snapshotNamespacePath))} ${shellQuote(snapshotUsrLocal)} bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(substitutedUpload)} ${shellQuote(substitutedStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${snapshotVerifierDigest} ${RELEASE_SHA}`);
       assert.equal(substitutedRun.code, 0, substitutedRun.output);
       const substitutedEvidence = await runWsl(`test \"$(cat -- ${shellQuote(`${substitutedUpload}/operator-marker.txt`)})\" = preserve-upload-replacement; stat -Lc '%u:%a' ${shellQuote(substitutedUpload)}; test ! -e ${shellQuote(substitutedStage)}`);
       assert.equal(substitutedEvidence.code, 0, substitutedEvidence.output);
       assert.equal(substitutedEvidence.output, "65534:700\n");
       const transferOperations = (await harness.readLog("transfer-operations.log")).trim().split(/\r?\n/);
-      assert.equal(transferOperations.length, 4);
+      assert.ok(transferOperations.length >= 12, transferOperations.join("\n"));
       assert.match(transferOperations[0], /^ssh .*palziv-appliance-upload-/);
       assert.match(transferOperations[1], /^scp /);
       assert.match(transferOperations[2], /^ssh .*sudo bash -s --/);
-      assert.match(transferOperations[3], /^ssh .*systemctl poweroff/);
+      assert.ok(transferOperations.findIndex((operation) => /pre-reboot/.test(operation)) < transferOperations.findIndex((operation) => /systemctl restart palziv\.service/.test(operation)));
+      assert.ok(transferOperations.findIndex((operation) => /systemctl restart palziv\.service/.test(operation)) < transferOperations.findIndex((operation) => /systemctl reboot/.test(operation)));
+      assert.ok(transferOperations.findIndex((operation) => /systemctl reboot/.test(operation)) < transferOperations.findIndex((operation) => /post-reboot/.test(operation)));
+      assert.ok(transferOperations.findIndex((operation) => /post-reboot/.test(operation)) < transferOperations.findIndex((operation) => /^scp .*STAGE-SUCCESS/.test(operation)));
+      assert.match(transferOperations.at(-1), /^ssh .*systemctl poweroff/);
+      assert.equal(await harness.readLog("reboot-down"), "down\n");
+      assert.equal(await harness.readLog("reboot-up"), "up\n");
+      const verifyReceipt = JSON.parse(await readFile(path.join(harness.buildRoot, "VERIFY-LOCAL.json"), "utf8"));
+      assert.equal(verifyReceipt.phase, "post-reboot");
+      assert.equal(verifyReceipt.classification, "pass");
+      const stageReceipt = JSON.parse(await readFile(path.join(harness.buildRoot, "STAGE-SUCCESS.json"), "utf8"));
+      assert.equal(stageReceipt.phaseId, "project-a-two-phase-v1");
+      assert.equal(stageReceipt.routeCount, 8);
+      assert.equal(await readFile(path.join(harness.buildRoot, "age-recipient.txt"), "utf8"), `age1${"q".repeat(58)}\n`);
+      const receiptCheck = await runWsl(`cd ${shellQuote(toWslPath(harness.buildRoot))} && sha256sum --check --strict STAGE-SUCCESS.sha256`);
+      assert.equal(receiptCheck.code, 0, receiptCheck.output);
       const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
       assert.equal(state.classification, "provisioned");
       assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
@@ -1064,6 +1388,30 @@ fi
       await harness.cleanup();
     }
   });
+
+  for (const [name, scenario, operation] of [
+    ["application restart failure", "restart-failure", "restart-and-health-check"],
+    ["reboot never goes down", "reboot-never-down", "wait-for-reboot-down"],
+    ["reboot never comes back", "reboot-never-up", "wait-for-reboot-up"],
+    ["post-reboot verification failure", "post-verify-failure", "post-reboot-verification"],
+    ["receipt copy failure", "receipt-copy-failure", "copy-stage-receipts"],
+    ["malformed stage receipt", "bad-stage-receipt", "validate-stage-receipts"]
+  ]) {
+    await t.test(name, async () => {
+      const harness = await runBashControllerHarness({ bootOnly: false, scenario });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.ok(harness.durationMs < 8000, `${name} took ${harness.durationMs}ms`);
+        const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+        assert.equal(state.classification, "failed");
+        assert.equal(state.operation, operation);
+        assert.equal(await pathExists(path.join(harness.buildRoot, "STAGE-SUCCESS.json")), false);
+        assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN=/);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
 });
 
 test("artifact disk name is derived only from the release SHA", () => {

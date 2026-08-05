@@ -9,6 +9,7 @@ readonly DEFAULT_SSH_TIMEOUT_SECONDS=300
 readonly DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS=30
 readonly DEFAULT_COPY_TIMEOUT_SECONDS=300
 readonly DEFAULT_PROVISION_TIMEOUT_SECONDS=1800
+readonly DEFAULT_REBOOT_TIMEOUT_SECONDS=300
 readonly SHUTDOWN_TIMEOUT_SECONDS=180
 readonly SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -25,6 +26,9 @@ QGA_SOCKET=''
 QGA_RUNTIME_DIR=''
 QGA_RUNTIME_ID=''
 QGA_RUNTIME_OWNED=0
+RECEIPT_COPY_DIR=''
+RECEIPT_COPY_ID=''
+RECEIPT_COPY_OWNED=0
 EXPECTED_OS_DRIVE_ARGUMENT=''
 
 report_error() {
@@ -143,6 +147,17 @@ cleanup() {
       rmdir -- "$QGA_RUNTIME_DIR" 2>/dev/null || true
     fi
   fi
+  if [[ "$RECEIPT_COPY_OWNED" -eq 1 && -n "$RECEIPT_COPY_DIR" && -d "$RECEIPT_COPY_DIR" && ! -L "$RECEIPT_COPY_DIR" ]]; then
+    actual_path="$(realpath -e -- "$RECEIPT_COPY_DIR" 2>/dev/null || true)"
+    actual_id="$(stat -Lc '%d:%i' -- "$RECEIPT_COPY_DIR" 2>/dev/null || true)"
+    actual_uid="$(stat -Lc '%u' -- "$RECEIPT_COPY_DIR" 2>/dev/null || true)"
+    actual_mode="$(stat -Lc '%a' -- "$RECEIPT_COPY_DIR" 2>/dev/null || true)"
+    if [[ "$actual_path" == "$RECEIPT_COPY_DIR" && "$actual_id" == "$RECEIPT_COPY_ID" && \
+          "$actual_uid" == '0' && "$actual_mode" == '700' && \
+          "$RECEIPT_COPY_DIR" == /tmp/palziv-receipt-copy.* ]]; then
+      rm -rf -- "$RECEIPT_COPY_DIR"
+    fi
+  fi
   exit "$rc"
 }
 trap cleanup EXIT
@@ -232,6 +247,7 @@ require_unlinked_existing_path 'Build public key' "$BUILD_PUBLIC_KEY" file
 readonly BUILD_PRIVATE_KEY="${BUILD_PUBLIC_KEY%.pub}"
 require_unlinked_existing_path 'Build private key' "$BUILD_PRIVATE_KEY" file
 readonly PROVISIONING_SCRIPT="$SCRIPT_ROOT/provision-debian-appliance.sh"
+readonly VERIFICATION_SCRIPT="$SCRIPT_ROOT/verify-debian-appliance.sh"
 
 readonly OUTPUT_ROOT="$(dirname -- "$BUILD_ROOT")"
 readonly CACHE_ROOT="${OUTPUT_ROOT}/.cache"
@@ -247,6 +263,7 @@ readonly BUILD_STATE="${BUILD_ROOT}/BUILD-STATE.json"
 readonly KNOWN_HOSTS="${BUILD_ROOT}/known_hosts"
 readonly REMOTE_UPLOAD_DIR="/var/tmp/palziv-appliance-upload-${BUILD_ID}"
 readonly REMOTE_STAGE_DIR="/var/tmp/palziv-appliance-stage-${BUILD_ID}"
+readonly REMOTE_RECEIPT_DIR="/var/tmp/palziv-appliance-receipts-${BUILD_ID}"
 
 require_unlinked_existing_path 'Output root' "$OUTPUT_ROOT" directory
 if [[ -e "$CACHE_ROOT" || -L "$CACHE_ROOT" ]]; then
@@ -387,13 +404,18 @@ publish_noclobber "$known_hosts_partial" "$KNOWN_HOSTS"
 
 if [[ "$BOOT_ONLY" -eq 0 ]]; then
   require_unlinked_existing_path 'Provisioning script' "$PROVISIONING_SCRIPT" file
+  require_unlinked_existing_path 'Verification script' "$VERIFICATION_SCRIPT" file
   release_tar_sha256="$(sha256sum -- "$RELEASE_TAR")"
   release_tar_sha256="${release_tar_sha256%% *}"
   provisioning_script_sha256="$(sha256sum -- "$PROVISIONING_SCRIPT")"
   provisioning_script_sha256="${provisioning_script_sha256%% *}"
-  [[ "$release_tar_sha256" =~ ^[a-f0-9]{64}$ && "$provisioning_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
+  verification_script_sha256="$(sha256sum -- "$VERIFICATION_SCRIPT")"
+  verification_script_sha256="${verification_script_sha256%% *}"
+  [[ "$release_tar_sha256" =~ ^[a-f0-9]{64}$ && "$provisioning_script_sha256" =~ ^[a-f0-9]{64}$ && \
+     "$verification_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
   readonly RELEASE_TAR_SHA256="$release_tar_sha256"
   readonly PROVISIONING_SCRIPT_SHA256="$provisioning_script_sha256"
+  readonly VERIFICATION_SCRIPT_SHA256="$verification_script_sha256"
   copy_timeout="${PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS:-$DEFAULT_COPY_TIMEOUT_SECONDS}"
   [[ "$copy_timeout" =~ ^[1-9][0-9]{0,2}$ && "$copy_timeout" -le "$DEFAULT_COPY_TIMEOUT_SECONDS" ]] || fail 'Copy timeout must be between 1 and 300 seconds.'
   remote_stage_command="set -Eeuo pipefail; umask 077; mkdir -m 0700 -- ${REMOTE_UPLOAD_DIR}; sudo mkdir -m 0700 -- ${REMOTE_STAGE_DIR}; sudo chown root:root ${REMOTE_STAGE_DIR}; sudo chmod 0700 ${REMOTE_STAGE_DIR}"
@@ -419,7 +441,7 @@ if [[ "$BOOT_ONLY" -eq 0 ]]; then
       -o StrictHostKeyChecking=yes \
       -o BatchMode=yes \
       -o ConnectTimeout=10 \
-      "$RELEASE_TAR" "$PROVISIONING_SCRIPT" \
+      "$RELEASE_TAR" "$PROVISIONING_SCRIPT" "$VERIFICATION_SCRIPT" \
       "palziv-build@127.0.0.1:${REMOTE_UPLOAD_DIR}/" >/dev/null 2>&1; then
     copy_status=0
   else
@@ -437,7 +459,8 @@ upload_root="$1"
 stage_root="$2"
 expected_release_sha256="$3"
 expected_provisioner_sha256="$4"
-release_sha="$5"
+expected_verifier_sha256="$5"
+release_sha="$6"
 stage_id=''
 upload_path=''
 upload_id=''
@@ -484,27 +507,31 @@ upload_id="$(stat -Lc '%d:%i' -- "$upload_root")"
 upload_uid="$(stat -Lc '%u' -- "$upload_root")"
 upload_mode="$(stat -Lc '%a' -- "$upload_root")"
 [[ "$upload_uid" =~ ^[1-9][0-9]*$ && "$upload_mode" == '700' ]] || exit 76
-for input in project-a-release.tar provision-debian-appliance.sh; do
+for input in project-a-release.tar provision-debian-appliance.sh verify-debian-appliance.sh; do
   [[ -f "$upload_root/$input" && ! -L "$upload_root/$input" ]] || exit 75
 done
 
 mv -- "$upload_root/project-a-release.tar" "$stage_root/release.tar.partial"
 mv -- "$upload_root/provision-debian-appliance.sh" "$stage_root/provision-debian-appliance.sh.partial"
+mv -- "$upload_root/verify-debian-appliance.sh" "$stage_root/verify-debian-appliance.sh.partial"
 [[ -z "$(find "$upload_root" -mindepth 1 -maxdepth 1 -print -quit)" ]] || exit 77
 [[ "$(realpath -e -- "$upload_root")" == "$upload_path" && \
    "$(stat -Lc '%d:%i:%u:%a' -- "$upload_root")" == "$upload_id:$upload_uid:$upload_mode" ]] || exit 78
 rmdir -- "$upload_root"
 upload_consumed=1
-chown root:root "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial"
-chmod 0600 "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial"
+chown root:root "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial" "$stage_root/verify-debian-appliance.sh.partial"
+chmod 0600 "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial" "$stage_root/verify-debian-appliance.sh.partial"
 (
   cd -- "$stage_root"
   printf '%s  %s\n' "$expected_release_sha256" 'release.tar.partial' | sha256sum --check --strict - >/dev/null
   printf '%s  %s\n' "$expected_provisioner_sha256" 'provision-debian-appliance.sh.partial' | sha256sum --check --strict - >/dev/null
+  printf '%s  %s\n' "$expected_verifier_sha256" 'verify-debian-appliance.sh.partial' | sha256sum --check --strict - >/dev/null
 )
 mv -- "$stage_root/release.tar.partial" "$stage_root/release.tar"
 mv -- "$stage_root/provision-debian-appliance.sh.partial" "$stage_root/provision-debian-appliance.sh"
+mv -- "$stage_root/verify-debian-appliance.sh.partial" "$stage_root/verify-debian-appliance.sh"
 bash "$stage_root/provision-debian-appliance.sh" "$stage_root/release.tar" "$release_sha"
+install -o root -g root -m 0750 -- "$stage_root/verify-debian-appliance.sh" /usr/local/sbin/palziv-verify-appliance
 PALZIV_ROOT_SNAPSHOT
 )"
   if printf '%s\n' "$root_snapshot_script" | timeout --signal=TERM --kill-after=5s "${provision_timeout}s" \
@@ -515,7 +542,7 @@ PALZIV_ROOT_SNAPSHOT
       -o ConnectTimeout=10 \
       palziv-build@127.0.0.1 \
       sudo bash -s -- "$REMOTE_UPLOAD_DIR" "$REMOTE_STAGE_DIR" \
-      "$RELEASE_TAR_SHA256" "$PROVISIONING_SCRIPT_SHA256" "$RELEASE_SHA" >/dev/null 2>&1; then
+      "$RELEASE_TAR_SHA256" "$PROVISIONING_SCRIPT_SHA256" "$VERIFICATION_SCRIPT_SHA256" "$RELEASE_SHA" >/dev/null 2>&1; then
     provision_status=0
   else
     provision_status=$?
@@ -524,6 +551,214 @@ PALZIV_ROOT_SNAPSHOT
     write_failed_build_state 'provision-guest' "$provision_status"
     fail 'Guest provisioning failed.'
   fi
+
+  runtime_command="sudo install -d -o root -g root -m 0700 -- ${REMOTE_RECEIPT_DIR} && sudo /usr/local/sbin/palziv-verify-appliance ${RELEASE_SHA} pre-reboot ${REMOTE_RECEIPT_DIR}"
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 "$runtime_command" >/dev/null 2>&1; then
+    verify_status=0
+  else
+    verify_status=$?
+  fi
+  if [[ "$verify_status" -ne 0 ]]; then
+    write_failed_build_state 'pre-reboot-verification' "$verify_status"
+    fail 'Pre-reboot appliance verification failed.'
+  fi
+
+  restart_command='sudo systemctl restart palziv.service && curl --fail --silent --show-error --max-time 15 http://127.0.0.1:3116/api/health'
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 "$restart_command" >/dev/null 2>&1; then
+    restart_status=0
+  else
+    restart_status=$?
+  fi
+  if [[ "$restart_status" -ne 0 ]]; then
+    write_failed_build_state 'restart-and-health-check' "$restart_status"
+    fail 'Application restart or health verification failed.'
+  fi
+
+  reboot_timeout="${PALZIV_APPLIANCE_REBOOT_TIMEOUT_SECONDS:-$DEFAULT_REBOOT_TIMEOUT_SECONDS}"
+  [[ "$reboot_timeout" =~ ^[1-9][0-9]{0,2}$ && "$reboot_timeout" -le "$DEFAULT_REBOOT_TIMEOUT_SECONDS" ]] || fail 'Reboot timeout must be between 1 and 300 seconds.'
+  if timeout --signal=TERM --kill-after=1s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 'sudo systemctl reboot' >/dev/null 2>&1; then
+    reboot_status=0
+  else
+    reboot_status=$?
+  fi
+  if [[ "$reboot_status" -ne 0 && "$reboot_status" -ne 255 ]]; then
+    write_failed_build_state 'reboot-guest' "$reboot_status"
+    fail 'Guest reboot command failed.'
+  fi
+
+  reboot_deadline=$(( $(monotonic_seconds) + reboot_timeout ))
+  reboot_down=0
+  while (( $(monotonic_seconds) < reboot_deadline )); do
+    is_owned_qemu_process "$QEMU_PID" || fail 'Owned QEMU process exited during reboot verification.'
+    remaining_seconds=$(( reboot_deadline - $(monotonic_seconds) ))
+    (( remaining_seconds > 0 )) || break
+    probe_timeout="$remaining_seconds"
+    (( probe_timeout <= 5 )) || probe_timeout=5
+    if timeout --signal=TERM --kill-after=1s "${probe_timeout}s" \
+        ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+        -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+        -o StrictHostKeyChecking=yes \
+        -o BatchMode=yes \
+        -o ConnectTimeout="$probe_timeout" \
+        palziv-build@127.0.0.1 true >/dev/null 2>&1; then
+      sleep 1
+    else
+      reboot_down=1
+      break
+    fi
+  done
+  if [[ "$reboot_down" -ne 1 ]]; then
+    write_failed_build_state 'wait-for-reboot-down' 1
+    fail 'SSH did not disappear within the bounded reboot wait.'
+  fi
+
+  reboot_up=0
+  while (( $(monotonic_seconds) < reboot_deadline )); do
+    is_owned_qemu_process "$QEMU_PID" || fail 'Owned QEMU process exited during reboot verification.'
+    remaining_seconds=$(( reboot_deadline - $(monotonic_seconds) ))
+    (( remaining_seconds > 0 )) || break
+    probe_timeout="$remaining_seconds"
+    (( probe_timeout <= 5 )) || probe_timeout=5
+    if timeout --signal=TERM --kill-after=1s "${probe_timeout}s" \
+        ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+        -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+        -o StrictHostKeyChecking=yes \
+        -o BatchMode=yes \
+        -o ConnectTimeout="$probe_timeout" \
+        palziv-build@127.0.0.1 true >/dev/null 2>&1; then
+      reboot_up=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$reboot_up" -ne 1 ]]; then
+    write_failed_build_state 'wait-for-reboot-up' 1
+    fail 'SSH did not return within the bounded reboot wait.'
+  fi
+
+  post_verify_command="sudo /usr/local/sbin/palziv-verify-appliance ${RELEASE_SHA} post-reboot ${REMOTE_RECEIPT_DIR}"
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 "$post_verify_command" >/dev/null 2>&1; then
+    post_verify_status=0
+  else
+    post_verify_status=$?
+  fi
+  if [[ "$post_verify_status" -ne 0 ]]; then
+    write_failed_build_state 'post-reboot-verification' "$post_verify_status"
+    fail 'Post-reboot appliance verification failed.'
+  fi
+
+  share_receipts_command="sudo chown root:palziv-build ${REMOTE_RECEIPT_DIR} ${REMOTE_RECEIPT_DIR}/VERIFY-LOCAL.json ${REMOTE_RECEIPT_DIR}/STAGE-SUCCESS.json ${REMOTE_RECEIPT_DIR}/STAGE-SUCCESS.sha256 ${REMOTE_RECEIPT_DIR}/age-recipient.txt && sudo chmod 0750 ${REMOTE_RECEIPT_DIR} && sudo chmod 0640 ${REMOTE_RECEIPT_DIR}/VERIFY-LOCAL.json ${REMOTE_RECEIPT_DIR}/STAGE-SUCCESS.json ${REMOTE_RECEIPT_DIR}/STAGE-SUCCESS.sha256 ${REMOTE_RECEIPT_DIR}/age-recipient.txt"
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 "$share_receipts_command" >/dev/null 2>&1; then
+    share_status=0
+  else
+    share_status=$?
+  fi
+  if [[ "$share_status" -ne 0 ]]; then
+    write_failed_build_state 'prepare-stage-receipts' "$share_status"
+    fail 'Preparing metadata-only stage receipts for copy failed.'
+  fi
+
+  RECEIPT_COPY_DIR="$(mktemp -d /tmp/palziv-receipt-copy.XXXXXXXX)"
+  chmod 0700 -- "$RECEIPT_COPY_DIR"
+  RECEIPT_COPY_DIR="$(realpath -e -- "$RECEIPT_COPY_DIR")"
+  [[ "$RECEIPT_COPY_DIR" == /tmp/palziv-receipt-copy.* && ! -L "$RECEIPT_COPY_DIR" ]]
+  [[ "$(stat -Lc '%u:%a' -- "$RECEIPT_COPY_DIR")" == '0:700' ]]
+  RECEIPT_COPY_ID="$(stat -Lc '%d:%i' -- "$RECEIPT_COPY_DIR")"
+  RECEIPT_COPY_OWNED=1
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      scp -P "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      "palziv-build@127.0.0.1:${REMOTE_RECEIPT_DIR}/VERIFY-LOCAL.json" \
+      "palziv-build@127.0.0.1:${REMOTE_RECEIPT_DIR}/STAGE-SUCCESS.json" \
+      "palziv-build@127.0.0.1:${REMOTE_RECEIPT_DIR}/STAGE-SUCCESS.sha256" \
+      "palziv-build@127.0.0.1:${REMOTE_RECEIPT_DIR}/age-recipient.txt" \
+      "$RECEIPT_COPY_DIR/" >/dev/null 2>&1; then
+    receipt_copy_status=0
+  else
+    receipt_copy_status=$?
+  fi
+  if [[ "$receipt_copy_status" -ne 0 ]]; then
+    write_failed_build_state 'copy-stage-receipts' "$receipt_copy_status"
+    fail 'Copying metadata-only stage receipts from the guest failed.'
+  fi
+
+  expected_receipt_tree=$'STAGE-SUCCESS.json\nSTAGE-SUCCESS.sha256\nVERIFY-LOCAL.json\nage-recipient.txt'
+  actual_receipt_tree="$(find "$RECEIPT_COPY_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
+  receipts_valid=1
+  [[ "$actual_receipt_tree" == "$expected_receipt_tree" ]] || receipts_valid=0
+  for receipt in VERIFY-LOCAL.json STAGE-SUCCESS.json STAGE-SUCCESS.sha256 age-recipient.txt; do
+    [[ -f "$RECEIPT_COPY_DIR/$receipt" && ! -L "$RECEIPT_COPY_DIR/$receipt" ]] || receipts_valid=0
+    receipt_size="$(wc -c < "$RECEIPT_COPY_DIR/$receipt" 2>/dev/null || printf '0')"
+    [[ "$receipt_size" =~ ^[0-9]+$ && "$receipt_size" -ge 2 && "$receipt_size" -le 16384 ]] || receipts_valid=0
+    if LC_ALL=C grep -q $'[\001-\010\013\014\016-\037\177]' "$RECEIPT_COPY_DIR/$receipt" 2>/dev/null; then receipts_valid=0; fi
+    [[ ! -e "$BUILD_ROOT/$receipt" && ! -L "$BUILD_ROOT/$receipt" ]] || receipts_valid=0
+  done
+  jq -e --arg releaseSha "$RELEASE_SHA" '
+    type == "object" and
+    (keys == ["classification","completedAt","nodeVersion","phase","releaseSha","routeCount","schemaVersion","services"]) and
+    .schemaVersion == 1 and .phase == "post-reboot" and .classification == "pass" and
+    .releaseSha == $releaseSha and .nodeVersion == "v24.18.0" and .routeCount == 8 and
+    .services == {app:"active",cloudflared:"disabled-inactive",qemuGuestAgent:"active",systemdTimesyncd:"active"} and
+    (.completedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$RECEIPT_COPY_DIR/VERIFY-LOCAL.json" >/dev/null || receipts_valid=0
+  jq -e --arg releaseSha "$RELEASE_SHA" '
+    type == "object" and
+    (keys == ["app","classification","cloudflared","completedAt","nodeVersion","phaseId","releaseSha","routeCount","schemaVersion"]) and
+    .schemaVersion == 1 and .phaseId == "project-a-two-phase-v1" and .classification == "staged" and
+    .releaseSha == $releaseSha and .nodeVersion == "v24.18.0" and .app == "active" and
+    .cloudflared == "disabled-inactive" and .routeCount == 8 and
+    (.completedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$RECEIPT_COPY_DIR/STAGE-SUCCESS.json" >/dev/null || receipts_valid=0
+  recipient="$(<"$RECEIPT_COPY_DIR/age-recipient.txt")"
+  [[ "$recipient" =~ ^age1[ac-hj-np-z02-9]{58}$ ]] || receipts_valid=0
+  (cd -- "$RECEIPT_COPY_DIR" && sha256sum --check --strict STAGE-SUCCESS.sha256 >/dev/null 2>&1) || receipts_valid=0
+  if [[ "$receipts_valid" -ne 1 ]]; then
+    write_failed_build_state 'validate-stage-receipts' 1
+    fail 'Copied stage receipts did not satisfy the bounded metadata contract.'
+  fi
+
+  for receipt in VERIFY-LOCAL.json STAGE-SUCCESS.json STAGE-SUCCESS.sha256 age-recipient.txt; do
+    receipt_partial="$BUILD_ROOT/${receipt}.partial.$$"
+    reserve_empty_file "$receipt_partial"
+    cp -- "$RECEIPT_COPY_DIR/$receipt" "$receipt_partial"
+    cmp --silent -- "$RECEIPT_COPY_DIR/$receipt" "$receipt_partial"
+    publish_noclobber "$receipt_partial" "$BUILD_ROOT/$receipt"
+  done
+  rm -rf -- "$RECEIPT_COPY_DIR"
+  RECEIPT_COPY_OWNED=0
 fi
 
 shutdown_ssh_timeout="${PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS:-$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS}"
