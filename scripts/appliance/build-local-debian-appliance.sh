@@ -7,7 +7,10 @@ readonly SUMS_URL='https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUM
 readonly DISK_VIRTUAL_SIZE='40G'
 readonly DEFAULT_SSH_TIMEOUT_SECONDS=300
 readonly DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS=30
+readonly DEFAULT_COPY_TIMEOUT_SECONDS=300
+readonly DEFAULT_PROVISION_TIMEOUT_SECONDS=1800
 readonly SHUTDOWN_TIMEOUT_SECONDS=180
+readonly SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REPOSITORY=''
 BUILD_ROOT=''
@@ -183,6 +186,15 @@ write_build_state() {
   mv -f -T -- "$temporary" "$BUILD_STATE"
 }
 
+write_failed_build_state() {
+  local operation="$1" exit_code="$2" failed_at_utc temporary="${BUILD_STATE}.partial.$$"
+  failed_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  reserve_empty_file "$temporary"
+  printf '{"schemaVersion":1,"classification":"failed","operation":"%s","failedAtUtc":"%s","exitCode":%s,"buildId":"%s","releaseSha":"%s","sshPort":%s,"qemuPid":%s,"workingDisk":"%s","qgaSocket":"%s"}\n' \
+    "$(json_escape "$operation")" "$failed_at_utc" "$exit_code" "$BUILD_ID" "$RELEASE_SHA" "$SSH_PORT" "$QEMU_PID" "$(json_escape "$WORK_DISK")" "$(json_escape "$QGA_SOCKET")" > "$temporary"
+  mv -f -T -- "$temporary" "$BUILD_STATE"
+}
+
 while (($#)); do
   case "$1" in
     --repository) [[ $# -ge 2 ]] || fail '--repository requires a value.'; REPOSITORY="$2"; shift 2 ;;
@@ -202,7 +214,6 @@ for required in REPOSITORY BUILD_ROOT RELEASE_TAR RELEASE_SHA BUILD_ID BUILD_PUB
 done
 [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || fail 'Release SHA must be exactly 40 lowercase hexadecimal characters.'
 [[ "$BUILD_ID" =~ ^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$ ]] || fail 'Build ID is invalid.'
-[[ "$BOOT_ONLY" -eq 1 ]] || fail 'This controller currently requires the explicit --boot-only boundary.'
 
 require_absolute_path 'Repository' "$REPOSITORY"
 require_absolute_path 'Build root' "$BUILD_ROOT"
@@ -371,6 +382,45 @@ reserve_empty_file "$known_hosts_partial"
 printf '%s\n' "$host_key" > "$known_hosts_partial"
 publish_noclobber "$known_hosts_partial" "$KNOWN_HOSTS"
 
+if [[ "$BOOT_ONLY" -eq 0 ]]; then
+  copy_timeout="${PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS:-$DEFAULT_COPY_TIMEOUT_SECONDS}"
+  [[ "$copy_timeout" =~ ^[1-9][0-9]{0,2}$ && "$copy_timeout" -le "$DEFAULT_COPY_TIMEOUT_SECONDS" ]] || fail 'Copy timeout must be between 1 and 300 seconds.'
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      scp -P "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      "$RELEASE_TAR" "$SCRIPT_ROOT/provision-debian-appliance.sh" \
+      'palziv-build@127.0.0.1:/var/tmp/' >/dev/null 2>&1; then
+    copy_status=0
+  else
+    copy_status=$?
+  fi
+  if [[ "$copy_status" -ne 0 ]]; then
+    write_failed_build_state 'copy-provisioning-inputs' "$copy_status"
+    fail 'Copying the provisioning inputs into the guest failed.'
+  fi
+  provision_timeout="${PALZIV_APPLIANCE_PROVISION_TIMEOUT_SECONDS:-$DEFAULT_PROVISION_TIMEOUT_SECONDS}"
+  [[ "$provision_timeout" =~ ^[1-9][0-9]{0,3}$ && "$provision_timeout" -le "$DEFAULT_PROVISION_TIMEOUT_SECONDS" ]] || fail 'Provision timeout must be between 1 and 1800 seconds.'
+  if timeout --signal=TERM --kill-after=5s "${provision_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 \
+      "sudo bash /var/tmp/provision-debian-appliance.sh /var/tmp/project-a-release.tar '$RELEASE_SHA'" >/dev/null 2>&1; then
+    provision_status=0
+  else
+    provision_status=$?
+  fi
+  if [[ "$provision_status" -ne 0 ]]; then
+    write_failed_build_state 'provision-guest' "$provision_status"
+    fail 'Guest provisioning failed.'
+  fi
+fi
+
 shutdown_ssh_timeout="${PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS:-$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS}"
 [[ "$shutdown_ssh_timeout" =~ ^[1-9][0-9]{0,2}$ && "$shutdown_ssh_timeout" -le "$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS" ]] || fail 'Shutdown SSH timeout must be between 1 and 30 seconds.'
 if timeout --signal=TERM --kill-after=1s "${shutdown_ssh_timeout}s" \
@@ -393,6 +443,11 @@ for ((attempt=0; attempt<SHUTDOWN_TIMEOUT_SECONDS; attempt++)); do
 done
 process_is_alive "$QEMU_PID" && fail 'QEMU did not exit after the boot-only shutdown request.'
 
-write_build_state 'boot-only'
-printf '{"ok":true,"classification":"boot-only","buildId":"%s","releaseSha":"%s","sshPort":%s}\n' \
-  "$BUILD_ID" "$RELEASE_SHA" "$SSH_PORT"
+if [[ "$BOOT_ONLY" -eq 1 ]]; then
+  final_classification='boot-only'
+else
+  final_classification='provisioned'
+fi
+write_build_state "$final_classification"
+printf '{"ok":true,"classification":"%s","buildId":"%s","releaseSha":"%s","sshPort":%s}\n' \
+  "$final_classification" "$BUILD_ID" "$RELEASE_SHA" "$SSH_PORT"

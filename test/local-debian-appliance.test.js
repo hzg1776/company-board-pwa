@@ -79,15 +79,118 @@ async function runWsl(command, timeoutMs = 10000) {
   ], timeoutMs);
 }
 
+const shellQuote = (value) => `'${String(value).replaceAll("'", `'"'"'`)}'`;
+
 async function writeCommandFixture(binRoot, name, contents) {
   await writeFile(path.join(binRoot, name), `#!/usr/bin/env bash\nset -Eeuo pipefail\n${contents}`);
+}
+
+async function runProvisioningHarness({
+  archiveScenario = "valid",
+  releaseSha = RELEASE_SHA,
+  extraArguments = []
+} = {}) {
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-provisioning-"));
+  const releaseRoot = path.join(base, "release");
+  const binRoot = path.join(base, "bin");
+  const archive = path.join(base, "project-a-release.tar");
+  await mkdir(path.join(releaseRoot, "scripts", "linux"), { recursive: true });
+  await mkdir(path.join(releaseRoot, "deploy", "linux"), { recursive: true });
+  await mkdir(binRoot, { recursive: true });
+  await writeFile(path.join(releaseRoot, "package.json"), '{"name":"fixture-release"}\n');
+
+  for (const helper of ["prepare-host.sh", "install-cloudflared.sh"]) {
+    await writeFile(path.join(releaseRoot, "scripts", "linux", helper), `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' '${helper}' >> "$PALZIV_APPLIANCE_TEST_LOG"\n`);
+  }
+  await writeFile(path.join(releaseRoot, "scripts", "linux", "install-node24.sh"), String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' 'install-node24.sh' >> "$PALZIV_APPLIANCE_TEST_LOG"
+install -d -m 0755 "$PALZIV_APPLIANCE_ROOT/opt/node/bin"
+printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' 'v24.18.0'" > "$PALZIV_APPLIANCE_ROOT/opt/node/bin/node"
+chmod 0755 "$PALZIV_APPLIANCE_ROOT/opt/node/bin/node"
+`);
+  await writeFile(path.join(releaseRoot, "scripts", "linux", "deploy-release.sh"), String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' 'deploy-release.sh' >> "$PALZIV_APPLIANCE_TEST_LOG"
+source_root="$1"
+release_sha="$2"
+release_dir="$PALZIV_APPLIANCE_ROOT/opt/palziv/releases/$release_sha"
+install -d -m 0750 "$release_dir"
+cp -- "$source_root/package.json" "$release_dir/package.json"
+ln -sfn "$release_dir" "$PALZIV_APPLIANCE_ROOT/opt/palziv/current"
+`);
+
+  await writeCommandFixture(binRoot, "chown", String.raw`
+printf '%s\n' "$*" >> "$PALZIV_APPLIANCE_TEST_LOG.chown"
+`);
+  await writeCommandFixture(binRoot, "systemctl", String.raw`
+printf '%s\n' "$*" >> "$PALZIV_APPLIANCE_TEST_LOG.systemctl"
+`);
+  await writeCommandFixture(binRoot, "apt-get", String.raw`
+printf '%s\n' "$*" >> "$PALZIV_APPLIANCE_TEST_LOG.apt-get"
+`);
+  await writeCommandFixture(binRoot, "age-keygen", String.raw`
+output=''
+while (($#)); do
+  if [[ "$1" == '-o' ]]; then output="$2"; shift 2; continue; fi
+  shift
+done
+[[ -n "$output" ]]
+printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE' > "$output"
+printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE'
+printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE' >&2
+`);
+
+  const linuxFixture = await runWsl("mktemp -d /tmp/palziv-provisioning-target.XXXXXXXX");
+  assert.equal(linuxFixture.code, 0, linuxFixture.output);
+  const fixtureRoot = linuxFixture.output.trim();
+  assert.match(fixtureRoot, /^\/tmp\/palziv-provisioning-target\.[A-Za-z0-9]+$/);
+
+  const wslReleaseRoot = toWslPath(releaseRoot);
+  const wslArchive = toWslPath(archive);
+  let archiveCommand = `tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(wslReleaseRoot)} .`;
+  if (archiveScenario === "unsafe-path") {
+    archiveCommand = `tar -cf ${shellQuote(wslArchive)} --transform='s|^|../|' -C ${shellQuote(wslReleaseRoot)} package.json`;
+  } else if (archiveScenario === "link") {
+    const linkRoot = `/tmp/palziv-provisioning-link-${process.pid}-${Date.now()}`;
+    archiveCommand = `mkdir -m 0700 -- ${shellQuote(linkRoot)}; trap 'rm -rf -- ${linkRoot}' EXIT; cp -a ${shellQuote(`${wslReleaseRoot}/.`)} ${shellQuote(`${linkRoot}/`)}; ln -s /etc/passwd ${shellQuote(`${linkRoot}/guest-link`)}; tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(linkRoot)} .`;
+  }
+  const archived = await runWsl(archiveCommand);
+  assert.equal(archived.code, 0, archived.output);
+
+  const provisioner = toWslPath(path.resolve("scripts/appliance/provision-debian-appliance.sh"));
+  const logPath = `${fixtureRoot}/provision.log`;
+  const invoked = await runWsl([
+    `export PALZIV_APPLIANCE_ROOT=${shellQuote(fixtureRoot)}`,
+    `export PALZIV_APPLIANCE_TEST_LOG=${shellQuote(logPath)}`,
+    `export PATH=${shellQuote(`${toWslPath(binRoot)}:/usr/bin:/bin`)}`,
+    `bash ${shellQuote(provisioner)} ${shellQuote(wslArchive)} ${shellQuote(releaseSha)} ${extraArguments.map(shellQuote).join(" ")}`
+  ].join("\n"), 15000);
+
+  const readLinux = async (candidate) => {
+    const result = await runWsl(`if [[ -f ${shellQuote(candidate)} ]]; then cat -- ${shellQuote(candidate)}; fi`);
+    assert.equal(result.code, 0, result.output);
+    return result.output;
+  };
+  return {
+    base,
+    fixtureRoot,
+    logPath,
+    result: invoked,
+    readLinux,
+    cleanup: async () => {
+      await runWsl(`case ${shellQuote(fixtureRoot)} in /tmp/palziv-provisioning-target.*) rm -rf -- ${shellQuote(fixtureRoot)} ;; *) exit 64 ;; esac`);
+      await rm(base, { recursive: true, force: true });
+    }
+  };
 }
 
 async function runBashControllerHarness({
   scenario = "success",
   precreateCacheImage,
   precreateSeed = false,
-  unownedPid = ""
+  unownedPid = "",
+  bootOnly = true
 } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-bash-"));
   const repository = path.join(base, "repository");
@@ -173,9 +276,19 @@ printf '[127.0.0.1]:%s ssh-ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=\
   await writeCommandFixture(binRoot, "ssh", String.raw`
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/ssh.log"
 if [[ "$FIXTURE_SCENARIO" == 'hanging-ssh' ]]; then sleep 3; fi
+if [[ "$*" == *'provision-debian-appliance.sh'* ]]; then
+  printf '%s\n' 'AGE-SECRET-KEY-1CONTROLLERFIXTURE'
+  printf '%s\n' 'AGE-SECRET-KEY-1CONTROLLERFIXTURE' >&2
+  [[ "$FIXTURE_SCENARIO" != 'provision-failure' ]] || exit 42
+  exit 0
+fi
 pid="$(<"$FIXTURE_ROOT/qemu.pid")"
 kill -TERM "$pid"
 exit 0
+`);
+  await writeCommandFixture(binRoot, "scp", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/scp.log"
+[[ "$FIXTURE_SCENARIO" != 'scp-failure' ]] || exit 41
 `);
   const qemuSource = path.join(fixtureRoot, "qemu-fixture.c");
   await writeFile(qemuSource, String.raw`#include <errno.h>
@@ -319,8 +432,8 @@ controller_args=(bash ${shellQuote(controller)} \
   --release-tar ${shellQuote(`${wslBuildRoot}/project-a-release.tar`)} \
   --release-sha ${shellQuote(RELEASE_SHA)} \
   --build-id ${shellQuote(BUILD_ID)} \
-  --build-public-key ${shellQuote(`${wslBuildRoot}/build_ssh_ed25519.pub`)} \
-  --boot-only)
+  --build-public-key ${shellQuote(`${wslBuildRoot}/build_ssh_ed25519.pub`)})
+if [[ ${shellQuote(bootOnly ? "yes" : "no")} == 'yes' ]]; then controller_args+=(--boot-only); fi
 legacy_qga_socket="/tmp/palziv-qga-${BUILD_ID}.sock"
 legacy_qga_pid=''
 if [[ "$scenario" == 'preexisting-qga' ]]; then
@@ -604,6 +717,148 @@ async function writeFixture(root) {
   )))).join("\n")}\n`);
   return { diskName };
 }
+
+test("guest provisioning executes the release-owned Linux contract without production inputs", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runProvisioningHarness();
+  try {
+    assert.equal(harness.result.code, 0, harness.result.output);
+    assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN=/);
+    assert.equal(await harness.readLinux(harness.logPath), [
+      "prepare-host.sh",
+      "install-node24.sh",
+      "install-cloudflared.sh",
+      "deploy-release.sh",
+      ""
+    ].join("\n"));
+
+    const environment = await harness.readLinux(`${harness.fixtureRoot}/etc/palziv/palziv.env`);
+    assert.match(environment, /^HOST=127\.0\.0\.1$/m);
+    assert.match(environment, /^PORT=3116$/m);
+    assert.match(environment, /^RUNTIME_DATA_DIR=\/var\/lib\/palziv\/data$/m);
+    assert.match(environment, /^PUBLIC_BASE_URL=https:\/\/itotexpress\.com$/m);
+    assert.match(environment, /^TRUST_PROXY_ADDRESSES=loopback$/m);
+    assert.match(environment, /^ADMIN_MFA_ENABLED=true$/m);
+    assert.match(environment, /^ADMIN_SETUP_TOKEN=[a-f0-9]{64}$/m);
+    assert.match(environment, /^PUSH_ALLOWED_HOSTS=itotexpress\.com,www\.itotexpress\.com$/m);
+    assert.doesNotMatch(environment, /production|password|credential|tunnel/i);
+
+    assert.equal(await harness.readLinux(`${harness.logPath}.systemctl`), [
+      "disable --now cloudflared.service",
+      "enable --now palziv.service palziv-backup.timer palziv-health.timer",
+      ""
+    ].join("\n"));
+    assert.equal(await harness.readLinux(`${harness.logPath}.apt-get`), "install -y age\n");
+    const chownLog = await harness.readLinux(`${harness.logPath}.chown`);
+    assert.match(chownLog, new RegExp(`^root:palziv ${harness.fixtureRoot}/etc/palziv/palziv\\.env$`, "m"));
+    assert.match(chownLog, new RegExp(`^root:root ${harness.fixtureRoot}/etc/palziv/migration-age\\.key$`, "m"));
+
+    const releaseCheck = await runWsl(`test \"$(realpath -e -- ${shellQuote(`${harness.fixtureRoot}/opt/palziv/current`)})\" = ${shellQuote(`${harness.fixtureRoot}/opt/palziv/releases/${RELEASE_SHA}`)} && stat -Lc '%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/palziv.env`)} && stat -Lc '%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/migration-age.key`)}`);
+    assert.equal(releaseCheck.code, 0, releaseCheck.output);
+    assert.equal(releaseCheck.output, "640\n600\n");
+    assert.equal(await harness.readLinux(`${harness.fixtureRoot}/opt/palziv/releases/${RELEASE_SHA}/package.json`), '{"name":"fixture-release"}\n');
+    assert.equal(await harness.readLinux(`${harness.fixtureRoot}/etc/palziv/migration-age.key`), "AGE-SECRET-KEY-1FIXTURE\n");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("guest provisioning rejects invalid identity, extra inputs, unsafe paths, and links before helper execution", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  for (const fixture of [
+    { name: "invalid release SHA", options: { releaseSha: "main" }, message: /Invalid release SHA/i },
+    { name: "extra production input", options: { extraArguments: ["/tmp/production.env"] }, message: /exactly two arguments/i },
+    { name: "unsafe archive path", options: { archiveScenario: "unsafe-path" }, message: /Unsafe release archive path/i },
+    { name: "archive link", options: { archiveScenario: "link" }, message: /links are not allowed/i }
+  ]) {
+    await t.test(fixture.name, async () => {
+      const harness = await runProvisioningHarness(fixture.options);
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.match(harness.result.output, fixture.message);
+        assert.equal(await harness.readLinux(harness.logPath), "");
+        assert.equal(await pathExists(path.join(harness.base, "escaped")), false);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+
+  await t.test("non-root caller", async () => {
+    const provisioner = toWslPath(path.resolve("scripts/appliance/provision-debian-appliance.sh"));
+    const result = await runWsl(`setpriv --reuid=65534 --regid=65534 --clear-groups bash ${shellQuote(provisioner)} /tmp/release.tar ${RELEASE_SHA}`);
+    assert.notEqual(result.code, 0);
+    assert.match(result.output, /Run as root/i);
+  });
+});
+
+test("WSL controller provisions only outside boot-only mode over pinned SSH and records bounded failure state", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  await t.test("provisioning success", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false });
+    try {
+      assert.equal(harness.result.code, 0, harness.result.output);
+      assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN/);
+      assert.deepEqual(JSON.parse(harness.result.output), {
+        ok: true,
+        classification: "provisioned",
+        buildId: BUILD_ID,
+        releaseSha: RELEASE_SHA,
+        sshPort: 22001
+      });
+      const scpLog = await harness.readLog("scp.log");
+      assert.match(scpLog, /-P 22001/);
+      assert.match(scpLog, /StrictHostKeyChecking=yes/);
+      assert.match(scpLog, /UserKnownHostsFile=/);
+      assert.match(scpLog, /project-a-release\.tar/);
+      assert.match(scpLog, /provision-debian-appliance\.sh/);
+      assert.match(scpLog, /palziv-build@127\.0\.0\.1:\/var\/tmp\/$/m);
+      const sshLog = await harness.readLog("ssh.log");
+      assert.match(sshLog, /sudo bash \/var\/tmp\/provision-debian-appliance\.sh \/var\/tmp\/project-a-release\.tar/);
+      assert.match(sshLog, /StrictHostKeyChecking=yes/);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "provisioned");
+      assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("remote provisioning failure", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false, scenario: "provision-failure" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN/);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "failed");
+      assert.equal(state.operation, "provision-guest");
+      assert.equal(state.exitCode, 42);
+      assert.match(state.failedAtUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("secure-copy failure", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false, scenario: "scp-failure" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "failed");
+      assert.equal(state.operation, "copy-provisioning-inputs");
+      assert.equal(state.exitCode, 41);
+      assert.match(state.failedAtUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      assert.equal(await harness.readLog("ssh.log"), "", "remote provisioning must not run after a failed copy");
+      assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+});
 
 test("artifact disk name is derived only from the release SHA", () => {
   assert.equal(artifactDiskName(RELEASE_SHA), `palziv-debian13-${RELEASE_SHA}.qcow2`);
@@ -1056,6 +1311,7 @@ test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on
     ].join("\n"));
     assert.match(await harness.readLog("ssh.log"), /StrictHostKeyChecking=yes/);
     assert.match(await harness.readLog("ssh.log"), /UserKnownHostsFile=/);
+    assert.equal(await harness.readLog("scp.log"), "", "boot-only mode must not copy provisioning inputs");
     assert.match(await readFile(path.join(harness.buildRoot, "known_hosts"), "utf8"), /^\[127\.0\.0\.1\]:22001 ssh-ed25519 /);
 
     const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
