@@ -551,6 +551,30 @@ fi
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/cloud-localds.log"
 : > "$1"
 `);
+  await writeCommandFixture(binRoot, "cp", String.raw`
+destination="${"$"}{!#}"
+partial="$FIXTURE_BUILD_ROOT/.receipt-publish.${BUILD_ID}.VERIFY-LOCAL.json"
+if [[ "$FIXTURE_SCENARIO" == 'receipt-partial-symlink-before-copy' &&
+      "$destination" == "$partial" && ! -e "$FIXTURE_ROOT/publication-race-triggered" ]]; then
+  printf '%s\n' 'caller-sentinel' > "$FIXTURE_ROOT/publication-sentinel"
+  rm -- "$partial"
+  /usr/bin/ln -s -- "$FIXTURE_ROOT/publication-sentinel" "$partial"
+  : > "$FIXTURE_ROOT/publication-race-triggered"
+fi
+exec /usr/bin/cp "$@"
+`);
+  await writeCommandFixture(binRoot, "cat", String.raw`
+partial="$FIXTURE_BUILD_ROOT/.receipt-publish.${BUILD_ID}.VERIFY-LOCAL.json"
+if [[ "$FIXTURE_SCENARIO" == 'receipt-partial-symlink-before-copy' &&
+      "$*" == *'/VERIFY-LOCAL.json'* && -e "$partial" && ! -L "$partial" &&
+      ! -e "$FIXTURE_ROOT/publication-race-triggered" ]]; then
+  printf '%s\n' 'caller-sentinel' > "$FIXTURE_ROOT/publication-sentinel"
+  rm -- "$partial"
+  /usr/bin/ln -s -- "$FIXTURE_ROOT/publication-sentinel" "$partial"
+  : > "$FIXTURE_ROOT/publication-race-triggered"
+fi
+exec /usr/bin/cat "$@"
+`);
   await writeCommandFixture(binRoot, "mktemp", String.raw`
 if [[ "$*" == *'/tmp/palziv-receipt-copy.'* && "$FIXTURE_SCENARIO" == 'receipt-temp-unsafe' ]]; then
   unsafe="$FIXTURE_ROOT/unsafe-receipt-copy"
@@ -561,12 +585,38 @@ fi
 exec /usr/bin/mktemp "$@"
 `);
   await writeCommandFixture(binRoot, "ln", String.raw`
+source="${"$"}{@: -2:1}"
 destination="${"$"}{!#}"
+partial="$FIXTURE_BUILD_ROOT/.receipt-publish.${BUILD_ID}.VERIFY-LOCAL.json"
+if [[ "$FIXTURE_SCENARIO" == 'receipt-partial-symlink-before-link' &&
+      "$source" == "$partial" && ! -e "$FIXTURE_ROOT/publication-race-triggered" ]]; then
+  printf '%s\n' 'caller-sentinel' > "$FIXTURE_ROOT/publication-sentinel"
+  rm -- "$partial"
+  /usr/bin/ln -s -- "$FIXTURE_ROOT/publication-sentinel" "$partial"
+  : > "$FIXTURE_ROOT/publication-race-triggered"
+fi
 if [[ "$FIXTURE_SCENARIO" == 'receipt-publication-fault' && "$destination" == */STAGE-SUCCESS.sha256 ]]; then
   printf '%s\n' 'preserve-caller-race' > "$destination"
   exit 48
 fi
 exec /usr/bin/ln "$@"
+`);
+  await writeCommandFixture(binRoot, "python3", String.raw`
+partial="$FIXTURE_BUILD_ROOT/.receipt-publish.${BUILD_ID}.VERIFY-LOCAL.json"
+if [[ "$FIXTURE_SCENARIO" == 'receipt-partial-symlink-before-link' &&
+      "$*" == *"$FIXTURE_BUILD_ROOT/VERIFY-LOCAL.json"* &&
+      -e "$partial" && ! -L "$partial" && ! -e "$FIXTURE_ROOT/publication-race-triggered" ]]; then
+  printf '%s\n' 'caller-sentinel' > "$FIXTURE_ROOT/publication-sentinel"
+  rm -- "$partial"
+  /usr/bin/ln -s -- "$FIXTURE_ROOT/publication-sentinel" "$partial"
+  : > "$FIXTURE_ROOT/publication-race-triggered"
+fi
+if [[ "$FIXTURE_SCENARIO" == 'receipt-publication-fault' &&
+      "$*" == *"$FIXTURE_BUILD_ROOT/STAGE-SUCCESS.sha256"* ]]; then
+  printf '%s\n' 'preserve-caller-race' > "$FIXTURE_BUILD_ROOT/STAGE-SUCCESS.sha256"
+  exit 48
+fi
+exec /usr/bin/python3 "$@"
 `);
   await writeCommandFixture(binRoot, "ss", String.raw`
 printf 'LISTEN 0 128 127.0.0.1:22000 0.0.0.0:*\n'
@@ -847,6 +897,7 @@ if [[ "$scenario" == 'unowned-pid' && "$unowned_pid" == '-' ]]; then
 fi
 export FIXTURE_ROOT="$fixture_root"
 export FIXTURE_CACHE_ROOT=${shellQuote(toWslPath(cacheRoot))}
+export FIXTURE_BUILD_ROOT=${shellQuote(toWslPath(buildRoot))}
 export FIXTURE_SCENARIO="$scenario"
 export FIXTURE_UNOWNED_PID="$unowned_pid"
 export FIXTURE_IMAGE_SHA512='${sha512(BASE_IMAGE_CONTENTS)}'
@@ -1542,6 +1593,45 @@ fi
   });
 });
 
+test("WSL controller keeps receipt publication bound to its open source objects", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  for (const [name, scenario] of [
+    ["partial symlink swap before copy", "receipt-partial-symlink-before-copy"],
+    ["partial symlink swap before link", "receipt-partial-symlink-before-link"]
+  ]) {
+    await t.test(name, async () => {
+      const harness = await runBashControllerHarness({ bootOnly: false, scenario });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+        assert.equal(state.classification, "failed");
+        assert.equal(state.operation, "publish-stage-receipts");
+        assert.equal(await pathExists(path.join(harness.fixtureRoot, "publication-race-triggered")), true, "race injector did not run");
+        assert.equal(
+          await readFile(path.join(harness.fixtureRoot, "publication-sentinel"), "utf8"),
+          "caller-sentinel\n",
+          "publication followed the caller's replacement symlink and changed its target"
+        );
+        const partial = path.join(harness.buildRoot, `.receipt-publish.${BUILD_ID}.VERIFY-LOCAL.json`);
+        const partialCheck = await runWsl(`test -L ${shellQuote(toWslPath(partial))} && readlink -- ${shellQuote(toWslPath(partial))}`);
+        assert.equal(partialCheck.code, 0, partialCheck.output);
+        assert.equal(partialCheck.output, `${toWslPath(path.join(harness.fixtureRoot, "publication-sentinel"))}\n`);
+        for (const receipt of ["VERIFY-LOCAL.json", "STAGE-SUCCESS.json", "STAGE-SUCCESS.sha256", "age-recipient.txt"]) {
+          assert.equal(await pathExists(path.join(harness.buildRoot, receipt)), false, `${receipt} was partially published`);
+        }
+        assert.deepEqual(
+          (await readdir(harness.buildRoot)).filter((entry) => entry.includes(".receipt-publish.")),
+          [`.receipt-publish.${BUILD_ID}.VERIFY-LOCAL.json`],
+          "controller-owned publication residue remained or caller replacement was removed"
+        );
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+});
+
 test("artifact disk name is derived only from the release SHA", () => {
   assert.equal(artifactDiskName(RELEASE_SHA), `palziv-debian13-${RELEASE_SHA}.qcow2`);
   assert.throws(() => artifactDiskName("main"), /40-character release SHA/i);
@@ -1989,7 +2079,7 @@ test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on
     }
     assert.equal((await harness.readLog("apt-get.log")).trim(), [
       "update",
-      "install -y ca-certificates cloud-image-utils curl jq openssh-client qemu-system-x86 qemu-utils"
+      "install -y ca-certificates cloud-image-utils curl jq openssh-client python3 qemu-system-x86 qemu-utils"
     ].join("\n"));
     assert.match(await harness.readLog("ssh.log"), /StrictHostKeyChecking=yes/);
     assert.match(await harness.readLog("ssh.log"), /UserKnownHostsFile=/);

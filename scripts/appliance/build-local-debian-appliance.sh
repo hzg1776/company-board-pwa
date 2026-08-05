@@ -37,6 +37,7 @@ RECEIPT_COPY_ID=''
 RECEIPT_COPY_OWNED=0
 RECEIPT_PUBLICATION_ACTIVE=0
 declare -A RECEIPT_PUBLICATION_IDS=()
+declare -A RECEIPT_PUBLICATION_FDS=()
 EXPECTED_OS_DRIVE_ARGUMENT=''
 
 report_error() {
@@ -107,33 +108,133 @@ cleanup_receipt_publication() {
     remove_owned_publication_path "$final" "$expected_id" || true
     remove_owned_publication_path "$partial" "$expected_id" || true
   done
+  close_receipt_publication_fds
+}
+
+close_receipt_publication_fds() {
+  local receipt receipt_fd
+  for receipt in "${RECEIPT_NAMES[@]}"; do
+    receipt_fd="${RECEIPT_PUBLICATION_FDS[$receipt]:-}"
+    if [[ "$receipt_fd" =~ ^[1-9][0-9]*$ ]]; then
+      exec {receipt_fd}>&- 2>/dev/null || true
+      unset 'RECEIPT_PUBLICATION_FDS[$receipt]'
+    fi
+  done
+}
+
+publication_fd_identity() {
+  local receipt_fd="$1"
+  [[ "$receipt_fd" =~ ^[1-9][0-9]*$ ]] || return 1
+  stat -Lc '%d:%i:%u:%a' -- "/proc/self/fd/${receipt_fd}" 2>/dev/null
+}
+
+open_receipt_publication_fd() {
+  local receipt="$1" partial="$2" receipt_fd expected_id actual_id noclobber_was_set=0 open_status
+  [[ -o noclobber ]] && noclobber_was_set=1
+  set -o noclobber
+  if { exec {receipt_fd}> "$partial"; } 2>/dev/null; then
+    open_status=0
+  else
+    open_status=$?
+  fi
+  [[ "$noclobber_was_set" -eq 1 ]] || set +o noclobber
+  [[ "$open_status" -eq 0 ]] || return 1
+  RECEIPT_PUBLICATION_FDS["$receipt"]="$receipt_fd"
+  expected_id="$(publication_fd_identity "$receipt_fd")" || return 1
+  [[ "$expected_id" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]{3,4}$ ]] || return 1
+  actual_id="$(stat -Lc '%d:%i:%u:%a' -- "$partial" 2>/dev/null)" || return 1
+  [[ ! -L "$partial" && "$actual_id" == "$expected_id" ]] || return 1
+  RECEIPT_PUBLICATION_IDS["$receipt"]="$expected_id"
+}
+
+publication_source_is_owned() {
+  local receipt="$1" partial receipt_fd expected_id fd_id partial_id
+  partial="$(receipt_publication_partial_path "$receipt")" || return 1
+  receipt_fd="${RECEIPT_PUBLICATION_FDS[$receipt]:-}"
+  expected_id="${RECEIPT_PUBLICATION_IDS[$receipt]:-}"
+  [[ -n "$expected_id" && -f "$partial" && ! -L "$partial" ]] || return 1
+  fd_id="$(publication_fd_identity "$receipt_fd")" || return 1
+  partial_id="$(stat -Lc '%d:%i:%u:%a' -- "$partial" 2>/dev/null)" || return 1
+  [[ "$fd_id" == "$expected_id" && "$partial_id" == "$expected_id" ]]
+}
+
+link_receipt_fd_noclobber() {
+  local receipt_fd="$1" partial="$2" final="$3" expected_id="$4"
+  python3 - "$receipt_fd" "$partial" "$final" "$expected_id" <<'PY'
+import ctypes
+import os
+import stat
+import sys
+
+AT_FDCWD = -100
+AT_SYMLINK_FOLLOW = 0x400
+
+fd_text, partial, final, expected = sys.argv[1:]
+if not fd_text.isascii() or not fd_text.isdigit() or int(fd_text) <= 0:
+    raise SystemExit(64)
+fd = int(fd_text)
+
+def identity(value):
+    return f"{value.st_dev}:{value.st_ino}:{value.st_uid}:{stat.S_IMODE(value.st_mode):o}"
+
+before_fd = os.fstat(fd)
+before_partial = os.stat(partial, follow_symlinks=False)
+if not stat.S_ISREG(before_fd.st_mode) or not stat.S_ISREG(before_partial.st_mode):
+    raise SystemExit(65)
+if identity(before_fd) != expected or identity(before_partial) != expected:
+    raise SystemExit(66)
+
+libc = ctypes.CDLL(None, use_errno=True)
+libc.linkat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+libc.linkat.restype = ctypes.c_int
+source = os.fsencode(f"/proc/self/fd/{fd}")
+destination = os.fsencode(final)
+if libc.linkat(AT_FDCWD, source, AT_FDCWD, destination, AT_SYMLINK_FOLLOW) != 0:
+    raise SystemExit(67)
+
+after_fd = os.fstat(fd)
+after_partial = os.stat(partial, follow_symlinks=False)
+after_final = os.stat(final, follow_symlinks=False)
+if not stat.S_ISREG(after_partial.st_mode) or not stat.S_ISREG(after_final.st_mode):
+    raise SystemExit(68)
+if identity(after_fd) != expected or identity(after_partial) != expected or identity(after_final) != expected:
+    raise SystemExit(69)
+PY
 }
 
 publish_receipts_atomically() {
-  local receipt partial final expected_id
+  local receipt partial final expected_id receipt_fd
   RECEIPT_PUBLICATION_ACTIVE=1
   for receipt in "${RECEIPT_NAMES[@]}"; do
     partial="$(receipt_publication_partial_path "$receipt")" || return 11
     final="$BUILD_ROOT/$receipt"
     [[ ! -e "$partial" && ! -L "$partial" && ! -e "$final" && ! -L "$final" ]] || return 12
-    reserve_empty_file "$partial" || return 13
-    expected_id="$(stat -Lc '%d:%i:%u:%a' -- "$partial")" || return 14
-    [[ "$expected_id" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]{3,4}$ ]] || return 15
-    RECEIPT_PUBLICATION_IDS["$receipt"]="$expected_id"
-    cp -- "$RECEIPT_COPY_DIR/$receipt" "$partial" || return 16
-    [[ "$(stat -Lc '%d:%i:%u:%a' -- "$partial")" == "$expected_id" ]] || return 17
-    cmp --silent -- "$RECEIPT_COPY_DIR/$receipt" "$partial" || return 18
+    open_receipt_publication_fd "$receipt" "$partial" || return 13
+    receipt_fd="${RECEIPT_PUBLICATION_FDS[$receipt]}"
+    expected_id="${RECEIPT_PUBLICATION_IDS[$receipt]}"
+    publication_source_is_owned "$receipt" || return 14
+    cat -- "$RECEIPT_COPY_DIR/$receipt" >&"$receipt_fd" || return 15
+    publication_source_is_owned "$receipt" || return 16
+    cmp --silent -- "$RECEIPT_COPY_DIR/$receipt" "/proc/self/fd/${receipt_fd}" || return 17
+    [[ "$(publication_fd_identity "$receipt_fd")" == "$expected_id" ]] || return 18
   done
   for receipt in "${RECEIPT_NAMES[@]}"; do
     partial="$(receipt_publication_partial_path "$receipt")" || return 21
     final="$BUILD_ROOT/$receipt"
-    ln -- "$partial" "$final" 2>/dev/null || return 22
-    [[ "$(stat -Lc '%d:%i:%u:%a' -- "$final")" == "${RECEIPT_PUBLICATION_IDS[$receipt]}" ]] || return 23
+    receipt_fd="${RECEIPT_PUBLICATION_FDS[$receipt]}"
+    expected_id="${RECEIPT_PUBLICATION_IDS[$receipt]}"
+    publication_source_is_owned "$receipt" || return 22
+    link_receipt_fd_noclobber "$receipt_fd" "$partial" "$final" "$expected_id" >/dev/null 2>&1 || return 23
+    publication_source_is_owned "$receipt" || return 24
+    [[ -f "$final" && ! -L "$final" && "$(stat -Lc '%d:%i:%u:%a' -- "$final")" == "$expected_id" ]] || return 25
   done
   for receipt in "${RECEIPT_NAMES[@]}"; do
     partial="$(receipt_publication_partial_path "$receipt")" || return 31
-    rm -- "$partial" || return 32
+    expected_id="${RECEIPT_PUBLICATION_IDS[$receipt]}"
+    remove_owned_publication_path "$partial" "$expected_id" || return 32
+    [[ ! -e "$partial" && ! -L "$partial" ]] || return 33
   done
+  close_receipt_publication_fds
   RECEIPT_PUBLICATION_ACTIVE=0
 }
 
@@ -442,7 +543,20 @@ readonly KVM_DEVICE="${PALZIV_APPLIANCE_KVM_DEVICE:-/dev/kvm}"
 [[ -c "$KVM_DEVICE" ]] || fail 'KVM is required at /dev/kvm.'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
-apt-get install -y ca-certificates cloud-image-utils curl jq openssh-client qemu-system-x86 qemu-utils >/dev/null
+apt-get install -y ca-certificates cloud-image-utils curl jq openssh-client python3 qemu-system-x86 qemu-utils >/dev/null
+if [[ "$BOOT_ONLY" -eq 0 ]]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    publisher_runtime_status=127
+  elif python3 -c 'import ctypes, os, stat, sys' >/dev/null 2>&1; then
+    publisher_runtime_status=0
+  else
+    publisher_runtime_status=$?
+  fi
+  if [[ "$publisher_runtime_status" -ne 0 ]]; then
+    write_failed_build_state 'validate-receipt-publisher-runtime' "$publisher_runtime_status"
+    fail 'The receipt publisher runtime is unavailable.'
+  fi
+fi
 
 umask 077
 mkdir -- "$WORK_ROOT" "$SEED_ROOT"
