@@ -285,13 +285,22 @@ set -Eeuo pipefail
 printf '%s\n' "$*" >> "$PALZIV_VERIFIER_FIXTURE_ROOT/systemctl.log"
 case "$*" in
   'is-active --quiet qemu-guest-agent.service') [[ "$PALZIV_VERIFIER_SCENARIO" != 'qga-inactive' ]] ;;
-  'is-active --quiet systemd-timesyncd.service') exit 0 ;;
-  'is-active --quiet palziv.service') exit 0 ;;
+  'is-active --quiet systemd-timesyncd.service') [[ "$PALZIV_VERIFIER_SCENARIO" != 'timesync-inactive' ]] ;;
+  'is-active --quiet palziv.service') [[ "$PALZIV_VERIFIER_SCENARIO" != 'palziv-inactive' ]] ;;
   'is-enabled --quiet cloudflared.service') [[ "$PALZIV_VERIFIER_SCENARIO" == 'cloudflared-enabled' ]] ;;
   'is-active --quiet cloudflared.service') [[ "$PALZIV_VERIFIER_SCENARIO" == 'cloudflared-active' ]] ;;
   *) exit 64 ;;
 esac
 SYSTEMCTL
+cat > "$bin_root/uname" <<'UNAME'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$PALZIV_VERIFIER_SCENARIO" == 'wrong-arch' && "$*" == '-m' ]]; then
+  printf '%s\n' 'aarch64'
+  exit 0
+fi
+exec /usr/bin/uname "$@"
+UNAME
 cat > "$bin_root/ss" <<'SS'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -316,12 +325,14 @@ set -Eeuo pipefail
 [[ "$#" -eq 2 && "$1" == '-y' && "$2" == '/etc/palziv/migration-age.key' ]]
 printf 'age1'; printf 'q%.0s' {1..58}; printf '\n'
 AGE
-chmod 0755 "$bin_root/systemctl" "$bin_root/ss" "$bin_root/curl" "$bin_root/age-keygen"
+chmod 0755 "$bin_root/systemctl" "$bin_root/uname" "$bin_root/ss" "$bin_root/curl" "$bin_root/age-keygen"
 
 case "$scenario" in
   bad-permission) chmod 0644 "$root/etc/palziv/palziv.env" ;;
+  bad-age-permission) chmod 0640 "$root/etc/palziv/migration-age.key" ;;
   forbidden-runtime) install -d -m 0750 "$root/opt/palziv/releases/$release_sha/runtime"; : > "$root/opt/palziv/releases/$release_sha/runtime/board.json" ;;
   bad-os) printf '%s\n' 'ID=debian' 'VERSION_ID="12"' > "$root/etc/os-release" ;;
+  wrong-release-link) rm -- "$root/opt/palziv/current"; ln -s "/opt/palziv/releases/${"$"}{release_sha%?}b" "$root/opt/palziv/current" ;;
 esac
 
 cat > "$fixture_root/run-in-namespace.sh" <<'INNER'
@@ -394,7 +405,9 @@ test("guest verifier enforces the complete local production contract with bounde
         qemuGuestAgent: "active",
         systemdTimesyncd: "active"
       });
-      assert.equal(await harness.readLinux("receipt/VERIFY-LOCAL.json"), "");
+      const receiptTree = await runWsl(`find ${shellQuote(harness.receiptRoot)} -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort`);
+      assert.equal(receiptTree.code, 0, receiptTree.output);
+      assert.equal(receiptTree.output, "", "pre-reboot must leave no final or partial receipt files");
       const routes = (await harness.readLinux("routes.log")).trim().split("\n");
       assert.deepEqual(routes, expectedRoutes.map((route) => `http://127.0.0.1:3116${route}`));
     } finally {
@@ -440,10 +453,16 @@ test("guest verifier enforces the complete local production contract with bounde
     ["public listener", "public-listener"],
     ["inactive guest agent", "qga-inactive"],
     ["enabled Cloudflare", "cloudflared-enabled"],
+    ["active but disabled Cloudflare", "cloudflared-active"],
+    ["inactive application service", "palziv-inactive"],
+    ["inactive time synchronization", "timesync-inactive"],
     ["route failure", "route-failure"],
     ["unsafe configuration permission", "bad-permission"],
+    ["unsafe age identity permission", "bad-age-permission"],
     ["forbidden runtime metadata", "forbidden-runtime"],
     ["wrong Debian release", "bad-os"],
+    ["wrong architecture", "wrong-arch"],
+    ["wrong release symlink", "wrong-release-link"],
     ["wrong Node release", "bad-node"]
   ]) {
     await t.test(`rejects ${name}`, async () => {
@@ -532,6 +551,23 @@ fi
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/cloud-localds.log"
 : > "$1"
 `);
+  await writeCommandFixture(binRoot, "mktemp", String.raw`
+if [[ "$*" == *'/tmp/palziv-receipt-copy.'* && "$FIXTURE_SCENARIO" == 'receipt-temp-unsafe' ]]; then
+  unsafe="$FIXTURE_ROOT/unsafe-receipt-copy"
+  mkdir -m 0700 -- "$unsafe"
+  printf '%s\n' "$unsafe"
+  exit 0
+fi
+exec /usr/bin/mktemp "$@"
+`);
+  await writeCommandFixture(binRoot, "ln", String.raw`
+destination="${"$"}{!#}"
+if [[ "$FIXTURE_SCENARIO" == 'receipt-publication-fault' && "$destination" == */STAGE-SUCCESS.sha256 ]]; then
+  printf '%s\n' 'preserve-caller-race' > "$destination"
+  exit 48
+fi
+exec /usr/bin/ln "$@"
+`);
   await writeCommandFixture(binRoot, "ss", String.raw`
 printf 'LISTEN 0 128 127.0.0.1:22000 0.0.0.0:*\n'
 if [[ -s "$FIXTURE_ROOT/qemu.port" && "$FIXTURE_SCENARIO" != 'no-listener' ]]; then
@@ -574,8 +610,22 @@ if [[ "$*" == *'systemctl restart palziv.service'* ]]; then
   [[ "$*" == *'curl --fail --silent --show-error --max-time 15 http://127.0.0.1:3116/api/health'* ]]
   exit 0
 fi
+if [[ "$*" == *'cat /proc/sys/kernel/random/boot_id'* ]]; then
+  if [[ -f "$FIXTURE_ROOT/reboot-up" && "$FIXTURE_SCENARIO" != 'unchanged-boot-id' ]]; then
+    boot_id='22222222-2222-4222-8222-222222222222'
+  else
+    boot_id='11111111-1111-4111-8111-111111111111'
+  fi
+  printf '%s\n' "$boot_id" >> "$FIXTURE_ROOT/boot-id.log"
+  printf '%s\n' "$boot_id"
+  exit 0
+fi
 if [[ "$*" == *'systemctl reboot'* ]]; then
   : > "$FIXTURE_ROOT/reboot-issued"
+  if [[ "$FIXTURE_SCENARIO" == 'qemu-exit-during-down-wait' ]]; then
+    pid="$(<"$FIXTURE_ROOT/qemu.pid")"
+    kill -TERM "$pid"
+  fi
   exit 255
 fi
 if [[ "$*" == *'palziv-build@127.0.0.1 true' ]]; then
@@ -583,6 +633,10 @@ if [[ "$*" == *'palziv-build@127.0.0.1 true' ]]; then
   if [[ "$FIXTURE_SCENARIO" == 'reboot-never-down' ]]; then exit 0; fi
   if [[ ! -f "$FIXTURE_ROOT/reboot-down" ]]; then
     printf '%s\n' 'down' > "$FIXTURE_ROOT/reboot-down"
+    if [[ "$FIXTURE_SCENARIO" == 'qemu-exit-during-up-wait' ]]; then
+      pid="$(<"$FIXTURE_ROOT/qemu.pid")"
+      kill -TERM "$pid"
+    fi
     exit 255
   fi
   if [[ "$FIXTURE_SCENARIO" == 'reboot-never-up' ]]; then exit 255; fi
@@ -591,6 +645,7 @@ if [[ "$*" == *'palziv-build@127.0.0.1 true' ]]; then
 fi
 if [[ "$*" == *'palziv-verify-appliance '* && "$*" == *' post-reboot '* ]]; then
   [[ -f "$FIXTURE_ROOT/reboot-up" ]]
+  if [[ "$FIXTURE_SCENARIO" == 'hanging-post-verify' ]]; then sleep 3; fi
   [[ "$FIXTURE_SCENARIO" != 'post-verify-failure' ]] || exit 46
   install -d -m 0700 "$FIXTURE_ROOT/remote-receipts"
   route_count=8
@@ -598,14 +653,40 @@ if [[ "$*" == *'palziv-verify-appliance '* && "$*" == *' post-reboot '* ]]; then
   printf '%s\n' '{"schemaVersion":1,"phase":"post-reboot","classification":"pass","releaseSha":"${RELEASE_SHA}","nodeVersion":"v24.18.0","routeCount":8,"services":{"app":"active","cloudflared":"disabled-inactive","qemuGuestAgent":"active","systemdTimesyncd":"active"},"completedAt":"2026-08-05T12:00:00Z"}' > "$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json"
   printf '{"schemaVersion":1,"phaseId":"project-a-two-phase-v1","classification":"staged","releaseSha":"${RELEASE_SHA}","nodeVersion":"v24.18.0","app":"active","cloudflared":"disabled-inactive","routeCount":%s,"completedAt":"2026-08-05T12:00:00Z"}\n' "$route_count" > "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.json"
   (printf 'age1'; printf 'q%.0s' {1..58}; printf '\n') > "$FIXTURE_ROOT/remote-receipts/age-recipient.txt"
+  if [[ "$FIXTURE_SCENARIO" == 'concatenated-verify-json' ]]; then
+    document="$(<"$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json")"
+    printf '%s%s\n' "$document" "$document" > "$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json"
+  fi
+  if [[ "$FIXTURE_SCENARIO" == 'duplicate-stage-json' ]]; then
+    document="$(<"$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.json")"
+    printf '%s\n%s\n' "$document" "$document" > "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.json"
+  fi
+  if [[ "$FIXTURE_SCENARIO" == 'missing-json-final-lf' ]]; then
+    document="$(<"$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json")"
+    printf '%s' "$document" > "$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json"
+  fi
   (cd "$FIXTURE_ROOT/remote-receipts" && sha256sum STAGE-SUCCESS.json age-recipient.txt > STAGE-SUCCESS.sha256)
+  if [[ "$FIXTURE_SCENARIO" == 'checksum-record-omitted' ]]; then
+    sed -n '1p' "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256" > "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256.changed"
+    mv -- "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256.changed" "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256"
+  elif [[ "$FIXTURE_SCENARIO" == 'checksum-record-extra' ]]; then
+    (cd "$FIXTURE_ROOT/remote-receipts" && sha256sum VERIFY-LOCAL.json >> STAGE-SUCCESS.sha256)
+  elif [[ "$FIXTURE_SCENARIO" == 'checksum-record-path' ]]; then
+    sed 's/  STAGE-SUCCESS\.json$/  .\/STAGE-SUCCESS.json/' "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256" > "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256.changed"
+    mv -- "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256.changed" "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256"
+  elif [[ "$FIXTURE_SCENARIO" == 'checksum-record-duplicate' ]]; then
+    first="$(sed -n '1p' "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256")"
+    printf '%s\n' "$first" >> "$FIXTURE_ROOT/remote-receipts/STAGE-SUCCESS.sha256"
+  fi
   cat "$FIXTURE_ROOT/remote-receipts/VERIFY-LOCAL.json"
   exit 0
 fi
 if [[ "$*" == *'chmod 0750 '*'palziv-appliance-receipts-'* ]]; then
+  if [[ "$FIXTURE_SCENARIO" == 'hanging-receipt-share' ]]; then sleep 3; fi
   exit 0
 fi
 if [[ "$*" == *'systemctl poweroff'* ]]; then
+  if [[ "$FIXTURE_SCENARIO" == 'hanging-late-poweroff' ]]; then sleep 3; fi
   [[ "$FIXTURE_SCENARIO" != 'active-shutdown-failure' ]] || exit 43
   pid="$(<"$FIXTURE_ROOT/qemu.pid")"
   kill -TERM "$pid"
@@ -619,6 +700,7 @@ printf 'scp %s\n' "$*" >> "$FIXTURE_ROOT/transfer-operations.log"
 if [[ "$FIXTURE_SCENARIO" == 'hanging-scp' ]]; then sleep 3; fi
 [[ "$FIXTURE_SCENARIO" != 'scp-failure' ]] || exit 41
 if [[ "$*" == *'palziv-build@127.0.0.1:/var/tmp/palziv-appliance-receipts-'* ]]; then
+  if [[ "$FIXTURE_SCENARIO" == 'hanging-receipt-copy' ]]; then sleep 3; fi
   [[ "$FIXTURE_SCENARIO" != 'receipt-copy-failure' ]] || exit 44
   destination="${"$"}{!#}"
   for argument in "$@"; do
@@ -772,7 +854,11 @@ export PALZIV_APPLIANCE_SSH_TIMEOUT_SECONDS=2
 export PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS=1
 export PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS=1
 export PALZIV_APPLIANCE_PROVISION_TIMEOUT_SECONDS=1
-export PALZIV_APPLIANCE_REBOOT_TIMEOUT_SECONDS=2
+if [[ "$scenario" == 'invalid-reboot-timeout' ]]; then
+  export PALZIV_APPLIANCE_REBOOT_TIMEOUT_SECONDS=0
+else
+  export PALZIV_APPLIANCE_REBOOT_TIMEOUT_SECONDS=2
+fi
 export PATH="$fixture_root/../bin:/usr/bin:/bin"
 if [[ "$scenario" == 'missing-kvm' ]]; then export PALZIV_APPLIANCE_KVM_DEVICE=/dev/palziv-missing-kvm; fi
 controller_args=(bash ${shellQuote(controller)} \
@@ -1209,6 +1295,7 @@ test("WSL controller provisions only outside boot-only mode over pinned SSH and 
       assert.match(sshLog, /systemctl restart palziv\.service/);
       assert.match(sshLog, /curl --fail --silent --show-error --max-time 15 http:\/\/127\.0\.0\.1:3116\/api\/health/);
       assert.match(sshLog, /systemctl reboot/);
+      assert.equal((sshLog.match(/cat \/proc\/sys\/kernel\/random\/boot_id/g) ?? []).length, 2);
       assert.match(sshLog, new RegExp(`palziv-verify-appliance ${RELEASE_SHA} post-reboot /var/tmp/palziv-appliance-receipts-${BUILD_ID}`));
       const snapshotScript = await harness.readLog("provision-stdin.log");
       assert.match(snapshotScript, /mv -- .*project-a-release\.tar.*release\.tar/);
@@ -1294,6 +1381,7 @@ fi
       assert.match(transferOperations.at(-1), /^ssh .*systemctl poweroff/);
       assert.equal(await harness.readLog("reboot-down"), "down\n");
       assert.equal(await harness.readLog("reboot-up"), "up\n");
+      assert.equal(await harness.readLog("boot-id.log"), "11111111-1111-4111-8111-111111111111\n22222222-2222-4222-8222-222222222222\n");
       const verifyReceipt = JSON.parse(await readFile(path.join(harness.buildRoot, "VERIFY-LOCAL.json"), "utf8"));
       assert.equal(verifyReceipt.phase, "post-reboot");
       assert.equal(verifyReceipt.classification, "pass");
@@ -1393,9 +1481,24 @@ fi
     ["application restart failure", "restart-failure", "restart-and-health-check"],
     ["reboot never goes down", "reboot-never-down", "wait-for-reboot-down"],
     ["reboot never comes back", "reboot-never-up", "wait-for-reboot-up"],
+    ["SSH cycles without a new boot", "unchanged-boot-id", "verify-reboot-boot-id"],
+    ["invalid reboot timeout", "invalid-reboot-timeout", "validate-reboot-timeout"],
+    ["QEMU exits during reboot-down wait", "qemu-exit-during-down-wait", "qemu-exited-during-reboot-down"],
+    ["QEMU exits during reboot-up wait", "qemu-exit-during-up-wait", "qemu-exited-during-reboot-up"],
     ["post-reboot verification failure", "post-verify-failure", "post-reboot-verification"],
+    ["bounded post-reboot verification hang", "hanging-post-verify", "post-reboot-verification"],
+    ["bounded receipt-share hang", "hanging-receipt-share", "prepare-stage-receipts"],
     ["receipt copy failure", "receipt-copy-failure", "copy-stage-receipts"],
-    ["malformed stage receipt", "bad-stage-receipt", "validate-stage-receipts"]
+    ["bounded late receipt-copy hang", "hanging-receipt-copy", "copy-stage-receipts"],
+    ["unsafe receipt temporary directory", "receipt-temp-unsafe", "prepare-receipt-copy-staging"],
+    ["malformed stage receipt", "bad-stage-receipt", "validate-stage-receipts"],
+    ["omitted checksum record", "checksum-record-omitted", "validate-stage-receipts"],
+    ["extra checksum record", "checksum-record-extra", "validate-stage-receipts"],
+    ["checksum record with path component", "checksum-record-path", "validate-stage-receipts"],
+    ["duplicate checksum record", "checksum-record-duplicate", "validate-stage-receipts"],
+    ["concatenated verification JSON", "concatenated-verify-json", "validate-stage-receipts"],
+    ["duplicate stage JSON document", "duplicate-stage-json", "validate-stage-receipts"],
+    ["JSON without a final LF", "missing-json-final-lf", "validate-stage-receipts"]
   ]) {
     await t.test(name, async () => {
       const harness = await runBashControllerHarness({ bootOnly: false, scenario });
@@ -1412,6 +1515,31 @@ fi
       }
     });
   }
+
+  await t.test("publication race rolls back only controller-owned receipt files", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false, scenario: "receipt-publication-fault" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "failed");
+      assert.equal(state.operation, "publish-stage-receipts");
+      assert.equal(await pathExists(path.join(harness.buildRoot, "VERIFY-LOCAL.json")), false);
+      assert.equal(await pathExists(path.join(harness.buildRoot, "STAGE-SUCCESS.json")), false);
+      assert.equal(await pathExists(path.join(harness.buildRoot, "age-recipient.txt")), false);
+      assert.equal(
+        await readFile(path.join(harness.buildRoot, "STAGE-SUCCESS.sha256"), "utf8"),
+        "preserve-caller-race\n",
+        "publication cleanup removed a caller-owned racing destination"
+      );
+      assert.deepEqual(
+        (await readdir(harness.buildRoot)).filter((name) => name.includes(".receipt-publish.") || name.endsWith(".partial")),
+        [],
+        "controller-owned receipt publication residue remained"
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  });
 });
 
 test("artifact disk name is derived only from the release SHA", () => {

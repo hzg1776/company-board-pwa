@@ -12,6 +12,12 @@ readonly DEFAULT_PROVISION_TIMEOUT_SECONDS=1800
 readonly DEFAULT_REBOOT_TIMEOUT_SECONDS=300
 readonly SHUTDOWN_TIMEOUT_SECONDS=180
 readonly SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly -a RECEIPT_NAMES=(
+  'VERIFY-LOCAL.json'
+  'STAGE-SUCCESS.json'
+  'STAGE-SUCCESS.sha256'
+  'age-recipient.txt'
+)
 
 REPOSITORY=''
 BUILD_ROOT=''
@@ -29,6 +35,8 @@ QGA_RUNTIME_OWNED=0
 RECEIPT_COPY_DIR=''
 RECEIPT_COPY_ID=''
 RECEIPT_COPY_OWNED=0
+RECEIPT_PUBLICATION_ACTIVE=0
+declare -A RECEIPT_PUBLICATION_IDS=()
 EXPECTED_OS_DRIVE_ARGUMENT=''
 
 report_error() {
@@ -73,6 +81,159 @@ publish_noclobber() {
     fail "Destination already exists; refusing to overwrite: $destination"
   fi
   rm -- "$source"
+}
+
+receipt_publication_partial_path() {
+  local receipt="$1"
+  printf '%s/.receipt-publish.%s.%s\n' "$BUILD_ROOT" "$BUILD_ID" "$receipt"
+}
+
+remove_owned_publication_path() {
+  local candidate="$1" expected_id="$2" actual_id actual_path
+  [[ -n "$expected_id" && -f "$candidate" && ! -L "$candidate" ]] || return 0
+  actual_path="$(realpath -e -- "$candidate" 2>/dev/null || true)"
+  actual_id="$(stat -Lc '%d:%i:%u:%a' -- "$candidate" 2>/dev/null || true)"
+  [[ "$actual_path" == "$candidate" && "$actual_id" == "$expected_id" ]] || return 0
+  rm -- "$candidate"
+}
+
+cleanup_receipt_publication() {
+  local receipt expected_id partial final
+  [[ "$RECEIPT_PUBLICATION_ACTIVE" -eq 1 ]] || return 0
+  for receipt in "${RECEIPT_NAMES[@]}"; do
+    expected_id="${RECEIPT_PUBLICATION_IDS[$receipt]:-}"
+    partial="$(receipt_publication_partial_path "$receipt")"
+    final="$BUILD_ROOT/$receipt"
+    remove_owned_publication_path "$final" "$expected_id" || true
+    remove_owned_publication_path "$partial" "$expected_id" || true
+  done
+}
+
+publish_receipts_atomically() {
+  local receipt partial final expected_id
+  RECEIPT_PUBLICATION_ACTIVE=1
+  for receipt in "${RECEIPT_NAMES[@]}"; do
+    partial="$(receipt_publication_partial_path "$receipt")" || return 11
+    final="$BUILD_ROOT/$receipt"
+    [[ ! -e "$partial" && ! -L "$partial" && ! -e "$final" && ! -L "$final" ]] || return 12
+    reserve_empty_file "$partial" || return 13
+    expected_id="$(stat -Lc '%d:%i:%u:%a' -- "$partial")" || return 14
+    [[ "$expected_id" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]{3,4}$ ]] || return 15
+    RECEIPT_PUBLICATION_IDS["$receipt"]="$expected_id"
+    cp -- "$RECEIPT_COPY_DIR/$receipt" "$partial" || return 16
+    [[ "$(stat -Lc '%d:%i:%u:%a' -- "$partial")" == "$expected_id" ]] || return 17
+    cmp --silent -- "$RECEIPT_COPY_DIR/$receipt" "$partial" || return 18
+  done
+  for receipt in "${RECEIPT_NAMES[@]}"; do
+    partial="$(receipt_publication_partial_path "$receipt")" || return 21
+    final="$BUILD_ROOT/$receipt"
+    ln -- "$partial" "$final" 2>/dev/null || return 22
+    [[ "$(stat -Lc '%d:%i:%u:%a' -- "$final")" == "${RECEIPT_PUBLICATION_IDS[$receipt]}" ]] || return 23
+  done
+  for receipt in "${RECEIPT_NAMES[@]}"; do
+    partial="$(receipt_publication_partial_path "$receipt")" || return 31
+    rm -- "$partial" || return 32
+  done
+  RECEIPT_PUBLICATION_ACTIVE=0
+}
+
+receipt_copy_dir_is_owned() {
+  local actual_id actual_path actual_uid actual_mode
+  [[ "$RECEIPT_COPY_OWNED" -eq 1 && -n "$RECEIPT_COPY_DIR" && -d "$RECEIPT_COPY_DIR" && ! -L "$RECEIPT_COPY_DIR" ]] || return 1
+  actual_path="$(realpath -e -- "$RECEIPT_COPY_DIR" 2>/dev/null)" || return 1
+  actual_id="$(stat -Lc '%d:%i' -- "$RECEIPT_COPY_DIR" 2>/dev/null)" || return 1
+  actual_uid="$(stat -Lc '%u' -- "$RECEIPT_COPY_DIR" 2>/dev/null)" || return 1
+  actual_mode="$(stat -Lc '%a' -- "$RECEIPT_COPY_DIR" 2>/dev/null)" || return 1
+  [[ "$actual_path" == "$RECEIPT_COPY_DIR" && "$actual_id" == "$RECEIPT_COPY_ID" && \
+        "$actual_uid" == '0' && "$actual_mode" == '700' && \
+        "$RECEIPT_COPY_DIR" == /tmp/palziv-receipt-copy.* ]]
+}
+
+prepare_receipt_copy_dir() {
+  local candidate actual_path actual_id actual_uid actual_mode
+  candidate="$(mktemp -d /tmp/palziv-receipt-copy.XXXXXXXX)" || return 1
+  [[ "$candidate" == /tmp/palziv-receipt-copy.* && -d "$candidate" && ! -L "$candidate" ]] || return 1
+  actual_path="$(realpath -e -- "$candidate" 2>/dev/null)" || return 1
+  [[ "$actual_path" == "$candidate" && "$actual_path" == /tmp/palziv-receipt-copy.* ]] || return 1
+  actual_id="$(stat -Lc '%d:%i' -- "$actual_path" 2>/dev/null)" || return 1
+  actual_uid="$(stat -Lc '%u' -- "$actual_path" 2>/dev/null)" || return 1
+  actual_mode="$(stat -Lc '%a' -- "$actual_path" 2>/dev/null)" || return 1
+  [[ "$actual_uid" == '0' && "$actual_mode" == '700' ]] || return 1
+  RECEIPT_COPY_DIR="$actual_path"
+  RECEIPT_COPY_ID="$actual_id"
+  RECEIPT_COPY_OWNED=1
+}
+
+bounded_metadata_file_is_valid() {
+  local file="$1" size last_octet
+  [[ -f "$file" && ! -L "$file" ]] || return 1
+  size="$(stat -Lc '%s' -- "$file" 2>/dev/null)" || return 1
+  [[ "$size" =~ ^[0-9]+$ && "$size" -ge 2 && "$size" -le 16384 ]] || return 1
+  if LC_ALL=C grep -q $'[\001-\010\013\014\016-\037\177]' "$file" 2>/dev/null; then return 1; fi
+  last_octet="$(tail -c 1 -- "$file" | od -An -t x1 | tr -d '[:space:]')" || return 1
+  [[ "$last_octet" == '0a' ]]
+}
+
+json_receipt_has_one_document() {
+  local file="$1" line_count
+  bounded_metadata_file_is_valid "$file" || return 1
+  line_count="$(wc -l < "$file")" || return 1
+  [[ "$line_count" -eq 1 ]]
+}
+
+checksum_manifest_is_exact() {
+  local manifest="$RECEIPT_COPY_DIR/STAGE-SUCCESS.sha256" line digest name
+  local -a lines=()
+  local -A seen=()
+  bounded_metadata_file_is_valid "$manifest" || return 1
+  mapfile -t lines < "$manifest" || return 1
+  [[ "${#lines[@]}" -eq 2 ]] || return 1
+  for line in "${lines[@]}"; do
+    [[ "$line" =~ ^([a-f0-9]{64})"  "(STAGE-SUCCESS\.json|age-recipient\.txt)$ ]] || return 1
+    digest="${BASH_REMATCH[1]}"
+    name="${BASH_REMATCH[2]}"
+    [[ -z "${seen[$name]:-}" ]] || return 1
+    seen["$name"]="$digest"
+  done
+  [[ -n "${seen[STAGE-SUCCESS.json]:-}" && -n "${seen[age-recipient.txt]:-}" ]] || return 1
+  (cd -- "$RECEIPT_COPY_DIR" && sha256sum --check --strict STAGE-SUCCESS.sha256 >/dev/null 2>&1)
+}
+
+copied_receipts_are_valid() {
+  local actual_receipt_tree expected_receipt_tree receipt recipient recipient_lines
+  receipt_copy_dir_is_owned || return 1
+  expected_receipt_tree=$'STAGE-SUCCESS.json\nSTAGE-SUCCESS.sha256\nVERIFY-LOCAL.json\nage-recipient.txt'
+  actual_receipt_tree="$(find "$RECEIPT_COPY_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" || return 1
+  [[ "$actual_receipt_tree" == "$expected_receipt_tree" ]] || return 1
+  for receipt in "${RECEIPT_NAMES[@]}"; do
+    bounded_metadata_file_is_valid "$RECEIPT_COPY_DIR/$receipt" || return 1
+  done
+  json_receipt_has_one_document "$RECEIPT_COPY_DIR/VERIFY-LOCAL.json" || return 1
+  jq -s -e --arg releaseSha "$RELEASE_SHA" '
+    length == 1 and (.[0] |
+      type == "object" and
+      (keys == ["classification","completedAt","nodeVersion","phase","releaseSha","routeCount","schemaVersion","services"]) and
+      .schemaVersion == 1 and .phase == "post-reboot" and .classification == "pass" and
+      .releaseSha == $releaseSha and .nodeVersion == "v24.18.0" and .routeCount == 8 and
+      .services == {app:"active",cloudflared:"disabled-inactive",qemuGuestAgent:"active",systemdTimesyncd:"active"} and
+      (.completedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
+  ' "$RECEIPT_COPY_DIR/VERIFY-LOCAL.json" >/dev/null || return 1
+  json_receipt_has_one_document "$RECEIPT_COPY_DIR/STAGE-SUCCESS.json" || return 1
+  jq -s -e --arg releaseSha "$RELEASE_SHA" '
+    length == 1 and (.[0] |
+      type == "object" and
+      (keys == ["app","classification","cloudflared","completedAt","nodeVersion","phaseId","releaseSha","routeCount","schemaVersion"]) and
+      .schemaVersion == 1 and .phaseId == "project-a-two-phase-v1" and .classification == "staged" and
+      .releaseSha == $releaseSha and .nodeVersion == "v24.18.0" and .app == "active" and
+      .cloudflared == "disabled-inactive" and .routeCount == 8 and
+      (.completedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
+  ' "$RECEIPT_COPY_DIR/STAGE-SUCCESS.json" >/dev/null || return 1
+  recipient_lines="$(wc -l < "$RECEIPT_COPY_DIR/age-recipient.txt")" || return 1
+  [[ "$recipient_lines" -eq 1 ]] || return 1
+  recipient="$(<"$RECEIPT_COPY_DIR/age-recipient.txt")"
+  [[ "$recipient" =~ ^age1[ac-hj-np-z02-9]{58}$ ]] || return 1
+  checksum_manifest_is_exact || return 1
+  receipt_copy_dir_is_owned
 }
 
 download_to_partial() {
@@ -135,6 +296,7 @@ cleanup() {
   local rc=$? actual_id actual_mode actual_uid actual_path
   trap - EXIT ERR
   stop_owned_qemu
+  cleanup_receipt_publication
   if [[ "$QGA_RUNTIME_OWNED" -eq 1 && -n "$QGA_RUNTIME_DIR" && -d "$QGA_RUNTIME_DIR" && ! -L "$QGA_RUNTIME_DIR" ]]; then
     actual_path="$(realpath -e -- "$QGA_RUNTIME_DIR" 2>/dev/null || true)"
     actual_id="$(stat -Lc '%d:%i' -- "$QGA_RUNTIME_DIR" 2>/dev/null || true)"
@@ -587,7 +749,27 @@ PALZIV_ROOT_SNAPSHOT
   fi
 
   reboot_timeout="${PALZIV_APPLIANCE_REBOOT_TIMEOUT_SECONDS:-$DEFAULT_REBOOT_TIMEOUT_SECONDS}"
-  [[ "$reboot_timeout" =~ ^[1-9][0-9]{0,2}$ && "$reboot_timeout" -le "$DEFAULT_REBOOT_TIMEOUT_SECONDS" ]] || fail 'Reboot timeout must be between 1 and 300 seconds.'
+  if [[ ! "$reboot_timeout" =~ ^[1-9][0-9]{0,2}$ || "$reboot_timeout" -gt "$DEFAULT_REBOOT_TIMEOUT_SECONDS" ]]; then
+    write_failed_build_state 'validate-reboot-timeout' 1
+    fail 'Reboot timeout must be between 1 and 300 seconds.'
+  fi
+  boot_id_command='cat /proc/sys/kernel/random/boot_id'
+  if pre_reboot_boot_id="$(timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 "$boot_id_command" 2>/dev/null)"; then
+    boot_id_status=0
+  else
+    boot_id_status=$?
+  fi
+  if [[ "$boot_id_status" -ne 0 || ! "$pre_reboot_boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    [[ "$boot_id_status" -ne 0 ]] || boot_id_status=1
+    write_failed_build_state 'read-pre-reboot-boot-id' "$boot_id_status"
+    fail 'Reading the pre-reboot guest boot ID failed.'
+  fi
   if timeout --signal=TERM --kill-after=1s "${copy_timeout}s" \
       ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
       -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
@@ -607,7 +789,10 @@ PALZIV_ROOT_SNAPSHOT
   reboot_deadline=$(( $(monotonic_seconds) + reboot_timeout ))
   reboot_down=0
   while (( $(monotonic_seconds) < reboot_deadline )); do
-    is_owned_qemu_process "$QEMU_PID" || fail 'Owned QEMU process exited during reboot verification.'
+    if ! is_owned_qemu_process "$QEMU_PID"; then
+      write_failed_build_state 'qemu-exited-during-reboot-down' 1
+      fail 'Owned QEMU process exited during reboot-down verification.'
+    fi
     remaining_seconds=$(( reboot_deadline - $(monotonic_seconds) ))
     (( remaining_seconds > 0 )) || break
     probe_timeout="$remaining_seconds"
@@ -632,7 +817,10 @@ PALZIV_ROOT_SNAPSHOT
 
   reboot_up=0
   while (( $(monotonic_seconds) < reboot_deadline )); do
-    is_owned_qemu_process "$QEMU_PID" || fail 'Owned QEMU process exited during reboot verification.'
+    if ! is_owned_qemu_process "$QEMU_PID"; then
+      write_failed_build_state 'qemu-exited-during-reboot-up' 1
+      fail 'Owned QEMU process exited during reboot-up verification.'
+    fi
     remaining_seconds=$(( reboot_deadline - $(monotonic_seconds) ))
     (( remaining_seconds > 0 )) || break
     probe_timeout="$remaining_seconds"
@@ -652,6 +840,38 @@ PALZIV_ROOT_SNAPSHOT
   if [[ "$reboot_up" -ne 1 ]]; then
     write_failed_build_state 'wait-for-reboot-up' 1
     fail 'SSH did not return within the bounded reboot wait.'
+  fi
+
+  if ! is_owned_qemu_process "$QEMU_PID"; then
+    write_failed_build_state 'qemu-exited-during-reboot-up' 1
+    fail 'Owned QEMU process exited after the reboot-up probe.'
+  fi
+  remaining_seconds=$(( reboot_deadline - $(monotonic_seconds) ))
+  if (( remaining_seconds <= 0 )); then
+    write_failed_build_state 'read-post-reboot-boot-id' 1
+    fail 'The shared reboot deadline expired before the post-reboot boot ID could be read.'
+  fi
+  probe_timeout="$remaining_seconds"
+  (( probe_timeout <= 10 )) || probe_timeout=10
+  if post_reboot_boot_id="$(timeout --signal=TERM --kill-after=1s "${probe_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout="$probe_timeout" \
+      palziv-build@127.0.0.1 "$boot_id_command" 2>/dev/null)"; then
+    boot_id_status=0
+  else
+    boot_id_status=$?
+  fi
+  if [[ "$boot_id_status" -ne 0 || ! "$post_reboot_boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    [[ "$boot_id_status" -ne 0 ]] || boot_id_status=1
+    write_failed_build_state 'read-post-reboot-boot-id' "$boot_id_status"
+    fail 'Reading the post-reboot guest boot ID failed.'
+  fi
+  if [[ "$post_reboot_boot_id" == "$pre_reboot_boot_id" ]]; then
+    write_failed_build_state 'verify-reboot-boot-id' 1
+    fail 'SSH returned without evidence of a new guest boot.'
   fi
 
   post_verify_command="sudo /usr/local/sbin/palziv-verify-appliance ${RELEASE_SHA} post-reboot ${REMOTE_RECEIPT_DIR}"
@@ -688,13 +908,15 @@ PALZIV_ROOT_SNAPSHOT
     fail 'Preparing metadata-only stage receipts for copy failed.'
   fi
 
-  RECEIPT_COPY_DIR="$(mktemp -d /tmp/palziv-receipt-copy.XXXXXXXX)"
-  chmod 0700 -- "$RECEIPT_COPY_DIR"
-  RECEIPT_COPY_DIR="$(realpath -e -- "$RECEIPT_COPY_DIR")"
-  [[ "$RECEIPT_COPY_DIR" == /tmp/palziv-receipt-copy.* && ! -L "$RECEIPT_COPY_DIR" ]]
-  [[ "$(stat -Lc '%u:%a' -- "$RECEIPT_COPY_DIR")" == '0:700' ]]
-  RECEIPT_COPY_ID="$(stat -Lc '%d:%i' -- "$RECEIPT_COPY_DIR")"
-  RECEIPT_COPY_OWNED=1
+  if prepare_receipt_copy_dir; then
+    receipt_temp_status=0
+  else
+    receipt_temp_status=$?
+  fi
+  if [[ "$receipt_temp_status" -ne 0 ]]; then
+    write_failed_build_state 'prepare-receipt-copy-staging' "$receipt_temp_status"
+    fail 'Preparing the bounded receipt-copy staging directory failed.'
+  fi
   if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
       scp -P "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
       -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
@@ -715,49 +937,33 @@ PALZIV_ROOT_SNAPSHOT
     fail 'Copying metadata-only stage receipts from the guest failed.'
   fi
 
-  expected_receipt_tree=$'STAGE-SUCCESS.json\nSTAGE-SUCCESS.sha256\nVERIFY-LOCAL.json\nage-recipient.txt'
-  actual_receipt_tree="$(find "$RECEIPT_COPY_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
-  receipts_valid=1
-  [[ "$actual_receipt_tree" == "$expected_receipt_tree" ]] || receipts_valid=0
-  for receipt in VERIFY-LOCAL.json STAGE-SUCCESS.json STAGE-SUCCESS.sha256 age-recipient.txt; do
-    [[ -f "$RECEIPT_COPY_DIR/$receipt" && ! -L "$RECEIPT_COPY_DIR/$receipt" ]] || receipts_valid=0
-    receipt_size="$(wc -c < "$RECEIPT_COPY_DIR/$receipt" 2>/dev/null || printf '0')"
-    [[ "$receipt_size" =~ ^[0-9]+$ && "$receipt_size" -ge 2 && "$receipt_size" -le 16384 ]] || receipts_valid=0
-    if LC_ALL=C grep -q $'[\001-\010\013\014\016-\037\177]' "$RECEIPT_COPY_DIR/$receipt" 2>/dev/null; then receipts_valid=0; fi
-    [[ ! -e "$BUILD_ROOT/$receipt" && ! -L "$BUILD_ROOT/$receipt" ]] || receipts_valid=0
-  done
-  jq -e --arg releaseSha "$RELEASE_SHA" '
-    type == "object" and
-    (keys == ["classification","completedAt","nodeVersion","phase","releaseSha","routeCount","schemaVersion","services"]) and
-    .schemaVersion == 1 and .phase == "post-reboot" and .classification == "pass" and
-    .releaseSha == $releaseSha and .nodeVersion == "v24.18.0" and .routeCount == 8 and
-    .services == {app:"active",cloudflared:"disabled-inactive",qemuGuestAgent:"active",systemdTimesyncd:"active"} and
-    (.completedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-  ' "$RECEIPT_COPY_DIR/VERIFY-LOCAL.json" >/dev/null || receipts_valid=0
-  jq -e --arg releaseSha "$RELEASE_SHA" '
-    type == "object" and
-    (keys == ["app","classification","cloudflared","completedAt","nodeVersion","phaseId","releaseSha","routeCount","schemaVersion"]) and
-    .schemaVersion == 1 and .phaseId == "project-a-two-phase-v1" and .classification == "staged" and
-    .releaseSha == $releaseSha and .nodeVersion == "v24.18.0" and .app == "active" and
-    .cloudflared == "disabled-inactive" and .routeCount == 8 and
-    (.completedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-  ' "$RECEIPT_COPY_DIR/STAGE-SUCCESS.json" >/dev/null || receipts_valid=0
-  recipient="$(<"$RECEIPT_COPY_DIR/age-recipient.txt")"
-  [[ "$recipient" =~ ^age1[ac-hj-np-z02-9]{58}$ ]] || receipts_valid=0
-  (cd -- "$RECEIPT_COPY_DIR" && sha256sum --check --strict STAGE-SUCCESS.sha256 >/dev/null 2>&1) || receipts_valid=0
-  if [[ "$receipts_valid" -ne 1 ]]; then
-    write_failed_build_state 'validate-stage-receipts' 1
+  if copied_receipts_are_valid; then
+    receipts_status=0
+  else
+    receipts_status=$?
+  fi
+  if [[ "$receipts_status" -ne 0 ]]; then
+    write_failed_build_state 'validate-stage-receipts' "$receipts_status"
     fail 'Copied stage receipts did not satisfy the bounded metadata contract.'
   fi
 
-  for receipt in VERIFY-LOCAL.json STAGE-SUCCESS.json STAGE-SUCCESS.sha256 age-recipient.txt; do
-    receipt_partial="$BUILD_ROOT/${receipt}.partial.$$"
-    reserve_empty_file "$receipt_partial"
-    cp -- "$RECEIPT_COPY_DIR/$receipt" "$receipt_partial"
-    cmp --silent -- "$RECEIPT_COPY_DIR/$receipt" "$receipt_partial"
-    publish_noclobber "$receipt_partial" "$BUILD_ROOT/$receipt"
-  done
-  rm -rf -- "$RECEIPT_COPY_DIR"
+  if publish_receipts_atomically; then
+    receipt_publish_status=0
+  else
+    receipt_publish_status=$?
+  fi
+  if [[ "$receipt_publish_status" -ne 0 ]]; then
+    write_failed_build_state 'publish-stage-receipts' "$receipt_publish_status"
+    fail "Publishing the validated stage receipts without clobbering failed (status ${receipt_publish_status})."
+  fi
+  if ! receipt_copy_dir_is_owned; then
+    write_failed_build_state 'finalize-receipt-copy-staging' 1
+    fail 'Receipt-copy staging identity changed before cleanup.'
+  fi
+  if ! rm -rf -- "$RECEIPT_COPY_DIR"; then
+    write_failed_build_state 'finalize-receipt-copy-staging' 1
+    fail 'Removing the receipt-copy staging directory failed.'
+  fi
   RECEIPT_COPY_OWNED=0
 fi
 
