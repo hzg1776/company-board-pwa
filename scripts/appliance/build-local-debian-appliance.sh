@@ -11,6 +11,7 @@ readonly DEFAULT_COPY_TIMEOUT_SECONDS=300
 readonly DEFAULT_PROVISION_TIMEOUT_SECONDS=1800
 readonly DEFAULT_REBOOT_TIMEOUT_SECONDS=300
 readonly SHUTDOWN_TIMEOUT_SECONDS=180
+readonly DISK_VIRTUAL_SIZE_BYTES=42949672960
 readonly SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly -a RECEIPT_NAMES=(
   'VERIFY-LOCAL.json'
@@ -473,6 +474,111 @@ write_failed_build_state() {
   mv -f -T -- "$temporary" "$BUILD_STATE"
 }
 
+wait_for_qemu_exit() {
+  local pid_file="$1" timeout_seconds="$2" pid attempt
+  [[ -f "$pid_file" && ! -L "$pid_file" ]] || return 1
+  [[ "$(wc -c < "$pid_file")" -le 32 ]] || return 1
+  pid="$(<"$pid_file")"
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" == "$QEMU_PID" ]] || return 1
+  for ((attempt=0; attempt<timeout_seconds; attempt++)); do
+    process_is_alive "$pid" || return 0
+    sleep 1
+  done
+  ! process_is_alive "$pid"
+}
+
+finalize_standalone_artifact() {
+  local final_root="$BUILD_ROOT/final"
+  local final_disk="$final_root/palziv-debian13-${RELEASE_SHA}.qcow2"
+  local final_disk_partial="${final_disk}.partial"
+  local qemu_info="$BUILD_ROOT/qemu-info.json"
+  local manifest_partial="$final_root/BUILD-MANIFEST.json.partial"
+  local manifest="$final_root/BUILD-MANIFEST.json"
+  local artifacts_partial="$final_root/ARTIFACTS.sha256.partial"
+  local disk_sha256 disk_actual_size image_bytes image_retrieved_at completed_at artifact
+  local -a artifact_names=(
+    "$(basename -- "$final_disk")"
+    'BUILD-MANIFEST.json'
+    'IMPORT-ON-PROXMOX.sh'
+    'README-FIRST.txt'
+    'STAGE-SUCCESS.json'
+    'STAGE-SUCCESS.sha256'
+    'VERIFY-LOCAL.json'
+    'age-recipient.txt'
+  )
+
+  [[ ! -e "$final_root" && ! -L "$final_root" ]] || fail 'Final artifact directory already exists.'
+  mkdir -- "$final_root"
+  qemu-img check "$WORK_DISK" >/dev/null
+  qemu-img convert -p -O qcow2 -o compat=1.1,lazy_refcounts=on "$WORK_DISK" "$final_disk_partial"
+  qemu-img check "$final_disk_partial" >/dev/null
+  qemu-img info --output=json "$final_disk_partial" > "$qemu_info"
+  jq -e --argjson virtualSize "$DISK_VIRTUAL_SIZE_BYTES" '
+    .format == "qcow2" and
+    .["virtual-size"] == $virtualSize and
+    (has("backing-filename") | not)
+  ' "$qemu_info" >/dev/null || fail 'Converted QCOW2 is not standalone with the required 40 GiB virtual size.'
+
+  disk_sha256="$(sha256sum "$final_disk_partial" | awk '{print $1}')"
+  [[ "$disk_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Final disk SHA-256 generation failed.'
+  [[ ! -e "$final_disk" && ! -L "$final_disk" ]] || fail 'Final disk already exists.'
+  mv -T -- "$final_disk_partial" "$final_disk"
+
+  for artifact in VERIFY-LOCAL.json STAGE-SUCCESS.json STAGE-SUCCESS.sha256 age-recipient.txt; do
+    require_unlinked_existing_path "Task 5 receipt $artifact" "$BUILD_ROOT/$artifact" file
+    install -o root -g root -m 0600 -- "$BUILD_ROOT/$artifact" "$final_root/$artifact"
+    cmp --silent -- "$BUILD_ROOT/$artifact" "$final_root/$artifact" || fail "Final receipt copy changed: $artifact"
+  done
+  require_unlinked_existing_path 'Proxmox import script' "$SCRIPT_ROOT/IMPORT-ON-PROXMOX.sh" file
+  require_unlinked_existing_path 'Appliance readme' "$SCRIPT_ROOT/README-FIRST.txt" file
+  install -o root -g root -m 0700 -- "$SCRIPT_ROOT/IMPORT-ON-PROXMOX.sh" "$final_root/IMPORT-ON-PROXMOX.sh"
+  install -o root -g root -m 0600 -- "$SCRIPT_ROOT/README-FIRST.txt" "$final_root/README-FIRST.txt"
+
+  disk_actual_size="$(stat -Lc '%s' -- "$final_disk")"
+  image_bytes="$(stat -Lc '%s' -- "$BASE_IMAGE")"
+  image_retrieved_at="$(date -u -d "@$(stat -Lc '%Y' -- "$BASE_IMAGE")" '+%Y-%m-%dT%H:%M:%SZ')"
+  completed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  jq -n \
+    --arg buildId "$BUILD_ID" \
+    --arg imageUrl "$IMAGE_URL" \
+    --arg imageSha512 "$IMAGE_SHA512" \
+    --argjson imageBytes "$image_bytes" \
+    --arg imageRetrievedAt "$image_retrieved_at" \
+    --arg releaseSha "$RELEASE_SHA" \
+    --arg diskFile "$(basename -- "$final_disk")" \
+    --arg diskSha256 "$disk_sha256" \
+    --argjson diskVirtualSize "$DISK_VIRTUAL_SIZE_BYTES" \
+    --argjson diskActualSize "$disk_actual_size" \
+    --arg completedAt "$completed_at" '
+      {
+        schemaVersion: 1,
+        buildId: $buildId,
+        debianImage: {
+          url: $imageUrl,
+          sha512: $imageSha512,
+          bytes: $imageBytes,
+          retrievedAt: $imageRetrievedAt
+        },
+        releaseSha: $releaseSha,
+        nodeVersion: "v24.18.0",
+        diskFile: $diskFile,
+        diskSha256: $diskSha256,
+        diskVirtualSize: $diskVirtualSize,
+        diskActualSize: $diskActualSize,
+        completedAt: $completedAt,
+        classification: "pass"
+      }
+    ' > "$manifest_partial"
+  mv -T -- "$manifest_partial" "$manifest"
+
+  : > "$artifacts_partial"
+  for artifact in "${artifact_names[@]}"; do
+    (cd -- "$final_root" && sha256sum -- "$artifact") >> "$artifacts_partial"
+  done
+  mv -T -- "$artifacts_partial" "$final_root/ARTIFACTS.sha256"
+  qemu-img check "$final_disk" >/dev/null
+}
+
 while (($#)); do
   case "$1" in
     --repository) [[ $# -ge 2 ]] || fail '--repository requires a value.'; REPOSITORY="$2"; shift 2 ;;
@@ -511,6 +617,7 @@ readonly BUILD_PRIVATE_KEY="${BUILD_PUBLIC_KEY%.pub}"
 require_unlinked_existing_path 'Build private key' "$BUILD_PRIVATE_KEY" file
 readonly PROVISIONING_SCRIPT="$SCRIPT_ROOT/provision-debian-appliance.sh"
 readonly VERIFICATION_SCRIPT="$SCRIPT_ROOT/verify-debian-appliance.sh"
+readonly SEALING_SCRIPT="$SCRIPT_ROOT/seal-debian-appliance.sh"
 
 readonly OUTPUT_ROOT="$(dirname -- "$BUILD_ROOT")"
 readonly CACHE_ROOT="${OUTPUT_ROOT}/.cache"
@@ -681,17 +788,26 @@ publish_noclobber "$known_hosts_partial" "$KNOWN_HOSTS"
 if [[ "$BOOT_ONLY" -eq 0 ]]; then
   require_unlinked_existing_path 'Provisioning script' "$PROVISIONING_SCRIPT" file
   require_unlinked_existing_path 'Verification script' "$VERIFICATION_SCRIPT" file
+  require_unlinked_existing_path 'Sealing script' "$SEALING_SCRIPT" file
+  require_unlinked_existing_path 'Proxmox import script' "$SCRIPT_ROOT/IMPORT-ON-PROXMOX.sh" file
+  require_unlinked_existing_path 'Appliance readme' "$SCRIPT_ROOT/README-FIRST.txt" file
   release_tar_sha256="$(sha256sum -- "$RELEASE_TAR")"
   release_tar_sha256="${release_tar_sha256%% *}"
   provisioning_script_sha256="$(sha256sum -- "$PROVISIONING_SCRIPT")"
   provisioning_script_sha256="${provisioning_script_sha256%% *}"
   verification_script_sha256="$(sha256sum -- "$VERIFICATION_SCRIPT")"
   verification_script_sha256="${verification_script_sha256%% *}"
+  sealing_script_sha256="$(sha256sum -- "$SEALING_SCRIPT")"
+  sealing_script_sha256="${sealing_script_sha256%% *}"
+  build_key_fingerprint="$(ssh-keygen -l -E sha256 -f "$BUILD_PUBLIC_KEY" | awk 'NR == 1 { print $2 }')"
   [[ "$release_tar_sha256" =~ ^[a-f0-9]{64}$ && "$provisioning_script_sha256" =~ ^[a-f0-9]{64}$ && \
-     "$verification_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
+     "$verification_script_sha256" =~ ^[a-f0-9]{64}$ && "$sealing_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
+  [[ "$build_key_fingerprint" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || fail 'Ephemeral build key fingerprint generation failed.'
   readonly RELEASE_TAR_SHA256="$release_tar_sha256"
   readonly PROVISIONING_SCRIPT_SHA256="$provisioning_script_sha256"
   readonly VERIFICATION_SCRIPT_SHA256="$verification_script_sha256"
+  readonly SEALING_SCRIPT_SHA256="$sealing_script_sha256"
+  readonly BUILD_KEY_FINGERPRINT="$build_key_fingerprint"
   copy_timeout="${PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS:-$DEFAULT_COPY_TIMEOUT_SECONDS}"
   [[ "$copy_timeout" =~ ^[1-9][0-9]{0,2}$ && "$copy_timeout" -le "$DEFAULT_COPY_TIMEOUT_SECONDS" ]] || fail 'Copy timeout must be between 1 and 300 seconds.'
   remote_stage_command="set -Eeuo pipefail; umask 077; mkdir -m 0700 -- ${REMOTE_UPLOAD_DIR}; sudo mkdir -m 0700 -- ${REMOTE_STAGE_DIR}; sudo chown root:root ${REMOTE_STAGE_DIR}; sudo chmod 0700 ${REMOTE_STAGE_DIR}"
@@ -1083,49 +1199,99 @@ fi
 
 shutdown_ssh_timeout="${PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS:-$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS}"
 [[ "$shutdown_ssh_timeout" =~ ^[1-9][0-9]{0,2}$ && "$shutdown_ssh_timeout" -le "$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS" ]] || fail 'Shutdown SSH timeout must be between 1 and 30 seconds.'
+
+if [[ "$BOOT_ONLY" -eq 1 ]]; then
+  if timeout --signal=TERM --kill-after=1s "${shutdown_ssh_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 'sudo systemctl poweroff' >/dev/null 2>&1; then
+    ssh_status=0
+  else
+    ssh_status=$?
+  fi
+  if [[ "$ssh_status" -eq 124 || "$ssh_status" -eq 137 ]]; then
+    fail 'Boot-only guest shutdown SSH command timed out.'
+  fi
+  if [[ "$ssh_status" -ne 0 && "$ssh_status" -ne 255 ]]; then
+    fail 'Boot-only guest shutdown command failed.'
+  fi
+  wait_for_qemu_exit "$QEMU_PID_FILE" "$SHUTDOWN_TIMEOUT_SECONDS" || fail 'QEMU did not exit after the boot-only shutdown request.'
+  write_build_state 'boot-only'
+  printf '{"ok":true,"classification":"boot-only","buildId":"%s","releaseSha":"%s","sshPort":%s}\n' \
+    "$BUILD_ID" "$RELEASE_SHA" "$SSH_PORT"
+  exit 0
+fi
+
+remote_sealer='/var/tmp/seal-debian-appliance.sh'
+prepare_sealer_command="set -Eeuo pipefail; set -o noclobber; : > ${remote_sealer}; chmod 0600 ${remote_sealer}"
+if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+    ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+    -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+    -o StrictHostKeyChecking=yes \
+    -o BatchMode=yes \
+    -o ConnectTimeout=10 \
+    palziv-build@127.0.0.1 "$prepare_sealer_command" >/dev/null 2>&1 && \
+  timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+    scp -P "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+    -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+    -o StrictHostKeyChecking=yes \
+    -o BatchMode=yes \
+    -o ConnectTimeout=10 \
+    "$SEALING_SCRIPT" "palziv-build@127.0.0.1:${remote_sealer}" >/dev/null 2>&1; then
+  sealer_copy_status=0
+else
+  sealer_copy_status=$?
+fi
+if [[ "$sealer_copy_status" -ne 0 ]]; then
+  write_failed_build_state 'copy-sealing-script' "$sealer_copy_status"
+  fail 'Copying the sealing script into the guest failed.'
+fi
+
+install_sealer_command="printf '%s  %s\\n' '${SEALING_SCRIPT_SHA256}' '${remote_sealer}' | sudo sha256sum --check --strict - >/dev/null && sudo install -o root -g root -m 0700 -- '${remote_sealer}' /usr/local/sbin/palziv-seal-debian-appliance"
+if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+    ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+    -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+    -o StrictHostKeyChecking=yes \
+    -o BatchMode=yes \
+    -o ConnectTimeout=10 \
+    palziv-build@127.0.0.1 "$install_sealer_command" >/dev/null 2>&1; then
+  sealer_install_status=0
+else
+  sealer_install_status=$?
+fi
+if [[ "$sealer_install_status" -ne 0 ]]; then
+  write_failed_build_state 'install-sealing-script' "$sealer_install_status"
+  fail 'Installing the root-owned sealing script failed.'
+fi
+
+seal_command="sudo systemd-run --unit=palziv-appliance-seal --collect --on-active=3s /usr/local/sbin/palziv-seal-debian-appliance '${RELEASE_SHA}' '${BUILD_KEY_FINGERPRINT}' '${REMOTE_RECEIPT_DIR}'"
+write_build_state 'sealing'
 if timeout --signal=TERM --kill-after=1s "${shutdown_ssh_timeout}s" \
     ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
     -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
     -o StrictHostKeyChecking=yes \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
-    palziv-build@127.0.0.1 'sudo systemctl poweroff' >/dev/null 2>&1; then
-  ssh_status=0
+    palziv-build@127.0.0.1 "$seal_command" >/dev/null 2>&1; then
+  seal_launch_status=0
 else
-  ssh_status=$?
+  seal_launch_status=$?
 fi
-if [[ "$ssh_status" -eq 124 || "$ssh_status" -eq 137 ]]; then
-  if [[ "$BOOT_ONLY" -eq 0 ]]; then
-    write_failed_build_state 'shutdown-provisioned-guest' "$ssh_status"
-    fail 'Provisioned guest shutdown SSH command timed out.'
-  fi
-  fail 'Boot-only guest shutdown SSH command timed out.'
-fi
-if [[ "$ssh_status" -ne 0 && "$ssh_status" -ne 255 ]]; then
-  if [[ "$BOOT_ONLY" -eq 0 ]]; then
-    write_failed_build_state 'shutdown-provisioned-guest' "$ssh_status"
-    fail 'Provisioned guest shutdown command failed.'
-  fi
-  fail 'Boot-only guest shutdown command failed.'
+if [[ "$seal_launch_status" -ne 0 ]]; then
+  write_failed_build_state 'launch-detached-sealer' "$seal_launch_status"
+  fail 'Launching the detached guest sealer failed.'
 fi
 
-for ((attempt=0; attempt<SHUTDOWN_TIMEOUT_SECONDS; attempt++)); do
-  process_is_alive "$QEMU_PID" || break
-  sleep 1
-done
-if process_is_alive "$QEMU_PID"; then
-  if [[ "$BOOT_ONLY" -eq 0 ]]; then
-    write_failed_build_state 'wait-for-provisioned-guest-shutdown' 1
-    fail 'QEMU did not exit after the provisioned guest shutdown request.'
-  fi
-  fail 'QEMU did not exit after the boot-only shutdown request.'
+if ! wait_for_qemu_exit "$QEMU_PID_FILE" "$SHUTDOWN_TIMEOUT_SECONDS"; then
+  write_failed_build_state 'wait-for-sealed-guest-shutdown' 1
+  fail 'QEMU did not exit after the detached guest sealer was launched.'
 fi
 
-if [[ "$BOOT_ONLY" -eq 1 ]]; then
-  final_classification='boot-only'
-else
-  final_classification='provisioned'
-fi
-write_build_state "$final_classification"
-printf '{"ok":true,"classification":"%s","buildId":"%s","releaseSha":"%s","sshPort":%s}\n' \
-  "$final_classification" "$BUILD_ID" "$RELEASE_SHA" "$SSH_PORT"
+write_build_state 'finalizing'
+finalize_standalone_artifact
+write_build_state 'sealed'
+printf '{"ok":true,"classification":"sealed","buildId":"%s","releaseSha":"%s","diskFile":"palziv-debian13-%s.qcow2"}\n' \
+  "$BUILD_ID" "$RELEASE_SHA" "$RELEASE_SHA"

@@ -120,6 +120,18 @@ function ConvertTo-WslAbsolutePath {
   return $wslPath
 }
 
+function Invoke-ApplianceArtifactVerifier {
+  param(
+    [string]$RepositoryRoot,
+    [string]$ArtifactRoot
+  )
+
+  $verifier = Join-Path $RepositoryRoot 'scripts\appliance\verify-local-appliance.mjs'
+  $result = @(& node $verifier $ArtifactRoot)
+  if ($LASTEXITCODE -ne 0) { throw 'Local appliance artifact verification failed.' }
+  return $result
+}
+
 function Invoke-LocalDebianAppliance {
   param(
     [string]$WslDistribution,
@@ -134,7 +146,8 @@ function Invoke-LocalDebianAppliance {
     [scriptblock]$InvokeWslRoot = ${function:Invoke-WslRoot},
     [string]$WslExecutable = 'wsl.exe',
     [scriptblock]$GetBuildId = ${function:New-LocalApplianceBuildId},
-    [scriptblock]$ExportRelease = ${function:Export-ReleaseTar}
+    [scriptblock]$ExportRelease = ${function:Export-ReleaseTar},
+    [scriptblock]$VerifyArtifacts = ${function:Invoke-ApplianceArtifactVerifier}
   )
 
   $OutputRoot = Resolve-ArtifactOutputRoot $OutputRoot $RepositoryRoot
@@ -193,8 +206,8 @@ function Invoke-LocalDebianAppliance {
   )
   if ($BootOnly) { $controllerArguments += '--boot-only' }
   $controllerLines = @(& $InvokeWslRoot -Distribution $WslDistribution -Arguments $controllerArguments -WslExecutable $WslExecutable)
+  $controllerOutput = ($controllerLines -join "`n").Trim()
   if ($BootOnly) {
-    $controllerOutput = ($controllerLines -join "`n").Trim()
     if ([string]::IsNullOrWhiteSpace($controllerOutput) -or $controllerOutput.Length -gt 512) {
       throw 'Boot-only controller result was missing or exceeded its bounded contract.'
     }
@@ -225,7 +238,77 @@ function Invoke-LocalDebianAppliance {
       throw 'Boot-only controller result did not match this build.'
     }
     $controllerResult | ConvertTo-Json -Compress
+    return
   }
+
+  if ([string]::IsNullOrWhiteSpace($controllerOutput) -or $controllerOutput.Length -gt 1024) {
+    throw 'Sealed controller result was missing or exceeded its bounded contract.'
+  }
+  try {
+    $controllerResult = $controllerOutput | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw 'Sealed controller result was not valid JSON.'
+  }
+  $expectedProperties = @('buildId', 'classification', 'diskFile', 'ok', 'releaseSha')
+  $actualProperties = @($controllerResult.PSObject.Properties.Name | Sort-Object)
+  if (($actualProperties -join ',') -ne ($expectedProperties -join ',')) {
+    throw 'Sealed controller result did not match the bounded schema.'
+  }
+  $expectedDiskFile = "palziv-debian13-$releaseSha.qcow2"
+  if ($controllerResult.ok -isnot [bool] -or
+      $controllerResult.classification -isnot [string] -or
+      $controllerResult.buildId -isnot [string] -or
+      $controllerResult.releaseSha -isnot [string] -or
+      $controllerResult.diskFile -isnot [string] -or
+      $controllerResult.ok -ne $true -or
+      $controllerResult.classification -ne 'sealed' -or
+      $controllerResult.buildId -ne $buildId -or
+      $controllerResult.releaseSha -ne $releaseSha -or
+      $controllerResult.diskFile -ne $expectedDiskFile) {
+    throw 'Sealed controller result did not match this build.'
+  }
+
+  $finalRoot = Join-Path $buildRoot 'final'
+  $finalDisk = Join-Path $finalRoot $expectedDiskFile
+  if (-not (Test-Path -LiteralPath $finalRoot -PathType Container) -or
+      -not (Test-Path -LiteralPath $finalDisk -PathType Leaf)) {
+    throw 'Sealed controller did not publish the expected final artifact tree.'
+  }
+  $verificationLines = @(& $VerifyArtifacts $RepositoryRoot $finalRoot)
+  $verificationOutput = ($verificationLines -join "`n").Trim()
+  if ([string]::IsNullOrWhiteSpace($verificationOutput) -or $verificationOutput.Length -gt 1024) {
+    throw 'Artifact verifier result was missing or exceeded its bounded contract.'
+  }
+  try {
+    $verificationResult = $verificationOutput | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw 'Artifact verifier result was not valid JSON.'
+  }
+  $verificationProperties = @($verificationResult.PSObject.Properties.Name | Sort-Object)
+  if (($verificationProperties -join ',') -ne 'diskFile,diskSha256,ok,releaseSha' -or
+      $verificationResult.ok -isnot [bool] -or
+      $verificationResult.releaseSha -isnot [string] -or
+      $verificationResult.diskFile -isnot [string] -or
+      $verificationResult.diskSha256 -isnot [string] -or
+      $verificationResult.ok -ne $true -or
+      $verificationResult.releaseSha -ne $releaseSha -or
+      $verificationResult.diskFile -ne $expectedDiskFile -or
+      $verificationResult.diskSha256 -notmatch '^[a-f0-9]{64}$') {
+    throw 'Artifact verifier result did not match this build.'
+  }
+
+  Remove-Item -Force -LiteralPath $buildPrivateKey, $buildPublicKey -ErrorAction Stop
+  (Get-Item -LiteralPath $finalDisk -Force -ErrorAction Stop).IsReadOnly = $true
+  if (-not (Get-Item -LiteralPath $finalDisk -Force -ErrorAction Stop).IsReadOnly) {
+    throw 'Final QCOW2 Windows read-only protection did not persist.'
+  }
+  [ordered]@{
+    ok = $true
+    artifactRoot = $finalRoot
+    diskFile = $expectedDiskFile
+    diskSha256 = $verificationResult.diskSha256
+    releaseSha = $releaseSha
+  } | ConvertTo-Json -Compress
 }
 
 Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot

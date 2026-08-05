@@ -1637,6 +1637,25 @@ test("artifact disk name is derived only from the release SHA", () => {
   assert.throws(() => artifactDiskName("main"), /40-character release SHA/i);
 });
 
+test("sealing removes build identity and finalization rejects backing files", async () => {
+  const seal = await readFile(new URL("../scripts/appliance/seal-debian-appliance.sh", import.meta.url), "utf8");
+  const build = await readFile(new URL("../scripts/appliance/build-local-debian-appliance.sh", import.meta.url), "utf8");
+  const windows = await readFile(new URL("../scripts/appliance/build-local-debian-appliance.ps1", import.meta.url), "utf8");
+  assert.match(seal, /systemctl stop palziv\.service/);
+  assert.match(seal, /systemctl disable --now cloudflared\.service/);
+  assert.match(seal, /realpath.+\/var\/lib\/palziv\/data/s);
+  assert.match(seal, /find.+-xdev.+-delete/s);
+  assert.match(seal, /userdel.+palziv-build/);
+  assert.match(seal, /rm -f -- \/etc\/ssh\/ssh_host_/);
+  assert.match(seal, /cloud-init clean.+--machine-id/);
+  assert.match(build, /systemd-run.+palziv-appliance-seal/s);
+  assert.match(build, /qemu-img convert.+-O qcow2/s);
+  assert.match(build, /qemu-img check/);
+  assert.match(build, /backing-filename/);
+  assert.match(windows, /verify-local-appliance\.mjs/);
+  assert.match(windows, /IsReadOnly = \$true/);
+});
+
 test("build manifest accepts only the pinned appliance schema", () => {
   const manifest = {
     schemaVersion: APPLIANCE_SCHEMA_VERSION,
