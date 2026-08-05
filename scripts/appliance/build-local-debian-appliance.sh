@@ -231,6 +231,15 @@ require_unlinked_existing_path 'Build public key' "$BUILD_PUBLIC_KEY" file
 
 readonly BUILD_PRIVATE_KEY="${BUILD_PUBLIC_KEY%.pub}"
 require_unlinked_existing_path 'Build private key' "$BUILD_PRIVATE_KEY" file
+readonly PROVISIONING_SCRIPT="$SCRIPT_ROOT/provision-debian-appliance.sh"
+require_unlinked_existing_path 'Provisioning script' "$PROVISIONING_SCRIPT" file
+release_tar_sha256="$(sha256sum -- "$RELEASE_TAR")"
+release_tar_sha256="${release_tar_sha256%% *}"
+provisioning_script_sha256="$(sha256sum -- "$PROVISIONING_SCRIPT")"
+provisioning_script_sha256="${provisioning_script_sha256%% *}"
+[[ "$release_tar_sha256" =~ ^[a-f0-9]{64}$ && "$provisioning_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
+readonly RELEASE_TAR_SHA256="$release_tar_sha256"
+readonly PROVISIONING_SCRIPT_SHA256="$provisioning_script_sha256"
 
 readonly OUTPUT_ROOT="$(dirname -- "$BUILD_ROOT")"
 readonly CACHE_ROOT="${OUTPUT_ROOT}/.cache"
@@ -244,6 +253,8 @@ readonly CONSOLE_LOG="${BUILD_ROOT}/qemu-console.log"
 readonly QEMU_PID_FILE="${BUILD_ROOT}/qemu.pid"
 readonly BUILD_STATE="${BUILD_ROOT}/BUILD-STATE.json"
 readonly KNOWN_HOSTS="${BUILD_ROOT}/known_hosts"
+readonly REMOTE_UPLOAD_DIR="/var/tmp/palziv-appliance-upload-${BUILD_ID}"
+readonly REMOTE_STAGE_DIR="/var/tmp/palziv-appliance-stage-${BUILD_ID}"
 
 require_unlinked_existing_path 'Output root' "$OUTPUT_ROOT" directory
 if [[ -e "$CACHE_ROOT" || -L "$CACHE_ROOT" ]]; then
@@ -385,14 +396,31 @@ publish_noclobber "$known_hosts_partial" "$KNOWN_HOSTS"
 if [[ "$BOOT_ONLY" -eq 0 ]]; then
   copy_timeout="${PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS:-$DEFAULT_COPY_TIMEOUT_SECONDS}"
   [[ "$copy_timeout" =~ ^[1-9][0-9]{0,2}$ && "$copy_timeout" -le "$DEFAULT_COPY_TIMEOUT_SECONDS" ]] || fail 'Copy timeout must be between 1 and 300 seconds.'
+  remote_stage_command="set -Eeuo pipefail; umask 077; mkdir -m 0700 -- ${REMOTE_UPLOAD_DIR}; sudo mkdir -m 0700 -- ${REMOTE_STAGE_DIR}; sudo chown root:root ${REMOTE_STAGE_DIR}; sudo chmod 0700 ${REMOTE_STAGE_DIR}"
+  if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
+      ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+      -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+      -o StrictHostKeyChecking=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=10 \
+      palziv-build@127.0.0.1 "$remote_stage_command" >/dev/null 2>&1; then
+    stage_status=0
+  else
+    stage_status=$?
+  fi
+  if [[ "$stage_status" -ne 0 ]]; then
+    write_failed_build_state 'prepare-provisioning-stage' "$stage_status"
+    fail 'Preparing the root-owned guest staging directory failed.'
+  fi
+
   if timeout --signal=TERM --kill-after=5s "${copy_timeout}s" \
       scp -P "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
       -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
       -o StrictHostKeyChecking=yes \
       -o BatchMode=yes \
       -o ConnectTimeout=10 \
-      "$RELEASE_TAR" "$SCRIPT_ROOT/provision-debian-appliance.sh" \
-      'palziv-build@127.0.0.1:/var/tmp/' >/dev/null 2>&1; then
+      "$RELEASE_TAR" "$PROVISIONING_SCRIPT" \
+      "palziv-build@127.0.0.1:${REMOTE_UPLOAD_DIR}/" >/dev/null 2>&1; then
     copy_status=0
   else
     copy_status=$?
@@ -403,14 +431,67 @@ if [[ "$BOOT_ONLY" -eq 0 ]]; then
   fi
   provision_timeout="${PALZIV_APPLIANCE_PROVISION_TIMEOUT_SECONDS:-$DEFAULT_PROVISION_TIMEOUT_SECONDS}"
   [[ "$provision_timeout" =~ ^[1-9][0-9]{0,3}$ && "$provision_timeout" -le "$DEFAULT_PROVISION_TIMEOUT_SECONDS" ]] || fail 'Provision timeout must be between 1 and 1800 seconds.'
-  if timeout --signal=TERM --kill-after=5s "${provision_timeout}s" \
+  root_snapshot_script="$(cat <<'PALZIV_ROOT_SNAPSHOT'
+set -Eeuo pipefail
+upload_root="$1"
+stage_root="$2"
+expected_release_sha256="$3"
+expected_provisioner_sha256="$4"
+release_sha="$5"
+stage_id=''
+
+cleanup() {
+  local rc=$? actual_path='' actual_id='' actual_uid='' actual_mode=''
+  trap - EXIT ERR
+  if [[ -n "$stage_id" && -d "$stage_root" && ! -L "$stage_root" ]]; then
+    actual_path="$(realpath -e -- "$stage_root" 2>/dev/null || true)"
+    actual_id="$(stat -Lc '%d:%i' -- "$stage_root" 2>/dev/null || true)"
+    actual_uid="$(stat -Lc '%u' -- "$stage_root" 2>/dev/null || true)"
+    actual_mode="$(stat -Lc '%a' -- "$stage_root" 2>/dev/null || true)"
+    if [[ "$actual_path" == "$stage_root" && "$actual_id" == "$stage_id" && "$actual_uid:$actual_mode" == '0:700' && "$stage_root" == /var/tmp/palziv-appliance-stage-* ]]; then
+      rm -rf -- "$stage_root"
+    fi
+  fi
+  if [[ -d "$upload_root" && ! -L "$upload_root" && "$upload_root" == /var/tmp/palziv-appliance-upload-* ]]; then
+    rm -rf -- "$upload_root"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+
+[[ "$EUID" -eq 0 ]] || exit 70
+[[ "$stage_root" == /var/tmp/palziv-appliance-stage-* && "$upload_root" == /var/tmp/palziv-appliance-upload-* ]] || exit 71
+[[ "$(realpath -e -- "$stage_root")" == "$stage_root" && ! -L "$stage_root" ]] || exit 72
+[[ "$(stat -Lc '%u:%a' -- "$stage_root")" == '0:700' ]] || exit 73
+stage_id="$(stat -Lc '%d:%i' -- "$stage_root")"
+[[ -d "$upload_root" && ! -L "$upload_root" && "$(realpath -e -- "$upload_root")" == "$upload_root" ]] || exit 74
+for input in project-a-release.tar provision-debian-appliance.sh; do
+  [[ -f "$upload_root/$input" && ! -L "$upload_root/$input" ]] || exit 75
+done
+
+mv -- "$upload_root/project-a-release.tar" "$stage_root/release.tar.partial"
+mv -- "$upload_root/provision-debian-appliance.sh" "$stage_root/provision-debian-appliance.sh.partial"
+chown root:root "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial"
+chmod 0600 "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial"
+(
+  cd -- "$stage_root"
+  printf '%s  %s\n' "$expected_release_sha256" 'release.tar.partial' | sha256sum --check --strict - >/dev/null
+  printf '%s  %s\n' "$expected_provisioner_sha256" 'provision-debian-appliance.sh.partial' | sha256sum --check --strict - >/dev/null
+)
+mv -- "$stage_root/release.tar.partial" "$stage_root/release.tar"
+mv -- "$stage_root/provision-debian-appliance.sh.partial" "$stage_root/provision-debian-appliance.sh"
+bash "$stage_root/provision-debian-appliance.sh" "$stage_root/release.tar" "$release_sha"
+PALZIV_ROOT_SNAPSHOT
+)"
+  if printf '%s\n' "$root_snapshot_script" | timeout --signal=TERM --kill-after=5s "${provision_timeout}s" \
       ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
       -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
       -o StrictHostKeyChecking=yes \
       -o BatchMode=yes \
       -o ConnectTimeout=10 \
       palziv-build@127.0.0.1 \
-      "sudo bash /var/tmp/provision-debian-appliance.sh /var/tmp/project-a-release.tar '$RELEASE_SHA'" >/dev/null 2>&1; then
+      sudo bash -s -- "$REMOTE_UPLOAD_DIR" "$REMOTE_STAGE_DIR" \
+      "$RELEASE_TAR_SHA256" "$PROVISIONING_SCRIPT_SHA256" "$RELEASE_SHA" >/dev/null 2>&1; then
     provision_status=0
   else
     provision_status=$?
@@ -434,14 +515,32 @@ if timeout --signal=TERM --kill-after=1s "${shutdown_ssh_timeout}s" \
 else
   ssh_status=$?
 fi
-[[ "$ssh_status" -ne 124 && "$ssh_status" -ne 137 ]] || fail 'Boot-only guest shutdown SSH command timed out.'
-[[ "$ssh_status" -eq 0 || "$ssh_status" -eq 255 ]] || fail 'Boot-only guest shutdown command failed.'
+if [[ "$ssh_status" -eq 124 || "$ssh_status" -eq 137 ]]; then
+  if [[ "$BOOT_ONLY" -eq 0 ]]; then
+    write_failed_build_state 'shutdown-provisioned-guest' "$ssh_status"
+    fail 'Provisioned guest shutdown SSH command timed out.'
+  fi
+  fail 'Boot-only guest shutdown SSH command timed out.'
+fi
+if [[ "$ssh_status" -ne 0 && "$ssh_status" -ne 255 ]]; then
+  if [[ "$BOOT_ONLY" -eq 0 ]]; then
+    write_failed_build_state 'shutdown-provisioned-guest' "$ssh_status"
+    fail 'Provisioned guest shutdown command failed.'
+  fi
+  fail 'Boot-only guest shutdown command failed.'
+fi
 
 for ((attempt=0; attempt<SHUTDOWN_TIMEOUT_SECONDS; attempt++)); do
   process_is_alive "$QEMU_PID" || break
   sleep 1
 done
-process_is_alive "$QEMU_PID" && fail 'QEMU did not exit after the boot-only shutdown request.'
+if process_is_alive "$QEMU_PID"; then
+  if [[ "$BOOT_ONLY" -eq 0 ]]; then
+    write_failed_build_state 'wait-for-provisioned-guest-shutdown' 1
+    fail 'QEMU did not exit after the provisioned guest shutdown request.'
+  fi
+  fail 'QEMU did not exit after the boot-only shutdown request.'
+fi
 
 if [[ "$BOOT_ONLY" -eq 1 ]]; then
   final_classification='boot-only'

@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 RELEASE_ROOT=''
+RELEASE_ROOT_ID=''
+RELEASE_ROOT_UID=''
+RELEASE_ROOT_MODE=''
 
 report_error() {
   local rc=$?
@@ -17,11 +20,16 @@ fail() {
 }
 
 cleanup() {
-  local rc=$? resolved=''
+  local rc=$? resolved='' actual_id='' actual_uid='' actual_mode=''
   trap - EXIT ERR
   if [[ -n "$RELEASE_ROOT" && -d "$RELEASE_ROOT" && ! -L "$RELEASE_ROOT" ]]; then
     resolved="$(realpath -e -- "$RELEASE_ROOT" 2>/dev/null || true)"
-    if [[ "$resolved" == "$RELEASE_ROOT" && "$resolved" == /var/tmp/palziv-appliance-release.* ]]; then
+    actual_id="$(stat -Lc '%d:%i' -- "$RELEASE_ROOT" 2>/dev/null || true)"
+    actual_uid="$(stat -Lc '%u' -- "$RELEASE_ROOT" 2>/dev/null || true)"
+    actual_mode="$(stat -Lc '%a' -- "$RELEASE_ROOT" 2>/dev/null || true)"
+    if [[ "$resolved" == "$RELEASE_ROOT" && "$resolved" == /var/tmp/palziv-appliance-release.* && \
+          "$actual_id" == "$RELEASE_ROOT_ID" && "$actual_uid" == "$RELEASE_ROOT_UID" && \
+          "$actual_mode" == "$RELEASE_ROOT_MODE" ]]; then
       rm -rf -- "$resolved"
     fi
   fi
@@ -63,10 +71,19 @@ done <<< "$archive_entries"
 RELEASE_ROOT="$(mktemp -d /var/tmp/palziv-appliance-release.XXXXXX)"
 RELEASE_ROOT="$(realpath -e -- "$RELEASE_ROOT")"
 [[ "$RELEASE_ROOT" == /var/tmp/palziv-appliance-release.* && ! -L "$RELEASE_ROOT" ]] || fail 'Release staging directory was unsafe.'
-tar -xf "$RELEASE_TAR" -C "$RELEASE_ROOT"
+chmod 0700 -- "$RELEASE_ROOT"
+RELEASE_ROOT_ID="$(stat -Lc '%d:%i' -- "$RELEASE_ROOT")"
+RELEASE_ROOT_UID="$(stat -Lc '%u' -- "$RELEASE_ROOT")"
+RELEASE_ROOT_MODE="$(stat -Lc '%a' -- "$RELEASE_ROOT")"
+[[ "$RELEASE_ROOT_UID:$RELEASE_ROOT_MODE" == '0:700' ]] || fail 'Release staging directory ownership or mode was unsafe.'
+tar --no-overwrite-dir -xf "$RELEASE_TAR" -C "$RELEASE_ROOT"
+[[ "$(stat -Lc '%d:%i:%u:%a' -- "$RELEASE_ROOT")" == "$RELEASE_ROOT_ID:$RELEASE_ROOT_UID:$RELEASE_ROOT_MODE" ]] || fail 'Release staging directory identity changed during extraction.'
 
 if [[ -n "$(find "$RELEASE_ROOT" -xdev \( -type l -o \( -type f -links +1 \) \) -print -quit)" ]]; then
   fail 'Release archive links are not allowed.'
+fi
+if [[ -n "$(find "$RELEASE_ROOT" -xdev ! -type f ! -type d -print -quit)" ]]; then
+  fail 'Release archive members must be regular files or directories.'
 fi
 for helper in prepare-host.sh install-node24.sh install-cloudflared.sh deploy-release.sh; do
   [[ -f "$RELEASE_ROOT/scripts/linux/$helper" && ! -L "$RELEASE_ROOT/scripts/linux/$helper" ]] || fail "Release helper is missing: $helper"

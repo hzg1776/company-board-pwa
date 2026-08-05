@@ -88,7 +88,8 @@ async function writeCommandFixture(binRoot, name, contents) {
 async function runProvisioningHarness({
   archiveScenario = "valid",
   releaseSha = RELEASE_SHA,
-  extraArguments = []
+  extraArguments = [],
+  helperScenario = "normal"
 } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "palziv-provisioning-"));
   const releaseRoot = path.join(base, "release");
@@ -99,9 +100,25 @@ async function runProvisioningHarness({
   await mkdir(binRoot, { recursive: true });
   await writeFile(path.join(releaseRoot, "package.json"), '{"name":"fixture-release"}\n');
 
-  for (const helper of ["prepare-host.sh", "install-cloudflared.sh"]) {
-    await writeFile(path.join(releaseRoot, "scripts", "linux", helper), `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' '${helper}' >> "$PALZIV_APPLIANCE_TEST_LOG"\n`);
-  }
+  const prepareHost = helperScenario === "replace-cleanup-root"
+    ? String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+release_root="$(realpath -e -- "$(dirname "${"$"}{BASH_SOURCE[0]}")/../..")"
+printf '%s\n' "$release_root" > "$PALZIV_APPLIANCE_TEST_LOG.release-root"
+mv -- "$release_root" "$release_root.original"
+install -d -m 0700 -- "$release_root"
+/usr/bin/chown 65534:65534 "$release_root"
+printf '%s\n' 'preserve-replacement' > "$release_root/operator-marker.txt"
+exit 23
+`
+    : String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+release_root="$(realpath -e -- "$(dirname "${"$"}{BASH_SOURCE[0]}")/../..")"
+printf '%s\n' "$release_root" > "$PALZIV_APPLIANCE_TEST_LOG.release-root"
+printf '%s\n' 'prepare-host.sh' >> "$PALZIV_APPLIANCE_TEST_LOG"
+`;
+  await writeFile(path.join(releaseRoot, "scripts", "linux", "prepare-host.sh"), prepareHost);
+  await writeFile(path.join(releaseRoot, "scripts", "linux", "install-cloudflared.sh"), `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' 'install-cloudflared.sh' >> "$PALZIV_APPLIANCE_TEST_LOG"\n`);
   await writeFile(path.join(releaseRoot, "scripts", "linux", "install-node24.sh"), String.raw`#!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\n' 'install-node24.sh' >> "$PALZIV_APPLIANCE_TEST_LOG"
@@ -151,9 +168,20 @@ printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE' >&2
   let archiveCommand = `tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(wslReleaseRoot)} .`;
   if (archiveScenario === "unsafe-path") {
     archiveCommand = `tar -cf ${shellQuote(wslArchive)} --transform='s|^|../|' -C ${shellQuote(wslReleaseRoot)} package.json`;
+  } else if (archiveScenario === "backslash-path") {
+    archiveCommand = `tar -cf ${shellQuote(wslArchive)} --transform='s|package.json|..\\\\escape|' -C ${shellQuote(wslReleaseRoot)} package.json`;
   } else if (archiveScenario === "link") {
     const linkRoot = `/tmp/palziv-provisioning-link-${process.pid}-${Date.now()}`;
     archiveCommand = `mkdir -m 0700 -- ${shellQuote(linkRoot)}; trap 'rm -rf -- ${linkRoot}' EXIT; cp -a ${shellQuote(`${wslReleaseRoot}/.`)} ${shellQuote(`${linkRoot}/`)}; ln -s /etc/passwd ${shellQuote(`${linkRoot}/guest-link`)}; tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(linkRoot)} .`;
+  } else if (archiveScenario === "hard-link") {
+    const hardLinkRoot = `/tmp/palziv-provisioning-hardlink-${process.pid}-${Date.now()}`;
+    archiveCommand = `mkdir -m 0700 -- ${shellQuote(hardLinkRoot)}; trap 'rm -rf -- ${hardLinkRoot}' EXIT; cp -a ${shellQuote(`${wslReleaseRoot}/.`)} ${shellQuote(`${hardLinkRoot}/`)}; ln ${shellQuote(`${hardLinkRoot}/package.json`)} ${shellQuote(`${hardLinkRoot}/package-hardlink.json`)}; tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(hardLinkRoot)} .`;
+  } else if (archiveScenario === "fifo") {
+    const fifoRoot = `/tmp/palziv-provisioning-fifo-${process.pid}-${Date.now()}`;
+    archiveCommand = `mkdir -m 0700 -- ${shellQuote(fifoRoot)}; trap 'rm -rf -- ${fifoRoot}' EXIT; cp -a ${shellQuote(`${wslReleaseRoot}/.`)} ${shellQuote(`${fifoRoot}/`)}; mkfifo ${shellQuote(`${fifoRoot}/guest-fifo`)}; tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(fifoRoot)} .`;
+  } else if (archiveScenario === "device") {
+    const deviceRoot = `/tmp/palziv-provisioning-device-${process.pid}-${Date.now()}`;
+    archiveCommand = `mkdir -m 0700 -- ${shellQuote(deviceRoot)}; trap 'rm -rf -- ${deviceRoot}' EXIT; cp -a ${shellQuote(`${wslReleaseRoot}/.`)} ${shellQuote(`${deviceRoot}/`)}; mknod ${shellQuote(`${deviceRoot}/guest-device`)} c 1 3; tar -cf ${shellQuote(wslArchive)} -C ${shellQuote(deviceRoot)} .`;
   }
   const archived = await runWsl(archiveCommand);
   assert.equal(archived.code, 0, archived.output);
@@ -172,13 +200,18 @@ printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE' >&2
     assert.equal(result.code, 0, result.output);
     return result.output;
   };
+  const releaseStage = (await readLinux(`${logPath}.release-root`)).trim();
   return {
     base,
     fixtureRoot,
     logPath,
+    releaseStage,
     result: invoked,
     readLinux,
     cleanup: async () => {
+      if (/^\/var\/tmp\/palziv-appliance-release\.[A-Za-z0-9]+$/.test(releaseStage)) {
+        await runWsl(`rm -rf -- ${shellQuote(releaseStage)} ${shellQuote(`${releaseStage}.original`)}`);
+      }
       await runWsl(`case ${shellQuote(fixtureRoot)} in /tmp/palziv-provisioning-target.*) rm -rf -- ${shellQuote(fixtureRoot)} ;; *) exit 64 ;; esac`);
       await rm(base, { recursive: true, force: true });
     }
@@ -275,19 +308,28 @@ printf '[127.0.0.1]:%s ssh-ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=\
 `);
   await writeCommandFixture(binRoot, "ssh", String.raw`
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/ssh.log"
+printf 'ssh %s\n' "$*" >> "$FIXTURE_ROOT/transfer-operations.log"
 if [[ "$FIXTURE_SCENARIO" == 'hanging-ssh' ]]; then sleep 3; fi
-if [[ "$*" == *'provision-debian-appliance.sh'* ]]; then
+if [[ "$*" == *'palziv-appliance-upload-'* && "$*" != *'bash -s'* ]]; then
+  exit 0
+fi
+if [[ "$*" == *'provision-debian-appliance.sh'* || "$*" == *'bash -s'* ]]; then
+  cat > "$FIXTURE_ROOT/provision-stdin.log"
+  if [[ "$FIXTURE_SCENARIO" == 'provision-timeout' ]]; then sleep 3; fi
   printf '%s\n' 'AGE-SECRET-KEY-1CONTROLLERFIXTURE'
   printf '%s\n' 'AGE-SECRET-KEY-1CONTROLLERFIXTURE' >&2
   [[ "$FIXTURE_SCENARIO" != 'provision-failure' ]] || exit 42
   exit 0
 fi
+[[ "$FIXTURE_SCENARIO" != 'active-shutdown-failure' ]] || exit 43
 pid="$(<"$FIXTURE_ROOT/qemu.pid")"
 kill -TERM "$pid"
 exit 0
 `);
   await writeCommandFixture(binRoot, "scp", String.raw`
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/scp.log"
+printf 'scp %s\n' "$*" >> "$FIXTURE_ROOT/transfer-operations.log"
+if [[ "$FIXTURE_SCENARIO" == 'hanging-scp' ]]; then sleep 3; fi
 [[ "$FIXTURE_SCENARIO" != 'scp-failure' ]] || exit 41
 `);
   const qemuSource = path.join(fixtureRoot, "qemu-fixture.c");
@@ -424,6 +466,8 @@ export FIXTURE_UNOWNED_PID="$unowned_pid"
 export FIXTURE_IMAGE_SHA512='${sha512(BASE_IMAGE_CONTENTS)}'
 export PALZIV_APPLIANCE_SSH_TIMEOUT_SECONDS=2
 export PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS=1
+export PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS=1
+export PALZIV_APPLIANCE_PROVISION_TIMEOUT_SECONDS=1
 export PATH="$fixture_root/../bin:/usr/bin:/bin"
 if [[ "$scenario" == 'missing-kvm' ]]; then export PALZIV_APPLIANCE_KVM_DEVICE=/dev/palziv-missing-kvm; fi
 controller_args=(bash ${shellQuote(controller)} \
@@ -754,9 +798,9 @@ test("guest provisioning executes the release-owned Linux contract without produ
     assert.match(chownLog, new RegExp(`^root:palziv ${harness.fixtureRoot}/etc/palziv/palziv\\.env$`, "m"));
     assert.match(chownLog, new RegExp(`^root:root ${harness.fixtureRoot}/etc/palziv/migration-age\\.key$`, "m"));
 
-    const releaseCheck = await runWsl(`test \"$(realpath -e -- ${shellQuote(`${harness.fixtureRoot}/opt/palziv/current`)})\" = ${shellQuote(`${harness.fixtureRoot}/opt/palziv/releases/${RELEASE_SHA}`)} && stat -Lc '%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/palziv.env`)} && stat -Lc '%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/migration-age.key`)}`);
+    const releaseCheck = await runWsl(`test \"$(realpath -e -- ${shellQuote(`${harness.fixtureRoot}/opt/palziv/current`)})\" = ${shellQuote(`${harness.fixtureRoot}/opt/palziv/releases/${RELEASE_SHA}`)} && stat -Lc '%u:%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/palziv.env`)} && stat -Lc '%u:%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/migration-age.key`)} && test ! -e ${shellQuote(harness.releaseStage)}`);
     assert.equal(releaseCheck.code, 0, releaseCheck.output);
-    assert.equal(releaseCheck.output, "640\n600\n");
+    assert.equal(releaseCheck.output, "0:640\n0:600\n");
     assert.equal(await harness.readLinux(`${harness.fixtureRoot}/opt/palziv/releases/${RELEASE_SHA}/package.json`), '{"name":"fixture-release"}\n');
     assert.equal(await harness.readLinux(`${harness.fixtureRoot}/etc/palziv/migration-age.key`), "AGE-SECRET-KEY-1FIXTURE\n");
   } finally {
@@ -764,14 +808,18 @@ test("guest provisioning executes the release-owned Linux contract without produ
   }
 });
 
-test("guest provisioning rejects invalid identity, extra inputs, unsafe paths, and links before helper execution", {
+test("guest provisioning rejects invalid identity, extra inputs, and every unsafe archive member before helper execution", {
   skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
 }, async (t) => {
   for (const fixture of [
     { name: "invalid release SHA", options: { releaseSha: "main" }, message: /Invalid release SHA/i },
     { name: "extra production input", options: { extraArguments: ["/tmp/production.env"] }, message: /exactly two arguments/i },
     { name: "unsafe archive path", options: { archiveScenario: "unsafe-path" }, message: /Unsafe release archive path/i },
-    { name: "archive link", options: { archiveScenario: "link" }, message: /links are not allowed/i }
+    { name: "backslash traversal", options: { archiveScenario: "backslash-path" }, message: /Unsafe release archive path/i },
+    { name: "symbolic link", options: { archiveScenario: "link" }, message: /links are not allowed/i },
+    { name: "hard link", options: { archiveScenario: "hard-link" }, message: /links are not allowed/i },
+    { name: "FIFO", options: { archiveScenario: "fifo" }, message: /regular files or directories/i },
+    { name: "device node", options: { archiveScenario: "device" }, message: /regular files or directories/i }
   ]) {
     await t.test(fixture.name, async () => {
       const harness = await runProvisioningHarness(fixture.options);
@@ -792,12 +840,25 @@ test("guest provisioning rejects invalid identity, extra inputs, unsafe paths, a
     assert.notEqual(result.code, 0);
     assert.match(result.output, /Run as root/i);
   });
+
+  await t.test("cleanup preserves a substituted non-root staging directory", async () => {
+    const harness = await runProvisioningHarness({ helperScenario: "replace-cleanup-root" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.releaseStage, /^\/var\/tmp\/palziv-appliance-release\./);
+      const preserved = await runWsl(`test \"$(cat -- ${shellQuote(`${harness.releaseStage}/operator-marker.txt`)})\" = preserve-replacement && stat -Lc '%u:%a' ${shellQuote(harness.releaseStage)}`);
+      assert.equal(preserved.code, 0, preserved.output);
+      assert.equal(preserved.output, "65534:700\n");
+    } finally {
+      await harness.cleanup();
+    }
+  });
 });
 
 test("WSL controller provisions only outside boot-only mode over pinned SSH and records bounded failure state", {
   skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
 }, async (t) => {
-  await t.test("provisioning success", async () => {
+  await t.test("provisioning success", async (t) => {
     const harness = await runBashControllerHarness({ bootOnly: false });
     try {
       assert.equal(harness.result.code, 0, harness.result.output);
@@ -815,10 +876,60 @@ test("WSL controller provisions only outside boot-only mode over pinned SSH and 
       assert.match(scpLog, /UserKnownHostsFile=/);
       assert.match(scpLog, /project-a-release\.tar/);
       assert.match(scpLog, /provision-debian-appliance\.sh/);
-      assert.match(scpLog, /palziv-build@127\.0\.0\.1:\/var\/tmp\/$/m);
+      assert.match(scpLog, new RegExp(`palziv-build@127\\.0\\.0\\.1:/var/tmp/palziv-appliance-upload-${BUILD_ID}/$`, "m"));
       const sshLog = await harness.readLog("ssh.log");
-      assert.match(sshLog, /sudo bash \/var\/tmp\/provision-debian-appliance\.sh \/var\/tmp\/project-a-release\.tar/);
+      assert.match(sshLog, new RegExp(`mkdir -m 0700 -- /var/tmp/palziv-appliance-upload-${BUILD_ID}`));
+      assert.match(sshLog, new RegExp(`sudo mkdir -m 0700 -- /var/tmp/palziv-appliance-stage-${BUILD_ID}`));
+      assert.match(sshLog, /sudo bash -s --/);
       assert.match(sshLog, /StrictHostKeyChecking=yes/);
+      assert.match(sshLog, new RegExp(sha256(await readFile(path.join(harness.buildRoot, "project-a-release.tar")))));
+      assert.match(sshLog, new RegExp(sha256(await readFile(path.resolve("scripts/appliance/provision-debian-appliance.sh")))));
+      const snapshotScript = await harness.readLog("provision-stdin.log");
+      assert.match(snapshotScript, /mv -- .*project-a-release\.tar.*release\.tar/);
+      assert.match(snapshotScript, /chown root:root/);
+      assert.match(snapshotScript, /chmod 0600/);
+      assert.match(snapshotScript, /sha256sum --check --strict/);
+      assert.match(snapshotScript, /bash .*provision-debian-appliance\.sh.*release\.tar/);
+      const snapshotFixtureId = `${process.pid}-${Date.now()}`;
+      const snapshotScriptPath = path.join(harness.base, "root-snapshot.sh");
+      const snapshotProvisionerPath = path.join(harness.base, "snapshot-provisioner.sh");
+      const snapshotUpload = `/var/tmp/palziv-appliance-upload-fixture-${snapshotFixtureId}`;
+      const snapshotStage = `/var/tmp/palziv-appliance-stage-fixture-${snapshotFixtureId}`;
+      const snapshotMarker = `/tmp/palziv-appliance-snapshot-marker-${snapshotFixtureId}`;
+      t.after(async () => {
+        await runWsl(`rm -rf -- ${shellQuote(snapshotUpload)} ${shellQuote(`${snapshotUpload}-bad`)} ${shellQuote(snapshotStage)} ${shellQuote(`${snapshotStage}-bad`)}; rm -f -- ${shellQuote(snapshotMarker)} ${shellQuote(`${snapshotMarker}-bad`)}`);
+      });
+      await writeFile(snapshotScriptPath, snapshotScript);
+      await writeFile(snapshotProvisionerPath, String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s|%s|%s|%s\n' "$1" "$2" "$(stat -Lc '%u:%a' -- "$0")" "$(stat -Lc '%u:%a' -- "$1")" > "$PALZIV_SNAPSHOT_MARKER"
+`);
+      const snapshotReleaseDigest = sha256(await readFile(path.join(harness.buildRoot, "project-a-release.tar")));
+      const snapshotProvisionerDigest = sha256(await readFile(snapshotProvisionerPath));
+      const setupSnapshotFixture = async (upload, stage) => runWsl(`mkdir -m 0700 -- ${shellQuote(upload)}; mkdir -m 0700 -- ${shellQuote(stage)}; chown root:root ${shellQuote(stage)}; cp -- ${shellQuote(toWslPath(path.join(harness.buildRoot, "project-a-release.tar")))} ${shellQuote(`${upload}/project-a-release.tar`)}; cp -- ${shellQuote(toWslPath(snapshotProvisionerPath))} ${shellQuote(`${upload}/provision-debian-appliance.sh`)}`);
+      const validSetup = await setupSnapshotFixture(snapshotUpload, snapshotStage);
+      assert.equal(validSetup.code, 0, validSetup.output);
+      const snapshotRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(snapshotMarker)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(snapshotUpload)} ${shellQuote(snapshotStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
+      assert.equal(snapshotRun.code, 0, snapshotRun.output);
+      const snapshotEvidence = await runWsl(`cat -- ${shellQuote(snapshotMarker)}; test ! -e ${shellQuote(snapshotUpload)}; test ! -e ${shellQuote(snapshotStage)}`);
+      assert.equal(snapshotEvidence.code, 0, snapshotEvidence.output);
+      assert.equal(snapshotEvidence.output, `${snapshotStage}/release.tar|${RELEASE_SHA}|0:600|0:600\n`);
+
+      const badUpload = `${snapshotUpload}-bad`;
+      const badStage = `${snapshotStage}-bad`;
+      const badMarker = `${snapshotMarker}-bad`;
+      const badSetup = await setupSnapshotFixture(badUpload, badStage);
+      assert.equal(badSetup.code, 0, badSetup.output);
+      const rejectedSnapshot = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(badMarker)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(badUpload)} ${shellQuote(badStage)} ${"0".repeat(64)} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
+      assert.notEqual(rejectedSnapshot.code, 0);
+      const rejectionEvidence = await runWsl(`test ! -e ${shellQuote(badMarker)}; test ! -e ${shellQuote(badUpload)}; test ! -e ${shellQuote(badStage)}; rm -f -- ${shellQuote(snapshotMarker)}`);
+      assert.equal(rejectionEvidence.code, 0, rejectionEvidence.output);
+      const transferOperations = (await harness.readLog("transfer-operations.log")).trim().split(/\r?\n/);
+      assert.equal(transferOperations.length, 4);
+      assert.match(transferOperations[0], /^ssh .*palziv-appliance-upload-/);
+      assert.match(transferOperations[1], /^scp /);
+      assert.match(transferOperations[2], /^ssh .*sudo bash -s --/);
+      assert.match(transferOperations[3], /^ssh .*systemctl poweroff/);
       const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
       assert.equal(state.classification, "provisioned");
       assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
@@ -852,8 +963,54 @@ test("WSL controller provisions only outside boot-only mode over pinned SSH and 
       assert.equal(state.operation, "copy-provisioning-inputs");
       assert.equal(state.exitCode, 41);
       assert.match(state.failedAtUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-      assert.equal(await harness.readLog("ssh.log"), "", "remote provisioning must not run after a failed copy");
+      assert.equal(await harness.readLog("provision-stdin.log"), "", "remote provisioning must not run after a failed copy");
+      assert.match(await harness.readLog("ssh.log"), /sudo mkdir -m 0700 -- \/var\/tmp\/palziv-appliance-stage-/);
       assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("hanging secure copy", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false, scenario: "hanging-scp" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.ok(harness.durationMs < 5500, `SCP timeout took ${harness.durationMs}ms`);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "failed");
+      assert.equal(state.operation, "copy-provisioning-inputs");
+      assert.ok([124, 137].includes(state.exitCode));
+      assert.equal(await harness.readLog("provision-stdin.log"), "");
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("provisioning timeout", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false, scenario: "provision-timeout" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.ok(harness.durationMs < 5500, `provision timeout took ${harness.durationMs}ms`);
+      assert.doesNotMatch(harness.result.output, /AGE-SECRET-KEY|ADMIN_SETUP_TOKEN/);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "failed");
+      assert.equal(state.operation, "provision-guest");
+      assert.ok([124, 137].includes(state.exitCode));
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("active-mode shutdown failure", async () => {
+    const harness = await runBashControllerHarness({ bootOnly: false, scenario: "active-shutdown-failure" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.output, /Provisioned guest shutdown command failed/i);
+      assert.doesNotMatch(harness.result.output, /Boot-only guest shutdown/i);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.equal(state.classification, "failed");
+      assert.equal(state.operation, "shutdown-provisioned-guest");
+      assert.equal(state.exitCode, 43);
     } finally {
       await harness.cleanup();
     }
