@@ -66,15 +66,50 @@ const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 
 async function runWindowsEntrypointHarness({ scenario = "preflight" } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-powershell-"));
-  const outputRoot = scenario === "existing-build"
-    ? path.join(base, "output-root")
-    : path.join(base, "not-created", "local-debian-appliance");
+  const artifactRoot = path.join(base, "artifacts");
+  let outputRoot = path.join(artifactRoot, "local-debian-appliance");
   const buildId = "20260805T120000Z-aaaaaaaaaaaa";
-  const buildRoot = path.join(outputRoot, buildId);
+  let buildRoot = path.join(outputRoot, buildId);
   const logPath = path.join(base, "wsl.log");
+  const nativeWslPath = path.join(base, "fixture-wsl.cmd");
+  if (scenario === "relative-output") outputRoot = "relative-output";
+  if (scenario === "equal-artifacts") outputRoot = artifactRoot;
+  if (scenario === "outside-output") outputRoot = path.join(base, "outside-output");
+  if (scenario === "reparse-output") {
+    const outside = path.join(base, "outside-output");
+    await mkdir(artifactRoot, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, path.join(artifactRoot, "escape"), "junction");
+    outputRoot = path.join(artifactRoot, "escape", "local-debian-appliance");
+    buildRoot = path.join(outputRoot, buildId);
+  }
   if (scenario === "existing-build") {
     await mkdir(buildRoot, { recursive: true });
     await writeFile(path.join(buildRoot, "operator-marker.txt"), "must survive\n");
+  }
+  if (scenario === "native-success") {
+    await writeFile(nativeWslPath, String.raw`@echo off
+setlocal DisableDelayedExpansion
+set "command=%~6"
+set "option=%~7"
+set "windowsPath=%~8"
+>> "%LOCAL_APPLIANCE_NATIVE_LOG%" echo --CALL--
+:record
+if "%~1"=="" goto recorded
+>> "%LOCAL_APPLIANCE_NATIVE_LOG%" echo %~1
+shift
+goto record
+:recorded
+if /I "%command%"=="wslpath" (
+  for %%I in ("%windowsPath%") do echo /fixture/%%~nxI
+  exit /b 0
+)
+if /I "%command%"=="bash" if "%option%"=="-c" (
+  > "%LOCAL_APPLIANCE_NATIVE_BUILD_ROOT%\build_ssh_ed25519" echo private-fixture
+  > "%LOCAL_APPLIANCE_NATIVE_BUILD_ROOT%\build_ssh_ed25519.pub" echo public-fixture
+)
+exit /b 0
+`);
   }
 
   const source = await readFile(
@@ -95,13 +130,41 @@ $fixtureFree = {
   return [uint64](21GB)
 }
 $fixtureWsl = {
-  param([string]$Distribution, [string[]]$Arguments)
+  param([string]$Distribution, [string[]]$Arguments, [string]$WslExecutable)
   Add-Content -LiteralPath ${psQuote(logPath)} -Value ("$Distribution|" + ($Arguments -join '|'))
+  if ($Arguments[0] -eq 'test' -and $env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'kvm-fail') {
+    throw 'WSL command failed: test -c /dev/kvm'
+  }
+  if ($Arguments[0] -eq 'wslpath') {
+    return "/fixture/$([System.IO.Path]::GetFileName($Arguments[2]))"
+  }
+  if ($Arguments[0] -eq 'bash' -and $Arguments[1] -eq '-c') {
+    if ($Arguments -contains '') { throw 'Empty native argument reached WSL.' }
+    if ($Arguments.Count -ne 5 -or $Arguments[2] -ne 'exec ssh-keygen -q -t ed25519 -N "" -f "$1"' -or $Arguments[3] -ne 'build-key') {
+      throw 'SSH keygen WSL argument contract was malformed.'
+    }
+    Set-Content -LiteralPath (Join-Path ${psQuote(buildRoot)} 'build_ssh_ed25519') -Value 'private-fixture'
+    Set-Content -LiteralPath (Join-Path ${psQuote(buildRoot)} 'build_ssh_ed25519.pub') -Value 'public-fixture'
+    return @()
+  }
+  if ($Arguments[0] -eq 'bash') { return @() }
   return @()
 }
 $fixtureBuildId = { return '20260805T120000Z-aaaaaaaaaaaa' }
-$fixturePreflight = $env:LOCAL_APPLIANCE_PS_SCENARIO -ne 'existing-build'
-Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$false -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWsl -GetBuildId $fixtureBuildId
+$fixtureExport = {
+  param([string]$RepositoryRoot, [string]$ReleaseSha, [string]$ReleaseTar)
+  Set-Content -LiteralPath $ReleaseTar -Value "release=$ReleaseSha"
+}
+$fixturePreflight = $env:LOCAL_APPLIANCE_PS_SCENARIO -in @('preflight', 'invalid-release', 'low-space', 'relative-output', 'equal-artifacts', 'outside-output')
+$fixtureWslRunner = $fixtureWsl
+$fixtureWslExecutable = 'wsl.exe'
+if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'native-success') {
+  $fixtureWslRunner = ${"$"}{function:Invoke-WslRoot}
+  $fixtureWslExecutable = ${psQuote(nativeWslPath)}
+  Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$false -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWslRunner -WslExecutable $fixtureWslExecutable -GetBuildId $fixtureBuildId -ExportRelease $fixtureExport
+} else {
+  Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$false -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWslRunner -GetBuildId $fixtureBuildId -ExportRelease $fixtureExport
+}
 `;
   const harnessPath = path.join(base, "build-local-debian-appliance.ps1");
   await writeFile(harnessPath, source.replace(invocationMarker, harnessInvocation));
@@ -113,7 +176,11 @@ Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixtu
     "Bypass",
     "-File",
     harnessPath
-  ], { env: { LOCAL_APPLIANCE_PS_SCENARIO: scenario } });
+  ], { env: {
+    LOCAL_APPLIANCE_PS_SCENARIO: scenario,
+    LOCAL_APPLIANCE_NATIVE_LOG: logPath,
+    LOCAL_APPLIANCE_NATIVE_BUILD_ROOT: buildRoot
+  } });
   let operations = [];
   try {
     operations = (await readFile(logPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
@@ -122,6 +189,7 @@ Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixtu
   }
   return {
     base,
+    artifactRoot,
     outputRoot,
     buildRoot,
     cleanup: () => rm(base, { recursive: true, force: true }),
@@ -332,6 +400,121 @@ test("Windows entrypoint preserves an existing build directory instead of clobbe
     assert.match(harness.result.stderr, /Build directory already exists/i);
     assert.equal(await readFile(path.join(harness.buildRoot, "operator-marker.txt"), "utf8"), "must survive\n");
     assert.deepEqual(harness.operations, ["Fixture-Ubuntu|test|-c|/dev/kvm"]);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("Windows entrypoint rejects unsafe output roots before KVM or output creation", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async (t) => {
+  for (const [scenario, expectedError] of [
+    ["relative-output", /absolute.*artifacts/i],
+    ["equal-artifacts", /strict descendant/i],
+    ["outside-output", /strict descendant/i],
+    ["reparse-output", /reparse point/i]
+  ]) {
+    await t.test(scenario, async () => {
+      const harness = await runWindowsEntrypointHarness({ scenario });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.match(harness.result.stderr, expectedError);
+        assert.deepEqual(harness.operations, []);
+        await assert.rejects(readdir(harness.outputRoot), { code: "ENOENT" });
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+});
+
+test("Windows entrypoint stops before output creation when WSL KVM preflight fails", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness({ scenario: "kvm-fail" });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.match(harness.result.stderr, /WSL command failed: test -c \/dev\/kvm/i);
+    assert.deepEqual(harness.operations, ["Fixture-Ubuntu|test|-c|/dev/kvm"]);
+    await assert.rejects(readdir(harness.outputRoot), { code: "ENOENT" });
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("Windows entrypoint exports only the release, creates the ephemeral key, and passes exact WSL controller arguments", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness({ scenario: "full-success" });
+  try {
+    assert.equal(harness.result.code, 0, harness.result.stderr);
+    assert.equal(harness.result.stdout, "");
+    assert.equal(harness.result.stderr, "");
+    assert.deepEqual((await readdir(harness.buildRoot)).sort(), [
+      "build_ssh_ed25519",
+      "build_ssh_ed25519.pub",
+      "project-a-release.tar"
+    ]);
+    assert.equal(await readFile(path.join(harness.buildRoot, "project-a-release.tar"), "utf8"), `release=${RELEASE_SHA}\r\n`);
+    const operations = harness.operations.map((entry) => entry.split("|"));
+    assert.deepEqual(operations[0], ["Fixture-Ubuntu", "test", "-c", "/dev/kvm"]);
+    assert.deepEqual(operations[2], [
+      "Fixture-Ubuntu",
+      "bash",
+      "-c",
+      'exec ssh-keygen -q -t ed25519 -N "" -f "$1"',
+      "build-key",
+      "/fixture/build_ssh_ed25519"
+    ]);
+    assert.ok(operations[2].every(Boolean), "PowerShell 5.1 must not pass an empty native argument");
+    assert.deepEqual(operations.at(-1), [
+      "Fixture-Ubuntu",
+      "bash",
+      "/fixture/build-local-debian-appliance.sh",
+      "--repository",
+      `/fixture/${path.basename(harness.base)}`,
+      "--build-root",
+      `/fixture/${path.basename(harness.buildRoot)}`,
+      "--release-tar",
+      "/fixture/project-a-release.tar",
+      "--release-sha",
+      RELEASE_SHA,
+      "--build-id",
+      "20260805T120000Z-aaaaaaaaaaaa",
+      "--build-public-key",
+      "/fixture/build_ssh_ed25519.pub"
+    ]);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("Windows PowerShell 5.1 passes the SSH keygen shell contract to the native WSL executable without an empty argument", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness({ scenario: "native-success" });
+  try {
+    assert.equal(harness.result.code, 0, harness.result.stderr);
+    const calls = [];
+    for (const entry of harness.operations) {
+      if (entry === "--CALL--") calls.push([]);
+      else calls.at(-1).push(entry);
+    }
+    const keygenCall = calls.find((call) => call[5] === "bash" && call[6] === "-c");
+    assert.deepEqual(keygenCall, [
+      "--distribution",
+      "Fixture-Ubuntu",
+      "--user",
+      "root",
+      "--",
+      "bash",
+      "-c",
+      'exec ssh-keygen -q -t ed25519 -N "" -f "$1"',
+      "build-key",
+      "/fixture/build_ssh_ed25519"
+    ]);
+    assert.ok(keygenCall.every(Boolean));
+    assert.equal(await readFile(path.join(harness.buildRoot, "build_ssh_ed25519.pub"), "utf8"), "public-fixture\r\n");
   } finally {
     await harness.cleanup();
   }

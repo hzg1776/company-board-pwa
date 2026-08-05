@@ -42,10 +42,11 @@ function Get-OutputFreeBytes {
 function Invoke-WslRoot {
   param(
     [string]$Distribution,
-    [string[]]$Arguments
+    [string[]]$Arguments,
+    [string]$WslExecutable = 'wsl.exe'
   )
 
-  $result = & wsl.exe --distribution $Distribution --user root -- @Arguments
+  $result = & $WslExecutable --distribution $Distribution --user root -- @Arguments
   if ($LASTEXITCODE -ne 0) { throw "WSL command failed: $($Arguments -join ' ')" }
   return $result
 }
@@ -65,6 +66,25 @@ function Assert-ExistingOutputParentsAreNotReparsePoints {
     if ($null -eq $parent -or $parent.FullName -eq $current) { break }
     $current = $parent.FullName
   }
+}
+
+function Resolve-ArtifactOutputRoot {
+  param(
+    [string]$RequestedOutputRoot,
+    [string]$RepositoryRoot
+  )
+
+  if ($RequestedOutputRoot -notmatch '^[A-Za-z]:[\\/]') {
+    throw "OutputRoot must be an absolute strict descendant of repository artifacts: $RequestedOutputRoot"
+  }
+  $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot 'artifacts'))
+  $outputRoot = [System.IO.Path]::GetFullPath($RequestedOutputRoot)
+  $artifactPrefix = "$($artifactRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar))$([System.IO.Path]::DirectorySeparatorChar)"
+  if (-not $outputRoot.StartsWith($artifactPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "OutputRoot must be a strict descendant of repository artifacts: $outputRoot"
+  }
+  Assert-ExistingOutputParentsAreNotReparsePoints $outputRoot
+  return $outputRoot
 }
 
 function New-LocalApplianceBuildId {
@@ -87,10 +107,11 @@ function ConvertTo-WslAbsolutePath {
   param(
     [string]$WindowsPath,
     [string]$Distribution,
-    [scriptblock]$InvokeWslRoot
+    [scriptblock]$InvokeWslRoot,
+    [string]$WslExecutable
   )
 
-  $wslPath = ([string](& $InvokeWslRoot $Distribution @('wslpath', '-a', $WindowsPath))).Trim()
+  $wslPath = ([string](& $InvokeWslRoot -Distribution $Distribution -Arguments @('wslpath', '-a', $WindowsPath) -WslExecutable $WslExecutable)).Trim()
   if ([string]::IsNullOrWhiteSpace($wslPath) -or -not $wslPath.StartsWith('/')) {
     throw "WSL did not return an absolute path for: $WindowsPath"
   }
@@ -109,10 +130,12 @@ function Invoke-LocalDebianAppliance {
     [scriptblock]$ResolveReleaseSha = ${function:Resolve-ReleaseSha},
     [scriptblock]$GetFreeBytes = ${function:Get-OutputFreeBytes},
     [scriptblock]$InvokeWslRoot = ${function:Invoke-WslRoot},
+    [string]$WslExecutable = 'wsl.exe',
     [scriptblock]$GetBuildId = ${function:New-LocalApplianceBuildId},
     [scriptblock]$ExportRelease = ${function:Export-ReleaseTar}
   )
 
+  $OutputRoot = Resolve-ArtifactOutputRoot $OutputRoot $RepositoryRoot
   $releaseSha = ([string](& $ResolveReleaseSha $RepositoryRoot $ReleaseRef)).Trim()
   if ($releaseSha -notmatch '^[a-f0-9]{40}$') {
     throw "ReleaseRef did not resolve to one commit: $ReleaseRef"
@@ -120,7 +143,7 @@ function Invoke-LocalDebianAppliance {
   $freeBytes = [uint64](& $GetFreeBytes $OutputRoot)
   if ($freeBytes -lt 20GB) { throw 'At least 20 GiB of free output space is required.' }
 
-  & $InvokeWslRoot $WslDistribution @('test', '-c', '/dev/kvm') | Out-Null
+  & $InvokeWslRoot -Distribution $WslDistribution -Arguments @('test', '-c', '/dev/kvm') -WslExecutable $WslExecutable | Out-Null
   if ($PreflightOnly) {
     [ordered]@{
       ok = $true
@@ -132,7 +155,6 @@ function Invoke-LocalDebianAppliance {
     return
   }
 
-  Assert-ExistingOutputParentsAreNotReparsePoints $OutputRoot
   $buildId = ([string](& $GetBuildId $releaseSha)).Trim()
   if ($buildId -notmatch '^\d{8}T\d{6}Z-[a-f0-9]{12}$') { throw "Generated build ID was invalid: $buildId" }
   $outputParent = [System.IO.Path]::GetFullPath($OutputRoot)
@@ -145,18 +167,19 @@ function Invoke-LocalDebianAppliance {
 
   $buildPrivateKey = Join-Path $buildRoot 'build_ssh_ed25519'
   $buildPublicKey = "$buildPrivateKey.pub"
-  $buildPrivateKeyWsl = ConvertTo-WslAbsolutePath $buildPrivateKey $WslDistribution $InvokeWslRoot
-  & $InvokeWslRoot $WslDistribution @('ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', $buildPrivateKeyWsl) | Out-Null
+  $buildPrivateKeyWsl = ConvertTo-WslAbsolutePath $buildPrivateKey $WslDistribution $InvokeWslRoot $WslExecutable
+  $sshKeygenCommand = 'exec ssh-keygen -q -t ed25519 -N "" -f "$1"'
+  & $InvokeWslRoot -Distribution $WslDistribution -Arguments @('bash', '-c', $sshKeygenCommand, 'build-key', $buildPrivateKeyWsl) -WslExecutable $WslExecutable | Out-Null
   if (-not (Test-Path -LiteralPath $buildPrivateKey -PathType Leaf) -or -not (Test-Path -LiteralPath $buildPublicKey -PathType Leaf)) {
     throw 'WSL did not create the ephemeral build SSH keypair.'
   }
 
   $controller = Join-Path $RepositoryRoot 'scripts\appliance\build-local-debian-appliance.sh'
-  $controllerWsl = ConvertTo-WslAbsolutePath $controller $WslDistribution $InvokeWslRoot
-  $repositoryWsl = ConvertTo-WslAbsolutePath $RepositoryRoot $WslDistribution $InvokeWslRoot
-  $buildRootWsl = ConvertTo-WslAbsolutePath $buildRoot $WslDistribution $InvokeWslRoot
-  $releaseTarWsl = ConvertTo-WslAbsolutePath $releaseTar $WslDistribution $InvokeWslRoot
-  $buildPublicKeyWsl = ConvertTo-WslAbsolutePath $buildPublicKey $WslDistribution $InvokeWslRoot
+  $controllerWsl = ConvertTo-WslAbsolutePath $controller $WslDistribution $InvokeWslRoot $WslExecutable
+  $repositoryWsl = ConvertTo-WslAbsolutePath $RepositoryRoot $WslDistribution $InvokeWslRoot $WslExecutable
+  $buildRootWsl = ConvertTo-WslAbsolutePath $buildRoot $WslDistribution $InvokeWslRoot $WslExecutable
+  $releaseTarWsl = ConvertTo-WslAbsolutePath $releaseTar $WslDistribution $InvokeWslRoot $WslExecutable
+  $buildPublicKeyWsl = ConvertTo-WslAbsolutePath $buildPublicKey $WslDistribution $InvokeWslRoot $WslExecutable
   $controllerArguments = @(
     'bash', $controllerWsl,
     '--repository', $repositoryWsl,
@@ -167,7 +190,7 @@ function Invoke-LocalDebianAppliance {
     '--build-public-key', $buildPublicKeyWsl
   )
   if ($BootOnly) { $controllerArguments += '--boot-only' }
-  & $InvokeWslRoot $WslDistribution $controllerArguments | Out-Null
+  & $InvokeWslRoot -Distribution $WslDistribution -Arguments $controllerArguments -WslExecutable $WslExecutable | Out-Null
 }
 
 Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot
