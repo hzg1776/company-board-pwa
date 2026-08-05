@@ -232,14 +232,6 @@ require_unlinked_existing_path 'Build public key' "$BUILD_PUBLIC_KEY" file
 readonly BUILD_PRIVATE_KEY="${BUILD_PUBLIC_KEY%.pub}"
 require_unlinked_existing_path 'Build private key' "$BUILD_PRIVATE_KEY" file
 readonly PROVISIONING_SCRIPT="$SCRIPT_ROOT/provision-debian-appliance.sh"
-require_unlinked_existing_path 'Provisioning script' "$PROVISIONING_SCRIPT" file
-release_tar_sha256="$(sha256sum -- "$RELEASE_TAR")"
-release_tar_sha256="${release_tar_sha256%% *}"
-provisioning_script_sha256="$(sha256sum -- "$PROVISIONING_SCRIPT")"
-provisioning_script_sha256="${provisioning_script_sha256%% *}"
-[[ "$release_tar_sha256" =~ ^[a-f0-9]{64}$ && "$provisioning_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
-readonly RELEASE_TAR_SHA256="$release_tar_sha256"
-readonly PROVISIONING_SCRIPT_SHA256="$provisioning_script_sha256"
 
 readonly OUTPUT_ROOT="$(dirname -- "$BUILD_ROOT")"
 readonly CACHE_ROOT="${OUTPUT_ROOT}/.cache"
@@ -394,6 +386,14 @@ printf '%s\n' "$host_key" > "$known_hosts_partial"
 publish_noclobber "$known_hosts_partial" "$KNOWN_HOSTS"
 
 if [[ "$BOOT_ONLY" -eq 0 ]]; then
+  require_unlinked_existing_path 'Provisioning script' "$PROVISIONING_SCRIPT" file
+  release_tar_sha256="$(sha256sum -- "$RELEASE_TAR")"
+  release_tar_sha256="${release_tar_sha256%% *}"
+  provisioning_script_sha256="$(sha256sum -- "$PROVISIONING_SCRIPT")"
+  provisioning_script_sha256="${provisioning_script_sha256%% *}"
+  [[ "$release_tar_sha256" =~ ^[a-f0-9]{64}$ && "$provisioning_script_sha256" =~ ^[a-f0-9]{64}$ ]] || fail 'Provisioning input SHA-256 generation failed.'
+  readonly RELEASE_TAR_SHA256="$release_tar_sha256"
+  readonly PROVISIONING_SCRIPT_SHA256="$provisioning_script_sha256"
   copy_timeout="${PALZIV_APPLIANCE_COPY_TIMEOUT_SECONDS:-$DEFAULT_COPY_TIMEOUT_SECONDS}"
   [[ "$copy_timeout" =~ ^[1-9][0-9]{0,2}$ && "$copy_timeout" -le "$DEFAULT_COPY_TIMEOUT_SECONDS" ]] || fail 'Copy timeout must be between 1 and 300 seconds.'
   remote_stage_command="set -Eeuo pipefail; umask 077; mkdir -m 0700 -- ${REMOTE_UPLOAD_DIR}; sudo mkdir -m 0700 -- ${REMOTE_STAGE_DIR}; sudo chown root:root ${REMOTE_STAGE_DIR}; sudo chmod 0700 ${REMOTE_STAGE_DIR}"
@@ -439,6 +439,11 @@ expected_release_sha256="$3"
 expected_provisioner_sha256="$4"
 release_sha="$5"
 stage_id=''
+upload_path=''
+upload_id=''
+upload_uid=''
+upload_mode=''
+upload_consumed=0
 
 cleanup() {
   local rc=$? actual_path='' actual_id='' actual_uid='' actual_mode=''
@@ -452,8 +457,17 @@ cleanup() {
       rm -rf -- "$stage_root"
     fi
   fi
-  if [[ -d "$upload_root" && ! -L "$upload_root" && "$upload_root" == /var/tmp/palziv-appliance-upload-* ]]; then
-    rm -rf -- "$upload_root"
+  if [[ "$upload_consumed" -eq 0 && -n "$upload_id" && -d "$upload_root" && ! -L "$upload_root" ]]; then
+    actual_path="$(realpath -e -- "$upload_root" 2>/dev/null || true)"
+    actual_id="$(stat -Lc '%d:%i' -- "$upload_root" 2>/dev/null || true)"
+    actual_uid="$(stat -Lc '%u' -- "$upload_root" 2>/dev/null || true)"
+    actual_mode="$(stat -Lc '%a' -- "$upload_root" 2>/dev/null || true)"
+    if [[ "$actual_path" == "$upload_path" && "$actual_id" == "$upload_id" && \
+          "$actual_uid" == "$upload_uid" && "$actual_mode" == "$upload_mode" && \
+          "$upload_root" == /var/tmp/palziv-appliance-upload-* && \
+          -z "$(find "$upload_root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      rmdir -- "$upload_root"
+    fi
   fi
   exit "$rc"
 }
@@ -465,12 +479,22 @@ trap cleanup EXIT
 [[ "$(stat -Lc '%u:%a' -- "$stage_root")" == '0:700' ]] || exit 73
 stage_id="$(stat -Lc '%d:%i' -- "$stage_root")"
 [[ -d "$upload_root" && ! -L "$upload_root" && "$(realpath -e -- "$upload_root")" == "$upload_root" ]] || exit 74
+upload_path="$(realpath -e -- "$upload_root")"
+upload_id="$(stat -Lc '%d:%i' -- "$upload_root")"
+upload_uid="$(stat -Lc '%u' -- "$upload_root")"
+upload_mode="$(stat -Lc '%a' -- "$upload_root")"
+[[ "$upload_uid" =~ ^[1-9][0-9]*$ && "$upload_mode" == '700' ]] || exit 76
 for input in project-a-release.tar provision-debian-appliance.sh; do
   [[ -f "$upload_root/$input" && ! -L "$upload_root/$input" ]] || exit 75
 done
 
 mv -- "$upload_root/project-a-release.tar" "$stage_root/release.tar.partial"
 mv -- "$upload_root/provision-debian-appliance.sh" "$stage_root/provision-debian-appliance.sh.partial"
+[[ -z "$(find "$upload_root" -mindepth 1 -maxdepth 1 -print -quit)" ]] || exit 77
+[[ "$(realpath -e -- "$upload_root")" == "$upload_path" && \
+   "$(stat -Lc '%d:%i:%u:%a' -- "$upload_root")" == "$upload_id:$upload_uid:$upload_mode" ]] || exit 78
+rmdir -- "$upload_root"
+upload_consumed=1
 chown root:root "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial"
 chmod 0600 "$stage_root/release.tar.partial" "$stage_root/provision-debian-appliance.sh.partial"
 (

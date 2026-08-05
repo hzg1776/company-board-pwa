@@ -89,7 +89,8 @@ async function runProvisioningHarness({
   archiveScenario = "valid",
   releaseSha = RELEASE_SHA,
   extraArguments = [],
-  helperScenario = "normal"
+  helperScenario = "normal",
+  realOwnership = false
 } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "palziv-provisioning-"));
   const releaseRoot = path.join(base, "release");
@@ -137,7 +138,7 @@ cp -- "$source_root/package.json" "$release_dir/package.json"
 ln -sfn "$release_dir" "$PALZIV_APPLIANCE_ROOT/opt/palziv/current"
 `);
 
-  await writeCommandFixture(binRoot, "chown", String.raw`
+  if (!realOwnership) await writeCommandFixture(binRoot, "chown", String.raw`
 printf '%s\n' "$*" >> "$PALZIV_APPLIANCE_TEST_LOG.chown"
 `);
   await writeCommandFixture(binRoot, "systemctl", String.raw`
@@ -188,11 +189,20 @@ printf '%s\n' 'AGE-SECRET-KEY-1FIXTURE' >&2
 
   const provisioner = toWslPath(path.resolve("scripts/appliance/provision-debian-appliance.sh"));
   const logPath = `${fixtureRoot}/provision.log`;
+  const provisionArguments = `${shellQuote(provisioner)} ${shellQuote(wslArchive)} ${shellQuote(releaseSha)} ${extraArguments.map(shellQuote).join(" ")}`;
+  let provisionCommand = `bash ${provisionArguments}`;
+  if (realOwnership) {
+    provisionCommand = [
+      `cp -- /etc/group ${shellQuote(`${fixtureRoot}/group`)}`,
+      `printf '%s\\n' 'palziv:x:45678:' >> ${shellQuote(`${fixtureRoot}/group`)}`,
+      `unshare --mount --propagation private bash -c ${shellQuote(`mount --bind ${shellQuote(`${fixtureRoot}/group`)} /etc/group; exec bash ${provisionArguments}`)}`
+    ].join("\n");
+  }
   const invoked = await runWsl([
     `export PALZIV_APPLIANCE_ROOT=${shellQuote(fixtureRoot)}`,
     `export PALZIV_APPLIANCE_TEST_LOG=${shellQuote(logPath)}`,
     `export PATH=${shellQuote(`${toWslPath(binRoot)}:/usr/bin:/bin`)}`,
-    `bash ${shellQuote(provisioner)} ${shellQuote(wslArchive)} ${shellQuote(releaseSha)} ${extraArguments.map(shellQuote).join(" ")}`
+    provisionCommand
   ].join("\n"), 15000);
 
   const readLinux = async (candidate) => {
@@ -223,7 +233,8 @@ async function runBashControllerHarness({
   precreateCacheImage,
   precreateSeed = false,
   unownedPid = "",
-  bootOnly = true
+  bootOnly = true,
+  controllerWithoutProvisioner = false
 } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-bash-"));
   const repository = path.join(base, "repository");
@@ -445,7 +456,14 @@ int main(int argc, char **argv) {
   const compile = await runWsl(`cc -O2 -Wall -Wextra -o '${wslBase}/bin/qemu-system-x86_64' '${wslBase}/fixture/qemu-fixture.c'`);
   assert.equal(compile.code, 0, compile.output);
 
-  const controller = toWslPath(path.resolve("scripts/appliance/build-local-debian-appliance.sh"));
+  let controllerPath = path.resolve("scripts/appliance/build-local-debian-appliance.sh");
+  if (controllerWithoutProvisioner) {
+    const controllerOnlyRoot = path.join(base, "controller-only");
+    await mkdir(controllerOnlyRoot);
+    controllerPath = path.join(controllerOnlyRoot, "build-local-debian-appliance.sh");
+    await writeFile(controllerPath, await readFile(path.resolve("scripts/appliance/build-local-debian-appliance.sh")));
+  }
+  const controller = toWslPath(controllerPath);
   const wslRepository = toWslPath(repository);
   const wslBuildRoot = toWslPath(buildRoot);
   const shellQuote = (value) => `'${String(value).replaceAll("'", `'"'"'`)}'`;
@@ -808,6 +826,20 @@ test("guest provisioning executes the release-owned Linux contract without produ
   }
 });
 
+test("guest provisioning applies real root and palziv ownership in an isolated mount fixture", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runProvisioningHarness({ realOwnership: true });
+  try {
+    assert.equal(harness.result.code, 0, harness.result.output);
+    const ownership = await runWsl(`stat -Lc '%u:%g:%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/palziv.env`)}; stat -Lc '%u:%g:%a' ${shellQuote(`${harness.fixtureRoot}/etc/palziv/migration-age.key`)}`);
+    assert.equal(ownership.code, 0, ownership.output);
+    assert.equal(ownership.output, "0:45678:640\n0:0:600\n");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
 test("guest provisioning rejects invalid identity, extra inputs, and every unsafe archive member before helper execution", {
   skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
 }, async (t) => {
@@ -897,16 +929,22 @@ test("WSL controller provisions only outside boot-only mode over pinned SSH and 
       const snapshotStage = `/var/tmp/palziv-appliance-stage-fixture-${snapshotFixtureId}`;
       const snapshotMarker = `/tmp/palziv-appliance-snapshot-marker-${snapshotFixtureId}`;
       t.after(async () => {
-        await runWsl(`rm -rf -- ${shellQuote(snapshotUpload)} ${shellQuote(`${snapshotUpload}-bad`)} ${shellQuote(snapshotStage)} ${shellQuote(`${snapshotStage}-bad`)}; rm -f -- ${shellQuote(snapshotMarker)} ${shellQuote(`${snapshotMarker}-bad`)}`);
+        await runWsl(`rm -rf -- ${shellQuote(snapshotUpload)} ${shellQuote(`${snapshotUpload}-bad`)} ${shellQuote(`${snapshotUpload}-substituted`)} ${shellQuote(snapshotStage)} ${shellQuote(`${snapshotStage}-bad`)} ${shellQuote(`${snapshotStage}-substituted`)}; rm -f -- ${shellQuote(snapshotMarker)} ${shellQuote(`${snapshotMarker}-bad`)} ${shellQuote(`${snapshotMarker}-substituted`)}`);
       });
       await writeFile(snapshotScriptPath, snapshotScript);
       await writeFile(snapshotProvisionerPath, String.raw`#!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s|%s|%s|%s\n' "$1" "$2" "$(stat -Lc '%u:%a' -- "$0")" "$(stat -Lc '%u:%a' -- "$1")" > "$PALZIV_SNAPSHOT_MARKER"
+if [[ -n "${"$"}{PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD:-}" ]]; then
+  if [[ -d "$PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD" ]]; then rmdir -- "$PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD"; fi
+  install -d -m 0700 -- "$PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD"
+  chown 65534:65534 "$PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD"
+  printf '%s\n' 'preserve-upload-replacement' > "$PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD/operator-marker.txt"
+fi
 `);
       const snapshotReleaseDigest = sha256(await readFile(path.join(harness.buildRoot, "project-a-release.tar")));
       const snapshotProvisionerDigest = sha256(await readFile(snapshotProvisionerPath));
-      const setupSnapshotFixture = async (upload, stage) => runWsl(`mkdir -m 0700 -- ${shellQuote(upload)}; mkdir -m 0700 -- ${shellQuote(stage)}; chown root:root ${shellQuote(stage)}; cp -- ${shellQuote(toWslPath(path.join(harness.buildRoot, "project-a-release.tar")))} ${shellQuote(`${upload}/project-a-release.tar`)}; cp -- ${shellQuote(toWslPath(snapshotProvisionerPath))} ${shellQuote(`${upload}/provision-debian-appliance.sh`)}`);
+      const setupSnapshotFixture = async (upload, stage) => runWsl(`mkdir -m 0700 -- ${shellQuote(upload)}; chown 65534:65534 ${shellQuote(upload)}; mkdir -m 0700 -- ${shellQuote(stage)}; chown root:root ${shellQuote(stage)}; cp -- ${shellQuote(toWslPath(path.join(harness.buildRoot, "project-a-release.tar")))} ${shellQuote(`${upload}/project-a-release.tar`)}; cp -- ${shellQuote(toWslPath(snapshotProvisionerPath))} ${shellQuote(`${upload}/provision-debian-appliance.sh`)}`);
       const validSetup = await setupSnapshotFixture(snapshotUpload, snapshotStage);
       assert.equal(validSetup.code, 0, validSetup.output);
       const snapshotRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(snapshotMarker)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(snapshotUpload)} ${shellQuote(snapshotStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
@@ -924,6 +962,17 @@ printf '%s|%s|%s|%s\n' "$1" "$2" "$(stat -Lc '%u:%a' -- "$0")" "$(stat -Lc '%u:%
       assert.notEqual(rejectedSnapshot.code, 0);
       const rejectionEvidence = await runWsl(`test ! -e ${shellQuote(badMarker)}; test ! -e ${shellQuote(badUpload)}; test ! -e ${shellQuote(badStage)}; rm -f -- ${shellQuote(snapshotMarker)}`);
       assert.equal(rejectionEvidence.code, 0, rejectionEvidence.output);
+
+      const substitutedUpload = `${snapshotUpload}-substituted`;
+      const substitutedStage = `${snapshotStage}-substituted`;
+      const substitutedMarker = `${snapshotMarker}-substituted`;
+      const substitutedSetup = await setupSnapshotFixture(substitutedUpload, substitutedStage);
+      assert.equal(substitutedSetup.code, 0, substitutedSetup.output);
+      const substitutedRun = await runWsl(`export PALZIV_SNAPSHOT_MARKER=${shellQuote(substitutedMarker)}; export PALZIV_SNAPSHOT_SUBSTITUTE_UPLOAD=${shellQuote(substitutedUpload)}; bash ${shellQuote(toWslPath(snapshotScriptPath))} ${shellQuote(substitutedUpload)} ${shellQuote(substitutedStage)} ${snapshotReleaseDigest} ${snapshotProvisionerDigest} ${RELEASE_SHA}`);
+      assert.equal(substitutedRun.code, 0, substitutedRun.output);
+      const substitutedEvidence = await runWsl(`test \"$(cat -- ${shellQuote(`${substitutedUpload}/operator-marker.txt`)})\" = preserve-upload-replacement; stat -Lc '%u:%a' ${shellQuote(substitutedUpload)}; test ! -e ${shellQuote(substitutedStage)}`);
+      assert.equal(substitutedEvidence.code, 0, substitutedEvidence.output);
+      assert.equal(substitutedEvidence.output, "65534:700\n");
       const transferOperations = (await harness.readLog("transfer-operations.log")).trim().split(/\r?\n/);
       assert.equal(transferOperations.length, 4);
       assert.match(transferOperations[0], /^ssh .*palziv-appliance-upload-/);
@@ -1479,6 +1528,19 @@ test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on
     const processCheck = await runWsl(`test ! -e /proc/${state.qemuPid}`);
     assert.equal(processCheck.code, 0, `owned QEMU PID ${state.qemuPid} remained alive`);
     assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL boot-only mode remains independent of the provisioning script", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness({ controllerWithoutProvisioner: true });
+  try {
+    assert.equal(harness.result.code, 0, harness.result.output);
+    assert.equal(JSON.parse(harness.result.output).classification, "boot-only");
+    assert.equal(await harness.readLog("scp.log"), "");
   } finally {
     await harness.cleanup();
   }
