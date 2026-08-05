@@ -3,7 +3,9 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdtemp,
+  mkdir,
   readFile,
+  readdir,
   rm,
   symlink,
   writeFile
@@ -43,6 +45,89 @@ function runProcess(command, args, timeoutMs = 2000) {
       resolve({ code, output });
     });
   });
+}
+
+function runPowerShell(args, { env = {} } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn("powershell.exe", args, {
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => resolve({ code: -1, stdout, stderr: `${stderr}${error.message}` }));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+
+async function runWindowsEntrypointHarness({ scenario = "preflight" } = {}) {
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-powershell-"));
+  const outputRoot = scenario === "existing-build"
+    ? path.join(base, "output-root")
+    : path.join(base, "not-created", "local-debian-appliance");
+  const buildId = "20260805T120000Z-aaaaaaaaaaaa";
+  const buildRoot = path.join(outputRoot, buildId);
+  const logPath = path.join(base, "wsl.log");
+  if (scenario === "existing-build") {
+    await mkdir(buildRoot, { recursive: true });
+    await writeFile(path.join(buildRoot, "operator-marker.txt"), "must survive\n");
+  }
+
+  const source = await readFile(
+    new URL("../scripts/appliance/build-local-debian-appliance.ps1", import.meta.url),
+    "utf8"
+  );
+  const invocationMarker = "Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot";
+  assert.equal(source.split(invocationMarker).length, 2, "entrypoint must expose one workflow invocation seam");
+  const harnessInvocation = String.raw`
+$fixtureRelease = {
+  param([string]$RepositoryRoot, [string]$FixtureReleaseRef)
+  if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'invalid-release') { return 'main' }
+  return ('a' * 40)
+}
+$fixtureFree = {
+  param([string]$FixtureOutputRoot)
+  if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'low-space') { return [uint64](20GB - 1) }
+  return [uint64](21GB)
+}
+$fixtureWsl = {
+  param([string]$Distribution, [string[]]$Arguments)
+  Add-Content -LiteralPath ${psQuote(logPath)} -Value ("$Distribution|" + ($Arguments -join '|'))
+  return @()
+}
+$fixtureBuildId = { return '20260805T120000Z-aaaaaaaaaaaa' }
+$fixturePreflight = $env:LOCAL_APPLIANCE_PS_SCENARIO -ne 'existing-build'
+Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$false -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWsl -GetBuildId $fixtureBuildId
+`;
+  const harnessPath = path.join(base, "build-local-debian-appliance.ps1");
+  await writeFile(harnessPath, source.replace(invocationMarker, harnessInvocation));
+  const result = await runPowerShell([
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    harnessPath
+  ], { env: { LOCAL_APPLIANCE_PS_SCENARIO: scenario } });
+  let operations = [];
+  try {
+    operations = (await readFile(logPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return {
+    base,
+    outputRoot,
+    buildRoot,
+    cleanup: () => rm(base, { recursive: true, force: true }),
+    operations,
+    result
+  };
 }
 
 async function writeFixture(root) {
@@ -193,5 +278,61 @@ test("artifact verifier rejects a linked build manifest before it can be derefer
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(fifo, { force: true });
+  }
+});
+
+test("Windows preflight returns bounded JSON without creating output or invoking the controller", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness();
+  try {
+    assert.equal(harness.result.code, 0, harness.result.stderr);
+    assert.equal(harness.result.stderr.trim(), "", harness.result.stderr);
+    assert.deepEqual(JSON.parse(harness.result.stdout), {
+      ok: true,
+      distribution: "Fixture-Ubuntu",
+      kvm: "available",
+      freeBytes: 21 * 1024 * 1024 * 1024,
+      releaseSha: RELEASE_SHA
+    });
+    await assert.rejects(readdir(harness.outputRoot), { code: "ENOENT" });
+    assert.deepEqual(harness.operations, ["Fixture-Ubuntu|test|-c|/dev/kvm"]);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("Windows entrypoint fails closed before WSL for an invalid release or insufficient space", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async (t) => {
+  for (const [scenario, expectedError] of [
+    ["invalid-release", /ReleaseRef did not resolve/i],
+    ["low-space", /At least 20 GiB/i]
+  ]) {
+    await t.test(scenario, async () => {
+      const harness = await runWindowsEntrypointHarness({ scenario });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.match(harness.result.stderr, expectedError);
+        assert.deepEqual(harness.operations, []);
+        await assert.rejects(readdir(harness.outputRoot), { code: "ENOENT" });
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+});
+
+test("Windows entrypoint preserves an existing build directory instead of clobbering it", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness({ scenario: "existing-build" });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.match(harness.result.stderr, /Build directory already exists/i);
+    assert.equal(await readFile(path.join(harness.buildRoot, "operator-marker.txt"), "utf8"), "must survive\n");
+    assert.deepEqual(harness.operations, ["Fixture-Ubuntu|test|-c|/dev/kvm"]);
+  } finally {
+    await harness.cleanup();
   }
 });
