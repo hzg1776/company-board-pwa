@@ -46,7 +46,7 @@ function Invoke-WslRoot {
     [string]$WslExecutable = 'wsl.exe'
   )
 
-  $result = & $WslExecutable --distribution $Distribution --user root -- @Arguments
+  $result = & $WslExecutable --distribution $Distribution --user root --exec @Arguments
   if ($LASTEXITCODE -ne 0) { throw "WSL command failed: $($Arguments -join ' ')" }
   return $result
 }
@@ -89,7 +89,8 @@ function Resolve-ArtifactOutputRoot {
 
 function New-LocalApplianceBuildId {
   param([string]$ReleaseSha)
-  return "$(Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ')-$($ReleaseSha.Substring(0, 12))"
+  $utcTimestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+  return "$utcTimestamp-$($ReleaseSha.Substring(0, 12))"
 }
 
 function Export-ReleaseTar {
@@ -111,7 +112,8 @@ function ConvertTo-WslAbsolutePath {
     [string]$WslExecutable
   )
 
-  $wslPath = ([string](& $InvokeWslRoot -Distribution $Distribution -Arguments @('wslpath', '-a', $WindowsPath) -WslExecutable $WslExecutable)).Trim()
+  $nativeWslInput = $WindowsPath.Replace('\', '/')
+  $wslPath = ([string](& $InvokeWslRoot -Distribution $Distribution -Arguments @('wslpath', '-a', $nativeWslInput) -WslExecutable $WslExecutable)).Trim()
   if ([string]::IsNullOrWhiteSpace($wslPath) -or -not $wslPath.StartsWith('/')) {
     throw "WSL did not return an absolute path for: $WindowsPath"
   }
@@ -168,7 +170,7 @@ function Invoke-LocalDebianAppliance {
   $buildPrivateKey = Join-Path $buildRoot 'build_ssh_ed25519'
   $buildPublicKey = "$buildPrivateKey.pub"
   $buildPrivateKeyWsl = ConvertTo-WslAbsolutePath $buildPrivateKey $WslDistribution $InvokeWslRoot $WslExecutable
-  $sshKeygenCommand = 'exec ssh-keygen -q -t ed25519 -N "" -f "$1"'
+  $sshKeygenCommand = 'eval $''exec ssh-keygen -q -t ed25519 -N \x22\x22 -f \x22\x241\x22'''
   & $InvokeWslRoot -Distribution $WslDistribution -Arguments @('bash', '-c', $sshKeygenCommand, 'build-key', $buildPrivateKeyWsl) -WslExecutable $WslExecutable | Out-Null
   if (-not (Test-Path -LiteralPath $buildPrivateKey -PathType Leaf) -or -not (Test-Path -LiteralPath $buildPublicKey -PathType Leaf)) {
     throw 'WSL did not create the ephemeral build SSH keypair.'
@@ -190,7 +192,32 @@ function Invoke-LocalDebianAppliance {
     '--build-public-key', $buildPublicKeyWsl
   )
   if ($BootOnly) { $controllerArguments += '--boot-only' }
-  & $InvokeWslRoot -Distribution $WslDistribution -Arguments $controllerArguments -WslExecutable $WslExecutable | Out-Null
+  $controllerLines = @(& $InvokeWslRoot -Distribution $WslDistribution -Arguments $controllerArguments -WslExecutable $WslExecutable)
+  if ($BootOnly) {
+    $controllerOutput = ($controllerLines -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($controllerOutput) -or $controllerOutput.Length -gt 512) {
+      throw 'Boot-only controller result was missing or exceeded its bounded contract.'
+    }
+    try {
+      $controllerResult = $controllerOutput | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      throw 'Boot-only controller result was not valid JSON.'
+    }
+    $expectedProperties = @('buildId', 'classification', 'ok', 'releaseSha', 'sshPort')
+    $actualProperties = @($controllerResult.PSObject.Properties.Name | Sort-Object)
+    if (($actualProperties -join ',') -ne ($expectedProperties -join ',')) {
+      throw 'Boot-only controller result did not match the bounded schema.'
+    }
+    if ($controllerResult.ok -ne $true -or
+        $controllerResult.classification -ne 'boot-only' -or
+        $controllerResult.buildId -ne $buildId -or
+        $controllerResult.releaseSha -ne $releaseSha -or
+        [int]$controllerResult.sshPort -lt 1 -or
+        [int]$controllerResult.sshPort -gt 65535) {
+      throw 'Boot-only controller result did not match this build.'
+    }
+    $controllerResult | ConvertTo-Json -Compress
+  }
 }
 
 Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot

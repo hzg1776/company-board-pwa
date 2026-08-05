@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  access,
   mkdtemp,
   mkdir,
   readFile,
@@ -25,6 +26,11 @@ import {
 const RELEASE_SHA = "a".repeat(40);
 const DISK_CONTENTS = "fixture-qcow2";
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+const sha512 = (value) => createHash("sha512").update(value).digest("hex");
+const BUILD_ID = "20260805T120000Z-aaaaaaaaaaaa";
+const BASE_IMAGE_NAME = "debian-13-genericcloud-amd64.qcow2";
+const BASE_IMAGE_CONTENTS = "official-debian-fixture\n";
+const SSH_KEYGEN_COMMAND = String.raw`eval $'exec ssh-keygen -q -t ed25519 -N \x22\x22 -f \x22\x241\x22'`;
 
 function runProcess(command, args, timeoutMs = 2000) {
   return new Promise((resolve, reject) => {
@@ -45,6 +51,267 @@ function runProcess(command, args, timeoutMs = 2000) {
       resolve({ code, output });
     });
   });
+}
+
+const toWslPath = (windowsPath) => {
+  const resolved = path.resolve(windowsPath);
+  const match = /^([A-Za-z]):[\\/](.*)$/.exec(resolved);
+  if (!match) throw new Error(`Expected an absolute Windows drive path: ${resolved}`);
+  return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+};
+
+async function pathExists(candidate) {
+  try {
+    await access(candidate);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function runWsl(command, timeoutMs = 10000) {
+  return runProcess("wsl.exe", [
+    "--distribution", "Ubuntu-24.04",
+    "--user", "root",
+    "--",
+    "bash", "-c", command
+  ], timeoutMs);
+}
+
+async function writeCommandFixture(binRoot, name, contents) {
+  await writeFile(path.join(binRoot, name), `#!/usr/bin/env bash\nset -Eeuo pipefail\n${contents}`);
+}
+
+async function runBashControllerHarness({
+  scenario = "success",
+  precreateCacheImage,
+  precreateSeed = false,
+  unownedPid = ""
+} = {}) {
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-bash-"));
+  const repository = path.join(base, "repository");
+  const outputRoot = path.join(repository, "artifacts", "local-debian-appliance");
+  const buildRoot = path.join(outputRoot, BUILD_ID);
+  const cacheRoot = path.join(outputRoot, ".cache");
+  const binRoot = path.join(base, "bin");
+  const fixtureRoot = path.join(base, "fixture");
+  const releaseTar = path.join(buildRoot, "project-a-release.tar");
+  const publicKey = path.join(buildRoot, "build_ssh_ed25519.pub");
+  await mkdir(binRoot, { recursive: true });
+  await mkdir(fixtureRoot, { recursive: true });
+  await mkdir(cacheRoot, { recursive: true });
+  await mkdir(buildRoot, { recursive: true });
+  await writeFile(releaseTar, "fixture release tar\n");
+  await writeFile(path.join(buildRoot, "build_ssh_ed25519"), "private fixture key\n");
+  await writeFile(publicKey, "ssh-ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE= fixture@local\n");
+  await writeFile(path.join(fixtureRoot, "base-image.source"), BASE_IMAGE_CONTENTS);
+  if (precreateCacheImage !== undefined) {
+    await writeFile(path.join(cacheRoot, BASE_IMAGE_NAME), precreateCacheImage);
+  }
+  if (precreateSeed) {
+    await mkdir(path.join(buildRoot, "seed"));
+    await writeFile(path.join(buildRoot, "seed", "operator-marker.txt"), "preserve\n");
+  }
+
+  await writeCommandFixture(binRoot, "apt-get", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/apt-get.log"
+exit 0
+`);
+  await writeCommandFixture(binRoot, "curl", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/curl.log"
+destination=''
+url="${"$"}{!#}"
+while (($#)); do
+  if [[ "$1" == '--output' ]]; then destination="$2"; shift 2; continue; fi
+  shift
+done
+[[ -n "$destination" ]]
+if [[ "$url" == */SHA512SUMS ]]; then
+  digest="$FIXTURE_IMAGE_SHA512"
+  [[ "$FIXTURE_SCENARIO" != 'bad-checksum' ]] || digest="$(printf '0%.0s' {1..128})"
+  printf '%s  %s\n' "$digest" '${BASE_IMAGE_NAME}' > "$destination"
+elif [[ "$url" == */${BASE_IMAGE_NAME} ]]; then
+  cp -- "$FIXTURE_ROOT/base-image.source" "$destination"
+else
+  printf 'unexpected URL: %s\n' "$url" >&2
+  exit 22
+fi
+`);
+  await writeCommandFixture(binRoot, "qemu-img", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/qemu-img.log"
+if [[ "$1" == 'create' ]]; then
+  destination="${"$"}{@: -2:1}"
+  : > "$destination"
+fi
+`);
+  await writeCommandFixture(binRoot, "cloud-localds", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/cloud-localds.log"
+: > "$1"
+`);
+  await writeCommandFixture(binRoot, "ss", String.raw`
+printf 'LISTEN 0 128 127.0.0.1:22000 0.0.0.0:*\n'
+if [[ -s "$FIXTURE_ROOT/qemu.port" && "$FIXTURE_SCENARIO" != 'no-listener' ]]; then
+  port="$(<"$FIXTURE_ROOT/qemu.port")"
+  printf 'LISTEN 0 128 127.0.0.1:%s 0.0.0.0:*\n' "$port"
+fi
+`);
+  await writeCommandFixture(binRoot, "ssh-keyscan", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/ssh-keyscan.log"
+[[ "$FIXTURE_SCENARIO" != 'ssh-timeout' ]] || exit 1
+port=''
+while (($#)); do
+  if [[ "$1" == '-p' ]]; then port="$2"; shift 2; continue; fi
+  shift
+done
+printf '[127.0.0.1]:%s ssh-ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=\n' "$port"
+`);
+  await writeCommandFixture(binRoot, "ssh", String.raw`
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/ssh.log"
+pid="$(<"$FIXTURE_ROOT/qemu.pid")"
+kill -TERM "$pid"
+exit 0
+`);
+  const qemuSource = path.join(fixtureRoot, "qemu-fixture.c");
+  await writeFile(qemuSource, String.raw`#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static volatile sig_atomic_t running = 1;
+static void stop(int signal_number) { (void)signal_number; running = 0; }
+
+int main(int argc, char **argv) {
+  const char *root = getenv("FIXTURE_ROOT");
+  const char *scenario = getenv("FIXTURE_SCENARIO");
+  const char *unowned = getenv("FIXTURE_UNOWNED_PID");
+  char pidfile[4096] = {0};
+  char port[32] = {0};
+  char log_path[4096];
+  snprintf(log_path, sizeof(log_path), "%s/qemu.log", root);
+  FILE *log = fopen(log_path, "w");
+  if (!log) return 70;
+  for (int i = 1; i < argc; i++) {
+    fprintf(log, "%s\n", argv[i]);
+    if (strcmp(argv[i], "-pidfile") == 0 && i + 1 < argc) snprintf(pidfile, sizeof(pidfile), "%s", argv[i + 1]);
+    const char *forward = strstr(argv[i], "hostfwd=tcp:127.0.0.1:");
+    if (forward) sscanf(forward, "hostfwd=tcp:127.0.0.1:%31[0-9]", port);
+  }
+  fclose(log);
+  char port_path[4096];
+  snprintf(port_path, sizeof(port_path), "%s/qemu.port", root);
+  FILE *port_file = fopen(port_path, "w");
+  if (!port_file) return 71;
+  fprintf(port_file, "%s\n", port);
+  fclose(port_file);
+  if (scenario && strcmp(scenario, "unowned-pid") == 0) {
+    FILE *pid_file = fopen(pidfile, "w");
+    if (!pid_file) return 72;
+    fprintf(pid_file, "%s\n", unowned);
+    fclose(pid_file);
+    return 0;
+  }
+  int ready[2];
+  if (pipe(ready) != 0) return 73;
+  pid_t child = fork();
+  if (child < 0) return 74;
+  if (child > 0) {
+    close(ready[1]);
+    char byte;
+    if (read(ready[0], &byte, 1) != 1) return 75;
+    return 0;
+  }
+  close(ready[0]);
+  setsid();
+  signal(SIGTERM, stop);
+  signal(SIGINT, stop);
+  FILE *pid_file = fopen(pidfile, "w");
+  if (!pid_file) _exit(76);
+  fprintf(pid_file, "%ld\n", (long)getpid());
+  fclose(pid_file);
+  char pid_path[4096];
+  snprintf(pid_path, sizeof(pid_path), "%s/qemu.pid", root);
+  FILE *fixture_pid = fopen(pid_path, "w");
+  if (!fixture_pid) _exit(77);
+  fprintf(fixture_pid, "%ld\n", (long)getpid());
+  fclose(fixture_pid);
+  if (write(ready[1], "1", 1) != 1) _exit(78);
+  close(ready[1]);
+  while (running) pause();
+  return 0;
+}
+`);
+
+  const wslBase = toWslPath(base);
+  const compile = await runWsl(`cc -O2 -Wall -Wextra -o '${wslBase}/bin/qemu-system-x86_64' '${wslBase}/fixture/qemu-fixture.c'`);
+  assert.equal(compile.code, 0, compile.output);
+
+  const controller = toWslPath(path.resolve("scripts/appliance/build-local-debian-appliance.sh"));
+  const wslRepository = toWslPath(repository);
+  const wslBuildRoot = toWslPath(buildRoot);
+  const shellQuote = (value) => `'${String(value).replaceAll("'", `'"'"'`)}'`;
+  const wrapper = String.raw`#!/usr/bin/env bash
+set -Eeuo pipefail
+fixture_root=${shellQuote(toWslPath(fixtureRoot))}
+scenario=${shellQuote(scenario)}
+unowned_pid=${shellQuote(String(unownedPid || "-"))}
+if [[ "$scenario" == 'unowned-pid' && "$unowned_pid" == '-' ]]; then
+  sleep 60 >/dev/null 2>&1 &
+  unowned_pid="$!"
+  printf '%s\n' "$unowned_pid" > "$fixture_root/unowned.pid"
+fi
+export FIXTURE_ROOT="$fixture_root"
+export FIXTURE_SCENARIO="$scenario"
+export FIXTURE_UNOWNED_PID="$unowned_pid"
+export FIXTURE_IMAGE_SHA512='${sha512(BASE_IMAGE_CONTENTS)}'
+export PALZIV_APPLIANCE_SSH_TIMEOUT_SECONDS=2
+export PATH="$fixture_root/../bin:/usr/bin:/bin"
+if [[ "$scenario" == 'missing-kvm' ]]; then export PALZIV_APPLIANCE_KVM_DEVICE=/dev/palziv-missing-kvm; fi
+controller_args=(bash ${shellQuote(controller)} \
+  --repository ${shellQuote(wslRepository)} \
+  --build-root ${shellQuote(wslBuildRoot)} \
+  --release-tar ${shellQuote(`${wslBuildRoot}/project-a-release.tar`)} \
+  --release-sha ${shellQuote(RELEASE_SHA)} \
+  --build-id ${shellQuote(BUILD_ID)} \
+  --build-public-key ${shellQuote(`${wslBuildRoot}/build_ssh_ed25519.pub`)} \
+  --boot-only)
+if [[ "$scenario" == 'unowned-pid' ]]; then
+  set +e
+  "${"$"}{controller_args[@]}"
+  controller_status="$?"
+  set -e
+  if kill -0 "$unowned_pid" 2>/dev/null; then
+    printf 'alive\n' > "$fixture_root/unowned.alive"
+  fi
+  kill -TERM "$unowned_pid" 2>/dev/null || true
+  wait "$unowned_pid" 2>/dev/null || true
+  exit "$controller_status"
+fi
+exec "${"$"}{controller_args[@]}"
+`;
+  const wrapperPath = path.join(fixtureRoot, "run-controller.sh");
+  await writeFile(wrapperPath, wrapper);
+  const result = await runProcess("wsl.exe", [
+    "--distribution", "Ubuntu-24.04",
+    "--user", "root",
+    "--",
+    "bash", toWslPath(wrapperPath)
+  ], 15000);
+  const readOptional = async (candidate) => (await pathExists(candidate)) ? readFile(candidate, "utf8") : "";
+  return {
+    base,
+    repository,
+    outputRoot,
+    buildRoot,
+    cacheRoot,
+    fixtureRoot,
+    result,
+    readLog: (name) => readOptional(path.join(fixtureRoot, name)),
+    cleanup: () => rm(base, { recursive: true, force: true })
+  };
 }
 
 function runPowerShell(args, { env = {} } = {}) {
@@ -136,18 +403,33 @@ $fixtureWsl = {
     throw 'WSL command failed: test -c /dev/kvm'
   }
   if ($Arguments[0] -eq 'wslpath') {
+    if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'real-wsl-keygen') {
+      if ([System.IO.Path]::GetFileName($Arguments[2]) -eq 'build_ssh_ed25519') {
+        return ${psQuote(`${toWslPath(buildRoot)}/build_ssh_ed25519`)}
+      }
+    }
     return "/fixture/$([System.IO.Path]::GetFileName($Arguments[2]))"
   }
   if ($Arguments[0] -eq 'bash' -and $Arguments[1] -eq '-c') {
+    if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'real-wsl-keygen') {
+      $nativeResult = & wsl.exe --distribution $Distribution --user root --exec @Arguments
+      if ($LASTEXITCODE -ne 0) { throw 'Real WSL key generation failed.' }
+      return $nativeResult
+    }
     if ($Arguments -contains '') { throw 'Empty native argument reached WSL.' }
-    if ($Arguments.Count -ne 5 -or $Arguments[2] -ne 'exec ssh-keygen -q -t ed25519 -N "" -f "$1"' -or $Arguments[3] -ne 'build-key') {
+    if ($Arguments.Count -ne 5 -or $Arguments[3] -ne 'build-key') {
       throw 'SSH keygen WSL argument contract was malformed.'
     }
     Set-Content -LiteralPath (Join-Path ${psQuote(buildRoot)} 'build_ssh_ed25519') -Value 'private-fixture'
     Set-Content -LiteralPath (Join-Path ${psQuote(buildRoot)} 'build_ssh_ed25519.pub') -Value 'public-fixture'
     return @()
   }
-  if ($Arguments[0] -eq 'bash') { return @() }
+  if ($Arguments[0] -eq 'bash') {
+    if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'boot-only') {
+      return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":22001}'
+    }
+    return @()
+  }
   return @()
 }
 $fixtureBuildId = { return '20260805T120000Z-aaaaaaaaaaaa' }
@@ -156,14 +438,17 @@ $fixtureExport = {
   Set-Content -LiteralPath $ReleaseTar -Value "release=$ReleaseSha"
 }
 $fixturePreflight = $env:LOCAL_APPLIANCE_PS_SCENARIO -in @('preflight', 'invalid-release', 'low-space', 'relative-output', 'equal-artifacts', 'outside-output')
+$fixtureBootOnly = $env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'boot-only'
 $fixtureWslRunner = $fixtureWsl
 $fixtureWslExecutable = 'wsl.exe'
+$fixtureDistribution = 'Fixture-Ubuntu'
+if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'real-wsl-keygen') { $fixtureDistribution = 'Ubuntu-24.04' }
 if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'native-success') {
   $fixtureWslRunner = ${"$"}{function:Invoke-WslRoot}
   $fixtureWslExecutable = ${psQuote(nativeWslPath)}
-  Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$false -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWslRunner -WslExecutable $fixtureWslExecutable -GetBuildId $fixtureBuildId -ExportRelease $fixtureExport
+  Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$fixtureBootOnly -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWslRunner -WslExecutable $fixtureWslExecutable -GetBuildId $fixtureBuildId -ExportRelease $fixtureExport
 } else {
-  Invoke-LocalDebianAppliance -WslDistribution 'Fixture-Ubuntu' -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$false -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWslRunner -GetBuildId $fixtureBuildId -ExportRelease $fixtureExport
+  Invoke-LocalDebianAppliance -WslDistribution $fixtureDistribution -ReleaseRef 'fixture' -OutputRoot ${psQuote(outputRoot)} -PreflightOnly:$fixturePreflight -BootOnly:$fixtureBootOnly -RepositoryRoot ${psQuote(base)} -ResolveReleaseSha $fixtureRelease -GetFreeBytes $fixtureFree -InvokeWslRoot $fixtureWslRunner -GetBuildId $fixtureBuildId -ExportRelease $fixtureExport
 }
 `;
   const harnessPath = path.join(base, "build-local-debian-appliance.ps1");
@@ -462,7 +747,7 @@ test("Windows entrypoint exports only the release, creates the ephemeral key, an
       "Fixture-Ubuntu",
       "bash",
       "-c",
-      'exec ssh-keygen -q -t ed25519 -N "" -f "$1"',
+      SSH_KEYGEN_COMMAND,
       "build-key",
       "/fixture/build_ssh_ed25519"
     ]);
@@ -489,6 +774,122 @@ test("Windows entrypoint exports only the release, creates the ephemeral key, an
   }
 });
 
+test("Windows boot-only entrypoint validates and returns the controller's bounded result", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness({ scenario: "boot-only" });
+  try {
+    assert.equal(harness.result.code, 0, harness.result.stderr);
+    assert.equal(harness.result.stderr, "");
+    assert.deepEqual(JSON.parse(harness.result.stdout), {
+      ok: true,
+      classification: "boot-only",
+      buildId: BUILD_ID,
+      releaseSha: RELEASE_SHA,
+      sshPort: 22001
+    });
+    assert.equal(harness.result.stdout.length < 512, true);
+    assert.equal(harness.operations.at(-1).split("|").at(-1), "--boot-only");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("Windows PowerShell 5.1 build IDs use UTC without unsupported Get-Date parameters", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-build-id-"));
+  try {
+    const scriptRoot = path.join(base, "scripts", "appliance");
+    await mkdir(scriptRoot, { recursive: true });
+    const source = await readFile(
+      new URL("../scripts/appliance/build-local-debian-appliance.ps1", import.meta.url),
+      "utf8"
+    );
+    const invocationMarker = "Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot";
+    const harnessPath = path.join(scriptRoot, "build-id.ps1");
+    await writeFile(harnessPath, source.replace(invocationMarker, "New-LocalApplianceBuildId ('a' * 40)"));
+    const result = await runPowerShell([
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harnessPath
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.match(result.stdout.trim(), /^\d{8}T\d{6}Z-aaaaaaaaaaaa$/);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("Windows PowerShell 5.1 converts a real drive path through WSL without losing separators", {
+  skip: process.platform !== "win32" ? "PowerShell and WSL behavior harness runs on Windows." : false
+}, async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-wslpath-"));
+  try {
+    const scriptRoot = path.join(base, "scripts", "appliance");
+    await mkdir(scriptRoot, { recursive: true });
+    const source = await readFile(
+      new URL("../scripts/appliance/build-local-debian-appliance.ps1", import.meta.url),
+      "utf8"
+    );
+    const invocationMarker = "Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot";
+    const invocation = `ConvertTo-WslAbsolutePath ${psQuote(base)} 'Ubuntu-24.04' ${"$"}{function:Invoke-WslRoot} 'wsl.exe'`;
+    const harnessPath = path.join(scriptRoot, "wslpath.ps1");
+    await writeFile(harnessPath, source.replace(invocationMarker, invocation));
+    const result = await runPowerShell([
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harnessPath
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout.trim(), toWslPath(base));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("Windows PowerShell 5.1 preserves Bash positional arguments through real WSL exec", {
+  skip: process.platform !== "win32" ? "PowerShell and WSL behavior harness runs on Windows." : false
+}, async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-real-keygen-"));
+  try {
+    const scriptRoot = path.join(base, "scripts", "appliance");
+    await mkdir(scriptRoot, { recursive: true });
+    const source = await readFile(
+      new URL("../scripts/appliance/build-local-debian-appliance.ps1", import.meta.url),
+      "utf8"
+    );
+    const invocationMarker = "Invoke-LocalDebianAppliance -WslDistribution $WslDistribution -ReleaseRef $ReleaseRef -OutputRoot $OutputRoot -PreflightOnly:$PreflightOnly -BootOnly:$BootOnly -RepositoryRoot $repositoryRoot";
+    const marker = path.join(base, "positional-marker");
+    const command = 'exec touch $1';
+    const invocation = `Invoke-WslRoot -Distribution 'Ubuntu-24.04' -Arguments @('bash', '-c', ${psQuote(command)}, 'touch-marker', ${psQuote(toWslPath(marker))}) -WslExecutable 'wsl.exe'`;
+    const harnessPath = path.join(scriptRoot, "real-keygen.ps1");
+    await writeFile(harnessPath, source.replace(invocationMarker, invocation));
+    const result = await runPowerShell([
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harnessPath
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(await pathExists(marker), true);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("Windows PowerShell 5.1 creates the ephemeral key through real WSL without exposing an empty native argument", {
+  skip: process.platform !== "win32" ? "PowerShell and WSL behavior harness runs on Windows." : false
+}, async () => {
+  const harness = await runWindowsEntrypointHarness({ scenario: "real-wsl-keygen" });
+  try {
+    assert.equal(harness.result.code, 0, `${harness.result.stderr}\n${JSON.stringify(harness.operations)}`);
+    assert.equal(harness.result.stderr, "");
+    assert.equal(await pathExists(path.join(harness.buildRoot, "build_ssh_ed25519")), true);
+    assert.match(await readFile(path.join(harness.buildRoot, "build_ssh_ed25519.pub"), "utf8"), /^ssh-ed25519 /);
+    const keygenOperation = harness.operations.map((entry) => entry.split("|")).find((entry) => entry[1] === "bash" && entry[2] === "-c");
+    assert.ok(keygenOperation.every(Boolean), "PowerShell 5.1 must not pass an empty native argument");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
 test("Windows PowerShell 5.1 passes the SSH keygen shell contract to the native WSL executable without an empty argument", {
   skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
 }, async () => {
@@ -506,10 +907,10 @@ test("Windows PowerShell 5.1 passes the SSH keygen shell contract to the native 
       "Fixture-Ubuntu",
       "--user",
       "root",
-      "--",
+      "--exec",
       "bash",
       "-c",
-      'exec ssh-keygen -q -t ed25519 -N "" -f "$1"',
+      SSH_KEYGEN_COMMAND,
       "build-key",
       "/fixture/build_ssh_ed25519"
     ]);
@@ -518,4 +919,146 @@ test("Windows PowerShell 5.1 passes the SSH keygen shell contract to the native 
   } finally {
     await harness.cleanup();
   }
+});
+
+test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on loopback", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness();
+  try {
+    assert.equal(harness.result.code, 0, harness.result.output);
+    assert.ok(harness.result.output.length < 2048, "controller output must remain bounded");
+    const result = JSON.parse(harness.result.output);
+    assert.deepEqual(result, {
+      ok: true,
+      classification: "boot-only",
+      buildId: BUILD_ID,
+      releaseSha: RELEASE_SHA,
+      sshPort: 22001
+    });
+
+    assert.equal(await readFile(path.join(harness.cacheRoot, BASE_IMAGE_NAME), "utf8"), BASE_IMAGE_CONTENTS);
+    const qemuArguments = (await harness.readLog("qemu.log")).trim().split(/\r?\n/);
+    assert.ok(qemuArguments.includes("-accel") && qemuArguments.includes("kvm"));
+    assert.ok(qemuArguments.includes("-machine") && qemuArguments.includes("q35"));
+    assert.ok(qemuArguments.some((argument) => argument.includes("name=org.qemu.guest_agent.0")));
+    assert.ok(qemuArguments.includes("user,id=net0,hostfwd=tcp:127.0.0.1:22001-:22"));
+    assert.ok(qemuArguments.every((argument) => !argument.includes("hostfwd=tcp:0.0.0.0")));
+    const chardev = qemuArguments.find((argument) => argument.startsWith("socket,path="));
+    const qgaSocket = /path=([^,]+)/.exec(chardev)?.[1];
+    assert.ok(qgaSocket, "QEMU guest-agent socket path must be explicit");
+    assert.ok(Buffer.byteLength(qgaSocket) < 108, "QEMU guest-agent socket path must fit sockaddr_un");
+    const qemuImg = await harness.readLog("qemu-img.log");
+    assert.match(qemuImg, /create -f qcow2 -F qcow2 -b .*debian-13-genericcloud-amd64\.qcow2 .*work-disk\.qcow2 40G/);
+    assert.equal((await harness.readLog("apt-get.log")).trim(), [
+      "update",
+      "install -y ca-certificates cloud-image-utils curl jq openssh-client qemu-system-x86 qemu-utils"
+    ].join("\n"));
+    assert.match(await harness.readLog("ssh.log"), /StrictHostKeyChecking=yes/);
+    assert.match(await harness.readLog("ssh.log"), /UserKnownHostsFile=/);
+    assert.match(await readFile(path.join(harness.buildRoot, "known_hosts"), "utf8"), /^\[127\.0\.0\.1\]:22001 ssh-ed25519 /);
+
+    const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+    assert.equal(state.classification, "boot-only");
+    assert.equal(state.sshPort, 22001);
+    assert.match(state.workingDisk, /\/work\/work-disk\.qcow2$/);
+    assert.equal(state.qgaSocket, qgaSocket);
+    const processCheck = await runWsl(`test ! -e /proc/${state.qemuPid}`);
+    assert.equal(processCheck.code, 0, `owned QEMU PID ${state.qemuPid} remained alive`);
+    assert.equal(await pathExists(path.join(harness.buildRoot, `palziv-debian13-${RELEASE_SHA}.qcow2`)), false);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL controller preserves a bad download as partial and never promotes it", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness({ scenario: "bad-checksum" });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.ok(harness.result.output.length < 4096, "failure output must remain bounded");
+    assert.match(harness.result.output, /checksum|sha512/i);
+    assert.equal(await pathExists(path.join(harness.cacheRoot, BASE_IMAGE_NAME)), false);
+    const cacheEntries = await readdir(harness.cacheRoot);
+    const partials = cacheEntries.filter((name) => name.startsWith(`${BASE_IMAGE_NAME}.partial.`));
+    assert.equal(partials.length, 1);
+    assert.equal(await readFile(path.join(harness.cacheRoot, partials[0]), "utf8"), BASE_IMAGE_CONTENTS);
+    assert.equal(await harness.readLog("qemu.log"), "");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL controller rejects a corrupted cached image without overwriting it", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness({ precreateCacheImage: "tampered-cache\n" });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.match(harness.result.output, /checksum|sha512/i);
+    assert.equal(await readFile(path.join(harness.cacheRoot, BASE_IMAGE_NAME), "utf8"), "tampered-cache\n");
+    assert.equal(await harness.readLog("qemu.log"), "");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL controller fails before package installation when KVM is unavailable", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness({ scenario: "missing-kvm" });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.match(harness.result.output, /KVM is required/i);
+    assert.equal(await harness.readLog("apt-get.log"), "");
+    assert.equal(await harness.readLog("curl.log"), "");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL controller preserves pre-existing named children instead of clobbering them", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness({ precreateSeed: true });
+  try {
+    assert.notEqual(harness.result.code, 0);
+    assert.match(harness.result.output, /already exists|refusing to reuse/i);
+    assert.equal(await readFile(path.join(harness.buildRoot, "seed", "operator-marker.txt"), "utf8"), "preserve\n");
+    assert.equal(await harness.readLog("apt-get.log"), "");
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL controller cleans up only the QEMU process owned by its exact work disk", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  await t.test("owned timeout process is terminated", async () => {
+    const harness = await runBashControllerHarness({ scenario: "ssh-timeout" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.output, /SSH.*timed out/i);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      const processCheck = await runWsl(`test ! -e /proc/${state.qemuPid}`);
+      assert.equal(processCheck.code, 0, `owned QEMU PID ${state.qemuPid} remained alive`);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("unowned recorded PID is not signaled", async () => {
+    const harness = await runBashControllerHarness({ scenario: "unowned-pid" });
+    let unownedPid = "";
+    try {
+      unownedPid = (await harness.readLog("unowned.pid")).trim();
+      assert.match(unownedPid, /^\d+$/);
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.output, /owned QEMU process/i);
+      assert.equal(await harness.readLog("unowned.alive"), "alive\n", "unowned process was signaled");
+    } finally {
+      await harness.cleanup();
+    }
+  });
 });
