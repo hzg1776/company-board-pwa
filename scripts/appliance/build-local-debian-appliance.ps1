@@ -208,12 +208,20 @@ function Invoke-LocalDebianAppliance {
     if (($actualProperties -join ',') -ne ($expectedProperties -join ',')) {
       throw 'Boot-only controller result did not match the bounded schema.'
     }
+    $sshPortIsInteger = ($controllerResult.sshPort -is [int]) -or ($controllerResult.sshPort -is [long])
+    if ($controllerResult.ok -isnot [bool] -or
+        $controllerResult.classification -isnot [string] -or
+        $controllerResult.buildId -isnot [string] -or
+        $controllerResult.releaseSha -isnot [string] -or
+        -not $sshPortIsInteger) {
+      throw 'Boot-only controller result did not match the bounded schema.'
+    }
     if ($controllerResult.ok -ne $true -or
         $controllerResult.classification -ne 'boot-only' -or
         $controllerResult.buildId -ne $buildId -or
         $controllerResult.releaseSha -ne $releaseSha -or
-        [int]$controllerResult.sshPort -lt 1 -or
-        [int]$controllerResult.sshPort -gt 65535) {
+        $controllerResult.sshPort -lt 22000 -or
+        $controllerResult.sshPort -gt 42000) {
       throw 'Boot-only controller result did not match this build.'
     }
     $controllerResult | ConvertTo-Json -Compress

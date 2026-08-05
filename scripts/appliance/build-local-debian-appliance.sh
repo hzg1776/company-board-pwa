@@ -6,6 +6,7 @@ readonly IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/${IMAGE_
 readonly SUMS_URL='https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS'
 readonly DISK_VIRTUAL_SIZE='40G'
 readonly DEFAULT_SSH_TIMEOUT_SECONDS=300
+readonly DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS=30
 readonly SHUTDOWN_TIMEOUT_SECONDS=180
 
 REPOSITORY=''
@@ -18,6 +19,10 @@ BOOT_ONLY=0
 QEMU_PID=''
 WORK_DISK=''
 QGA_SOCKET=''
+QGA_RUNTIME_DIR=''
+QGA_RUNTIME_ID=''
+QGA_RUNTIME_OWNED=0
+EXPECTED_OS_DRIVE_ARGUMENT=''
 
 report_error() {
   local rc=$?
@@ -67,6 +72,8 @@ download_to_partial() {
   local url="$1" destination="$2" partial="${2}.partial.$$"
   reserve_empty_file "$partial"
   curl --fail --location --silent --show-error \
+    --connect-timeout 15 --max-time 900 \
+    --retry 3 --retry-all-errors --retry-max-time 120 \
     --proto '=https' --proto-redir '=https' \
     --output "$partial" "$url"
   printf '%s\n' "$partial"
@@ -82,19 +89,26 @@ json_escape() {
 process_is_alive() {
   local pid="$1" state
   [[ -r "/proc/${pid}/stat" ]] || return 1
-  read -r _ _ state _ < "/proc/${pid}/stat" || return 1
+  read -r _ _ state _ 2>/dev/null < "/proc/${pid}/stat" || return 1
   [[ "$state" != 'Z' ]]
 }
 
 is_owned_qemu_process() {
-  local pid="$1" actual_exe expected_exe cmdline
+  local pid="$1" actual_exe expected_exe argument previous='' found=0
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   process_is_alive "$pid" || return 1
   actual_exe="$(readlink -f -- "/proc/${pid}/exe" 2>/dev/null)" || return 1
   expected_exe="$(readlink -f -- "$(command -v qemu-system-x86_64)")" || return 1
   [[ "$actual_exe" == "$expected_exe" ]] || return 1
-  cmdline="$(tr '\0' '\n' < "/proc/${pid}/cmdline")" || return 1
-  [[ "$cmdline" == *"$WORK_DISK"* ]]
+  [[ -n "$EXPECTED_OS_DRIVE_ARGUMENT" ]] || return 1
+  while IFS= read -r -d '' argument; do
+    if [[ "$previous" == '-drive' && "$argument" == "$EXPECTED_OS_DRIVE_ARGUMENT" ]]; then
+      found=1
+      break
+    fi
+    previous="$argument"
+  done < "/proc/${pid}/cmdline"
+  [[ "$found" -eq 1 ]]
 }
 
 stop_owned_qemu() {
@@ -111,11 +125,20 @@ stop_owned_qemu() {
 }
 
 cleanup() {
-  local rc=$?
+  local rc=$? actual_id actual_mode actual_uid actual_path
   trap - EXIT ERR
   stop_owned_qemu
-  if [[ -n "${QGA_SOCKET:-}" && -S "$QGA_SOCKET" && ! -L "$QGA_SOCKET" ]]; then
-    rm -- "$QGA_SOCKET"
+  if [[ "$QGA_RUNTIME_OWNED" -eq 1 && -n "$QGA_RUNTIME_DIR" && -d "$QGA_RUNTIME_DIR" && ! -L "$QGA_RUNTIME_DIR" ]]; then
+    actual_path="$(realpath -e -- "$QGA_RUNTIME_DIR" 2>/dev/null || true)"
+    actual_id="$(stat -Lc '%d:%i' -- "$QGA_RUNTIME_DIR" 2>/dev/null || true)"
+    actual_uid="$(stat -Lc '%u' -- "$QGA_RUNTIME_DIR" 2>/dev/null || true)"
+    actual_mode="$(stat -Lc '%a' -- "$QGA_RUNTIME_DIR" 2>/dev/null || true)"
+    if [[ "$actual_path" == "$QGA_RUNTIME_DIR" && "$actual_id" == "$QGA_RUNTIME_ID" && "$actual_uid" == '0' && "$actual_mode" == '700' ]]; then
+      if [[ -S "$QGA_SOCKET" && ! -L "$QGA_SOCKET" ]]; then
+        rm -- "$QGA_SOCKET"
+      fi
+      rmdir -- "$QGA_RUNTIME_DIR" 2>/dev/null || true
+    fi
   fi
   exit "$rc"
 }
@@ -144,6 +167,12 @@ listener_is_loopback_only() {
     esac
   done <<< "$output"
   [[ "$found" -eq 1 ]]
+}
+
+monotonic_seconds() {
+  local uptime
+  read -r uptime _ < /proc/uptime
+  printf '%s\n' "${uptime%%.*}"
 }
 
 write_build_state() {
@@ -198,12 +227,12 @@ readonly WORK_ROOT="${BUILD_ROOT}/work"
 readonly SEED_ROOT="${BUILD_ROOT}/seed"
 readonly SUMS_FILE="${BUILD_ROOT}/SHA512SUMS"
 readonly WORK_DISK="${WORK_ROOT}/work-disk.qcow2"
+readonly BUILD_BASE_IMAGE="${WORK_ROOT}/base-image.qcow2"
 readonly SEED_IMAGE="${WORK_ROOT}/seed.img"
 readonly CONSOLE_LOG="${BUILD_ROOT}/qemu-console.log"
 readonly QEMU_PID_FILE="${BUILD_ROOT}/qemu.pid"
 readonly BUILD_STATE="${BUILD_ROOT}/BUILD-STATE.json"
 readonly KNOWN_HOSTS="${BUILD_ROOT}/known_hosts"
-readonly QGA_SOCKET="/tmp/palziv-qga-${BUILD_ID}.sock"
 
 require_unlinked_existing_path 'Output root' "$OUTPUT_ROOT" directory
 if [[ -e "$CACHE_ROOT" || -L "$CACHE_ROOT" ]]; then
@@ -215,9 +244,7 @@ fi
 for child in "$WORK_ROOT" "$SEED_ROOT" "$SUMS_FILE" "$CONSOLE_LOG" "$QEMU_PID_FILE" "$BUILD_STATE" "$KNOWN_HOSTS"; do
   [[ ! -e "$child" && ! -L "$child" ]] || fail "Path already exists; refusing to reuse: $child"
 done
-[[ "$(printf '%s' "$QGA_SOCKET" | wc -c)" -lt 108 ]] || fail 'QEMU guest-agent socket path exceeds sockaddr_un.'
-[[ ! -e "$QGA_SOCKET" && ! -L "$QGA_SOCKET" ]] || fail "Path already exists; refusing to reuse: $QGA_SOCKET"
-
+[[ -c /dev/kvm ]] || fail 'KVM is required at /dev/kvm.'
 readonly KVM_DEVICE="${PALZIV_APPLIANCE_KVM_DEVICE:-/dev/kvm}"
 [[ -c "$KVM_DEVICE" ]] || fail 'KVM is required at /dev/kvm.'
 export DEBIAN_FRONTEND=noninteractive
@@ -226,6 +253,15 @@ apt-get install -y ca-certificates cloud-image-utils curl jq openssh-client qemu
 
 umask 077
 mkdir -- "$WORK_ROOT" "$SEED_ROOT"
+QGA_RUNTIME_DIR="$(mktemp -d /tmp/palziv-qga.XXXXXXXX)"
+chmod 0700 -- "$QGA_RUNTIME_DIR"
+QGA_RUNTIME_DIR="$(realpath -e -- "$QGA_RUNTIME_DIR")"
+[[ ! -L "$QGA_RUNTIME_DIR" ]] || fail 'QEMU guest-agent runtime directory must not be a symbolic link.'
+[[ "$(stat -Lc '%u:%a' -- "$QGA_RUNTIME_DIR")" == '0:700' ]] || fail 'QEMU guest-agent runtime directory ownership or mode was unsafe.'
+QGA_RUNTIME_ID="$(stat -Lc '%d:%i' -- "$QGA_RUNTIME_DIR")"
+QGA_RUNTIME_OWNED=1
+QGA_SOCKET="${QGA_RUNTIME_DIR}/qga.sock"
+[[ "$(printf '%s' "$QGA_SOCKET" | wc -c)" -lt 108 ]] || fail 'QEMU guest-agent socket path exceeds sockaddr_un.'
 
 sums_partial="$(download_to_partial "$SUMS_URL" "$SUMS_FILE")"
 expected_line="$(grep -E "^[a-f0-9]{128}  ${IMAGE_NAME}$" "$sums_partial" || true)"
@@ -246,7 +282,19 @@ else
   publish_noclobber "$image_partial" "$BASE_IMAGE"
 fi
 
-qemu-img create -f qcow2 -F qcow2 -b "$BASE_IMAGE" "$WORK_DISK" "$DISK_VIRTUAL_SIZE" >/dev/null
+base_snapshot_partial="${BUILD_BASE_IMAGE}.partial.$$"
+reserve_empty_file "$base_snapshot_partial"
+cp --reflink=never -- "$BASE_IMAGE" "$base_snapshot_partial"
+publish_noclobber "$base_snapshot_partial" "$BUILD_BASE_IMAGE"
+chmod 0444 -- "$BUILD_BASE_IMAGE"
+snapshot_checksum="${WORK_ROOT}/${IMAGE_NAME}.snapshot.sha512"
+snapshot_checksum_partial="${snapshot_checksum}.partial.$$"
+reserve_empty_file "$snapshot_checksum_partial"
+printf '%s  %s\n' "$IMAGE_SHA512" "$(basename -- "$BUILD_BASE_IMAGE")" > "$snapshot_checksum_partial"
+(cd -- "$WORK_ROOT" && sha512sum --check --strict "$(basename -- "$snapshot_checksum_partial")" >/dev/null) || fail 'Build-local Debian image snapshot SHA-512 checksum failed.'
+publish_noclobber "$snapshot_checksum_partial" "$snapshot_checksum"
+
+qemu-img create -f qcow2 -F qcow2 -b "$BUILD_BASE_IMAGE" "$WORK_DISK" "$DISK_VIRTUAL_SIZE" >/dev/null
 
 public_key="$(<"$BUILD_PUBLIC_KEY")"
 [[ "$(wc -l < "$BUILD_PUBLIC_KEY")" -eq 1 ]] || fail 'Build public key must contain exactly one line.'
@@ -268,6 +316,7 @@ printf '%s\n' \
 cloud-localds "$SEED_IMAGE" "$SEED_ROOT/user-data" "$SEED_ROOT/meta-data" >/dev/null
 
 readonly SSH_PORT="$(choose_unused_port)"
+readonly EXPECTED_OS_DRIVE_ARGUMENT="file=${WORK_DISK},if=none,format=qcow2,id=osdisk"
 qemu-system-x86_64 \
   -accel kvm \
   -machine q35 \
@@ -275,7 +324,7 @@ qemu-system-x86_64 \
   -smp 2 \
   -m 4096 \
   -device virtio-scsi-pci,id=scsi0 \
-  -drive "file=${WORK_DISK},if=none,format=qcow2,id=osdisk" \
+  -drive "$EXPECTED_OS_DRIVE_ARGUMENT" \
   -device scsi-hd,drive=osdisk \
   -drive "file=${SEED_IMAGE},if=virtio,format=raw,readonly=on" \
   -device virtio-serial-pci \
@@ -299,15 +348,21 @@ write_build_state 'booting'
 ssh_timeout="${PALZIV_APPLIANCE_SSH_TIMEOUT_SECONDS:-$DEFAULT_SSH_TIMEOUT_SECONDS}"
 [[ "$ssh_timeout" =~ ^[1-9][0-9]{0,2}$ && "$ssh_timeout" -le "$DEFAULT_SSH_TIMEOUT_SECONDS" ]] || fail 'SSH timeout must be between 1 and 300 seconds.'
 host_key=''
-for ((attempt=0; attempt<ssh_timeout; attempt++)); do
+ssh_deadline=$(( $(monotonic_seconds) + ssh_timeout ))
+while (( $(monotonic_seconds) < ssh_deadline )); do
   is_owned_qemu_process "$QEMU_PID" || fail 'Owned QEMU process exited before SSH became ready.'
   if listener_is_loopback_only; then
-    host_key="$(ssh-keyscan -T 5 -p "$SSH_PORT" 127.0.0.1 2>/dev/null | head -n 1 || true)"
+    remaining_seconds=$(( ssh_deadline - $(monotonic_seconds) ))
+    (( remaining_seconds > 0 )) || break
+    scan_timeout="$remaining_seconds"
+    (( scan_timeout <= 5 )) || scan_timeout=5
+    host_key="$(timeout --signal=TERM --kill-after=1s "${remaining_seconds}s" \
+      ssh-keyscan -T "$scan_timeout" -p "$SSH_PORT" 127.0.0.1 2>/dev/null | head -n 1 || true)"
     if [[ "$host_key" =~ ^\[127\.0\.0\.1\]:${SSH_PORT}\ ssh-(ed25519|rsa|ecdsa-)\  ]]; then
       break
     fi
   fi
-  sleep 1
+  (( $(monotonic_seconds) < ssh_deadline )) && sleep 1
 done
 [[ -n "$host_key" ]] || fail 'SSH readiness timed out after the bounded wait.'
 
@@ -316,15 +371,20 @@ reserve_empty_file "$known_hosts_partial"
 printf '%s\n' "$host_key" > "$known_hosts_partial"
 publish_noclobber "$known_hosts_partial" "$KNOWN_HOSTS"
 
-set +e
-ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
-  -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
-  -o StrictHostKeyChecking=yes \
-  -o BatchMode=yes \
-  -o ConnectTimeout=10 \
-  palziv-build@127.0.0.1 'sudo systemctl poweroff' >/dev/null 2>&1
-ssh_status=$?
-set -e
+shutdown_ssh_timeout="${PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS:-$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS}"
+[[ "$shutdown_ssh_timeout" =~ ^[1-9][0-9]{0,2}$ && "$shutdown_ssh_timeout" -le "$DEFAULT_SHUTDOWN_SSH_TIMEOUT_SECONDS" ]] || fail 'Shutdown SSH timeout must be between 1 and 30 seconds.'
+if timeout --signal=TERM --kill-after=1s "${shutdown_ssh_timeout}s" \
+    ssh -p "$SSH_PORT" -i "$BUILD_PRIVATE_KEY" \
+    -o "UserKnownHostsFile=${KNOWN_HOSTS}" \
+    -o StrictHostKeyChecking=yes \
+    -o BatchMode=yes \
+    -o ConnectTimeout=10 \
+    palziv-build@127.0.0.1 'sudo systemctl poweroff' >/dev/null 2>&1; then
+  ssh_status=0
+else
+  ssh_status=$?
+fi
+[[ "$ssh_status" -ne 124 && "$ssh_status" -ne 137 ]] || fail 'Boot-only guest shutdown SSH command timed out.'
 [[ "$ssh_status" -eq 0 || "$ssh_status" -eq 255 ]] || fail 'Boot-only guest shutdown command failed.'
 
 for ((attempt=0; attempt<SHUTDOWN_TIMEOUT_SECONDS; attempt++)); do

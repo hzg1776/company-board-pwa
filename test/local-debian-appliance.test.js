@@ -139,6 +139,9 @@ else
 fi
 `);
   await writeCommandFixture(binRoot, "qemu-img", String.raw`
+if [[ "$FIXTURE_SCENARIO" == 'mutate-cache-after-snapshot' ]]; then
+  printf 'mutated-after-snapshot\n' > "$FIXTURE_CACHE_ROOT/${BASE_IMAGE_NAME}"
+fi
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/qemu-img.log"
 if [[ "$1" == 'create' ]]; then
   destination="${"$"}{@: -2:1}"
@@ -159,6 +162,7 @@ fi
   await writeCommandFixture(binRoot, "ssh-keyscan", String.raw`
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/ssh-keyscan.log"
 [[ "$FIXTURE_SCENARIO" != 'ssh-timeout' ]] || exit 1
+if [[ "$FIXTURE_SCENARIO" == 'slow-keyscan' ]]; then sleep 3; fi
 port=''
 while (($#)); do
   if [[ "$1" == '-p' ]]; then port="$2"; shift 2; continue; fi
@@ -168,6 +172,7 @@ printf '[127.0.0.1]:%s ssh-ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=\
 `);
   await writeCommandFixture(binRoot, "ssh", String.raw`
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/ssh.log"
+if [[ "$FIXTURE_SCENARIO" == 'hanging-ssh' ]]; then sleep 3; fi
 pid="$(<"$FIXTURE_ROOT/qemu.pid")"
 kill -TERM "$pid"
 exit 0
@@ -185,6 +190,12 @@ static volatile sig_atomic_t running = 1;
 static void stop(int signal_number) { (void)signal_number; running = 0; }
 
 int main(int argc, char **argv) {
+  if (argc > 1 && strcmp(argv[1], "--fixture-unrelated") == 0) {
+    signal(SIGTERM, stop);
+    signal(SIGINT, stop);
+    while (running) pause();
+    return 0;
+  }
   const char *root = getenv("FIXTURE_ROOT");
   const char *scenario = getenv("FIXTURE_SCENARIO");
   const char *unowned = getenv("FIXTURE_UNOWNED_PID");
@@ -212,6 +223,36 @@ int main(int argc, char **argv) {
     if (!pid_file) return 72;
     fprintf(pid_file, "%s\n", unowned);
     fclose(pid_file);
+    return 0;
+  }
+  if (scenario && strcmp(scenario, "substring-drive-pid") == 0) {
+    const char *drive = "";
+    for (int i = 1; i < argc; i++) {
+      if (strcmp(argv[i], "-drive") == 0 && i + 1 < argc && strstr(argv[i + 1], "id=osdisk")) {
+        drive = argv[i + 1];
+        break;
+      }
+    }
+    char substring_argument[8192];
+    snprintf(substring_argument, sizeof(substring_argument), "unrelated-prefix:%s:unrelated-suffix", drive);
+    pid_t child = fork();
+    if (child < 0) return 79;
+    if (child == 0) {
+      setsid();
+      char *child_argv[] = { argv[0], "--fixture-unrelated", substring_argument, NULL };
+      execv("/proc/self/exe", child_argv);
+      _exit(80);
+    }
+    FILE *pid_file = fopen(pidfile, "w");
+    if (!pid_file) return 81;
+    fprintf(pid_file, "%ld\n", (long)child);
+    fclose(pid_file);
+    char pid_path[4096];
+    snprintf(pid_path, sizeof(pid_path), "%s/qemu.pid", root);
+    FILE *fixture_pid = fopen(pid_path, "w");
+    if (!fixture_pid) return 82;
+    fprintf(fixture_pid, "%ld\n", (long)child);
+    fclose(fixture_pid);
     return 0;
   }
   int ready[2];
@@ -264,10 +305,12 @@ if [[ "$scenario" == 'unowned-pid' && "$unowned_pid" == '-' ]]; then
   printf '%s\n' "$unowned_pid" > "$fixture_root/unowned.pid"
 fi
 export FIXTURE_ROOT="$fixture_root"
+export FIXTURE_CACHE_ROOT=${shellQuote(toWslPath(cacheRoot))}
 export FIXTURE_SCENARIO="$scenario"
 export FIXTURE_UNOWNED_PID="$unowned_pid"
 export FIXTURE_IMAGE_SHA512='${sha512(BASE_IMAGE_CONTENTS)}'
 export PALZIV_APPLIANCE_SSH_TIMEOUT_SECONDS=2
+export PALZIV_APPLIANCE_SHUTDOWN_SSH_TIMEOUT_SECONDS=1
 export PATH="$fixture_root/../bin:/usr/bin:/bin"
 if [[ "$scenario" == 'missing-kvm' ]]; then export PALZIV_APPLIANCE_KVM_DEVICE=/dev/palziv-missing-kvm; fi
 controller_args=(bash ${shellQuote(controller)} \
@@ -278,28 +321,52 @@ controller_args=(bash ${shellQuote(controller)} \
   --build-id ${shellQuote(BUILD_ID)} \
   --build-public-key ${shellQuote(`${wslBuildRoot}/build_ssh_ed25519.pub`)} \
   --boot-only)
-if [[ "$scenario" == 'unowned-pid' ]]; then
+legacy_qga_socket="/tmp/palziv-qga-${BUILD_ID}.sock"
+legacy_qga_pid=''
+if [[ "$scenario" == 'preexisting-qga' ]]; then
+  python3 -c 'import socket,sys,time; sock=socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(60)' "$legacy_qga_socket" &
+  legacy_qga_pid="$!"
+  for ((attempt=0; attempt<50; attempt++)); do [[ -S "$legacy_qga_socket" ]] && break; sleep 0.02; done
+  [[ -S "$legacy_qga_socket" ]]
+fi
+if [[ "$scenario" == 'unowned-pid' || "$scenario" == 'substring-drive-pid' || "$scenario" == 'preexisting-qga' ]]; then
   set +e
   "${"$"}{controller_args[@]}"
   controller_status="$?"
   set -e
-  if kill -0 "$unowned_pid" 2>/dev/null; then
+  if [[ "$scenario" == 'unowned-pid' ]] && kill -0 "$unowned_pid" 2>/dev/null; then
     printf 'alive\n' > "$fixture_root/unowned.alive"
   fi
-  kill -TERM "$unowned_pid" 2>/dev/null || true
-  wait "$unowned_pid" 2>/dev/null || true
+  if [[ "$scenario" == 'substring-drive-pid' ]]; then
+    substring_pid="$(<"$fixture_root/qemu.pid")"
+    if kill -0 "$substring_pid" 2>/dev/null; then printf 'alive\n' > "$fixture_root/substring.alive"; fi
+    kill -TERM "$substring_pid" 2>/dev/null || true
+    wait "$substring_pid" 2>/dev/null || true
+  fi
+  if [[ "$scenario" == 'unowned-pid' ]]; then
+    kill -TERM "$unowned_pid" 2>/dev/null || true
+    wait "$unowned_pid" 2>/dev/null || true
+  fi
+  if [[ "$scenario" == 'preexisting-qga' ]]; then
+    if [[ -S "$legacy_qga_socket" ]]; then printf 'preserved\n' > "$fixture_root/preexisting-qga.preserved"; fi
+    kill -TERM "$legacy_qga_pid" 2>/dev/null || true
+    wait "$legacy_qga_pid" 2>/dev/null || true
+    rm -f -- "$legacy_qga_socket"
+  fi
   exit "$controller_status"
 fi
 exec "${"$"}{controller_args[@]}"
 `;
   const wrapperPath = path.join(fixtureRoot, "run-controller.sh");
   await writeFile(wrapperPath, wrapper);
+  const startedAt = Date.now();
   const result = await runProcess("wsl.exe", [
     "--distribution", "Ubuntu-24.04",
     "--user", "root",
     "--",
     "bash", toWslPath(wrapperPath)
   ], 15000);
+  const durationMs = Date.now() - startedAt;
   const readOptional = async (candidate) => (await pathExists(candidate)) ? readFile(candidate, "utf8") : "";
   return {
     base,
@@ -309,6 +376,7 @@ exec "${"$"}{controller_args[@]}"
     cacheRoot,
     fixtureRoot,
     result,
+    durationMs,
     readLog: (name) => readOptional(path.join(fixtureRoot, name)),
     cleanup: () => rm(base, { recursive: true, force: true })
   };
@@ -425,8 +493,13 @@ $fixtureWsl = {
     return @()
   }
   if ($Arguments[0] -eq 'bash') {
-    if ($env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'boot-only') {
-      return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":22001}'
+    switch ($env:LOCAL_APPLIANCE_PS_SCENARIO) {
+      'boot-only' { return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":22001}' }
+      'boot-string-bool' { return '{"ok":"true","classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":22001}' }
+      'boot-bool-port' { return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":true}' }
+      'boot-fraction-port' { return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":22000.5}' }
+      'boot-port-low' { return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":21999}' }
+      'boot-port-high' { return '{"ok":true,"classification":"boot-only","buildId":"20260805T120000Z-aaaaaaaaaaaa","releaseSha":"${RELEASE_SHA}","sshPort":42001}' }
     }
     return @()
   }
@@ -438,7 +511,7 @@ $fixtureExport = {
   Set-Content -LiteralPath $ReleaseTar -Value "release=$ReleaseSha"
 }
 $fixturePreflight = $env:LOCAL_APPLIANCE_PS_SCENARIO -in @('preflight', 'invalid-release', 'low-space', 'relative-output', 'equal-artifacts', 'outside-output')
-$fixtureBootOnly = $env:LOCAL_APPLIANCE_PS_SCENARIO -eq 'boot-only'
+$fixtureBootOnly = $env:LOCAL_APPLIANCE_PS_SCENARIO -like 'boot-*'
 $fixtureWslRunner = $fixtureWsl
 $fixtureWslExecutable = 'wsl.exe'
 $fixtureDistribution = 'Fixture-Ubuntu'
@@ -795,6 +868,28 @@ test("Windows boot-only entrypoint validates and returns the controller's bounde
   }
 });
 
+test("Windows boot-only entrypoint rejects coerced JSON types and out-of-contract ports", {
+  skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
+}, async (t) => {
+  for (const scenario of [
+    "boot-string-bool",
+    "boot-bool-port",
+    "boot-fraction-port",
+    "boot-port-low",
+    "boot-port-high"
+  ]) {
+    await t.test(scenario, async () => {
+      const harness = await runWindowsEntrypointHarness({ scenario });
+      try {
+        assert.notEqual(harness.result.code, 0);
+        assert.match(harness.result.stderr, /bounded schema|did not match this build/i);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  }
+});
+
 test("Windows PowerShell 5.1 build IDs use UTC without unsupported Get-Date parameters", {
   skip: process.platform !== "win32" ? "PowerShell behavior harness runs on Windows." : false
 }, async () => {
@@ -928,6 +1023,7 @@ test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on
   try {
     assert.equal(harness.result.code, 0, harness.result.output);
     assert.ok(harness.result.output.length < 2048, "controller output must remain bounded");
+    assert.match(harness.result.output, /^\{"ok":true,"classification":"boot-only","buildId":"[^"]+","releaseSha":"[a-f0-9]{40}","sshPort":[0-9]+\}\r?\n?$/, "controller stdout must contain only its result JSON");
     const result = JSON.parse(harness.result.output);
     assert.deepEqual(result, {
       ok: true,
@@ -949,7 +1045,11 @@ test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on
     assert.ok(qgaSocket, "QEMU guest-agent socket path must be explicit");
     assert.ok(Buffer.byteLength(qgaSocket) < 108, "QEMU guest-agent socket path must fit sockaddr_un");
     const qemuImg = await harness.readLog("qemu-img.log");
-    assert.match(qemuImg, /create -f qcow2 -F qcow2 -b .*debian-13-genericcloud-amd64\.qcow2 .*work-disk\.qcow2 40G/);
+    assert.match(qemuImg, /create -f qcow2 -F qcow2 -b .*work\/base-image\.qcow2 .*work-disk\.qcow2 40G/);
+    const curlLog = await harness.readLog("curl.log");
+    for (const requiredOption of ["--connect-timeout 15", "--max-time 900", "--retry 3", "--retry-max-time 120"]) {
+      assert.match(curlLog, new RegExp(requiredOption), `curl must include ${requiredOption}`);
+    }
     assert.equal((await harness.readLog("apt-get.log")).trim(), [
       "update",
       "install -y ca-certificates cloud-image-utils curl jq openssh-client qemu-system-x86 qemu-utils"
@@ -969,6 +1069,88 @@ test("WSL controller verifies Debian, boots through KVM, and exposes SSH only on
   } finally {
     await harness.cleanup();
   }
+});
+
+test("WSL controller uses an owned, unique QGA runtime directory and preserves a pre-existing socket", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  await t.test("pre-existing legacy socket is preserved", async () => {
+    const harness = await runBashControllerHarness({ scenario: "preexisting-qga" });
+    try {
+      assert.equal(harness.result.code, 0, harness.result.output);
+      assert.equal(await harness.readLog("preexisting-qga.preserved"), "preserved\n");
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.notEqual(state.qgaSocket, `/tmp/palziv-qga-${BUILD_ID}.sock`);
+      assert.match(state.qgaSocket, /^\/tmp\/palziv-qga\.[A-Za-z0-9]+\/qga\.sock$/);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("consecutive builds never reuse a QGA socket path", async () => {
+    const first = await runBashControllerHarness();
+    const second = await runBashControllerHarness();
+    try {
+      assert.equal(first.result.code, 0, first.result.output);
+      assert.equal(second.result.code, 0, second.result.output);
+      const firstState = JSON.parse(await readFile(path.join(first.buildRoot, "BUILD-STATE.json"), "utf8"));
+      const secondState = JSON.parse(await readFile(path.join(second.buildRoot, "BUILD-STATE.json"), "utf8"));
+      assert.notEqual(firstState.qgaSocket, secondState.qgaSocket);
+    } finally {
+      await first.cleanup();
+      await second.cleanup();
+    }
+  });
+});
+
+test("WSL controller snapshots the verified cache before QEMU can consume it", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async () => {
+  const harness = await runBashControllerHarness({ scenario: "mutate-cache-after-snapshot" });
+  try {
+    assert.equal(harness.result.code, 0, harness.result.output);
+    assert.equal(await readFile(path.join(harness.cacheRoot, BASE_IMAGE_NAME), "utf8"), "mutated-after-snapshot\n");
+    const qemuImg = await harness.readLog("qemu-img.log");
+    const expectedSnapshot = toWslPath(path.join(harness.buildRoot, "work", "base-image.qcow2"));
+    assert.match(qemuImg, new RegExp(`-b ${expectedSnapshot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} `));
+    assert.equal(await readFile(path.join(harness.buildRoot, "work", "base-image.qcow2"), "utf8"), BASE_IMAGE_CONTENTS);
+    const snapshotCheck = await runWsl(`cd '${toWslPath(path.join(harness.buildRoot, "work"))}' && sha512sum --check --strict '${BASE_IMAGE_NAME}.snapshot.sha512'`);
+    assert.equal(snapshotCheck.code, 0, snapshotCheck.output);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("WSL controller applies wall-clock deadlines to readiness and shutdown SSH", {
+  skip: process.platform !== "win32" ? "WSL behavior fixture runs on Windows." : false
+}, async (t) => {
+  await t.test("slow keyscan cannot overrun readiness deadline", async () => {
+    const harness = await runBashControllerHarness({ scenario: "slow-keyscan" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.output, /SSH.*timed out/i);
+      assert.ok(harness.durationMs < 6500, `readiness took ${harness.durationMs}ms`);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      const processCheck = await runWsl(`test ! -e /proc/${state.qemuPid}`);
+      assert.equal(processCheck.code, 0, `owned QEMU PID ${state.qemuPid} remained alive`);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("hanging shutdown SSH is terminated by an overall timeout", async () => {
+    const harness = await runBashControllerHarness({ scenario: "hanging-ssh" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.output, /shutdown.*timed out/i);
+      assert.ok(harness.durationMs < 5500, `shutdown SSH took ${harness.durationMs}ms`);
+      const state = JSON.parse(await readFile(path.join(harness.buildRoot, "BUILD-STATE.json"), "utf8"));
+      const processCheck = await runWsl(`test ! -e /proc/${state.qemuPid}`);
+      assert.equal(processCheck.code, 0, `owned QEMU PID ${state.qemuPid} remained alive`);
+    } finally {
+      await harness.cleanup();
+    }
+  });
 });
 
 test("WSL controller preserves a bad download as partial and never promotes it", {
@@ -1057,6 +1239,17 @@ test("WSL controller cleans up only the QEMU process owned by its exact work dis
       assert.notEqual(harness.result.code, 0);
       assert.match(harness.result.output, /owned QEMU process/i);
       assert.equal(await harness.readLog("unowned.alive"), "alive\n", "unowned process was signaled");
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  await t.test("same executable with only a work-disk substring is not signaled", async () => {
+    const harness = await runBashControllerHarness({ scenario: "substring-drive-pid" });
+    try {
+      assert.notEqual(harness.result.code, 0);
+      assert.match(harness.result.output, /owned QEMU process/i);
+      assert.equal(await harness.readLog("substring.alive"), "alive\n", "substring-only process was signaled");
     } finally {
       await harness.cleanup();
     }
