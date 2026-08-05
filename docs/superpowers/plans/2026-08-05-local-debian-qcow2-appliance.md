@@ -25,6 +25,10 @@
 - Preserve the dirty migration worktree's unrelated changes and do not modify `DEBIAN-HOST-PREP-EASY-INSTRUCTIONS.txt`.
 - Keep generated images, keys, logs, and build state under the already ignored `artifacts/` directory.
 
+## Execution ruling
+
+The user directed execution to proceed on 2026-08-05. Behavior-level testing governs the source-text assertion examples in Tasks 2-7: run PowerShell and Bash entrypoints against controlled fixtures or explicit non-mutating modes and assert exit codes, bounded output, and filesystem/process side effects. Retain parser and `bash -n` syntax checks. Source-text matching may be used only when no safe executable boundary exists, and it cannot be the sole evidence for a required behavior.
+
 ---
 
 ## File map
