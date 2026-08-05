@@ -175,7 +175,9 @@ export async function verifyApplianceArtifacts({ artifactRoot }) {
   }
   const root = await realpath(requestedRoot);
 
-  const rawManifest = await readJsonFile(path.join(root, "BUILD-MANIFEST.json"), "BUILD-MANIFEST.json");
+  const manifestPath = path.join(root, "BUILD-MANIFEST.json");
+  await requireRegularFile(manifestPath, "BUILD-MANIFEST.json");
+  const rawManifest = await readJsonFile(manifestPath, "BUILD-MANIFEST.json");
   const manifest = validateBuildManifest(rawManifest);
   await requireExactArtifactTree(root, manifest.diskFile);
   validateStageReceipt(
@@ -186,6 +188,10 @@ export async function verifyApplianceArtifacts({ artifactRoot }) {
   if (!AGE_RECIPIENT.test(recipient)) throw new Error("Invalid age recipient.");
 
   const diskPath = path.join(root, manifest.diskFile);
+  const diskMetadata = await requireRegularFile(diskPath, "QCOW2");
+  if (diskMetadata.size !== manifest.diskActualSize) {
+    throw new Error("QCOW2 actual size does not match BUILD-MANIFEST.json.");
+  }
   const diskDigest = await hashFile(diskPath);
   if (diskDigest !== manifest.diskSha256) throw new Error("QCOW2 checksum mismatch.");
 

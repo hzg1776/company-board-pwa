@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdtemp,
@@ -22,6 +23,27 @@ import {
 const RELEASE_SHA = "a".repeat(40);
 const DISK_CONTENTS = "fixture-qcow2";
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+function runProcess(command, args, timeoutMs = 2000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`Process timed out after ${timeoutMs}ms: ${output}`));
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      resolve({ code, output });
+    });
+  });
+}
 
 async function writeFixture(root) {
   const diskName = `palziv-debian13-${RELEASE_SHA}.qcow2`;
@@ -55,7 +77,7 @@ async function writeFixture(root) {
     diskFile: diskName,
     diskSha256: sha256(DISK_CONTENTS),
     diskVirtualSize: 42949672960,
-    diskActualSize: 15,
+    diskActualSize: Buffer.byteLength(DISK_CONTENTS),
     completedAt: "2026-08-05T12:00:00Z",
     classification: "pass"
   })}\n`);
@@ -108,8 +130,22 @@ test("artifact verifier accepts the exact successful tree and rejects disk tampe
       await verifyApplianceArtifacts({ artifactRoot: root }),
       { ok: true, releaseSha: RELEASE_SHA, diskFile: diskName, diskSha256: sha256(DISK_CONTENTS) }
     );
-    await writeFile(path.join(root, diskName), "changed");
+    await writeFile(path.join(root, diskName), "changed-qcow2");
     await assert.rejects(verifyApplianceArtifacts({ artifactRoot: root }), /checksum/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact verifier rejects a build manifest whose diskActualSize differs from the QCOW2", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-"));
+  try {
+    await writeFixture(root);
+    const manifestPath = path.join(root, "BUILD-MANIFEST.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.diskActualSize += 1;
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await assert.rejects(verifyApplianceArtifacts({ artifactRoot: root }), /actual size/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -129,7 +165,7 @@ test("artifact verifier rejects no-clobber residue and malformed checksum manife
   }
 });
 
-test("artifact verifier validates the bounded stage receipt and rejects links", async (t) => {
+test("artifact verifier validates the bounded stage receipt", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-"));
   try {
     await writeFixture(root);
@@ -138,19 +174,24 @@ test("artifact verifier validates the bounded stage receipt and rejects links", 
     receipt.routeCount = 9;
     await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
     await assert.rejects(verifyApplianceArtifacts({ artifactRoot: root }), /stage receipt/i);
-
-    await rm(receiptPath);
-    try {
-      await symlink("age-recipient.txt", receiptPath, "file");
-    } catch (error) {
-      if (error?.code === "EPERM") {
-        t.skip("Windows symbolic-link privileges are unavailable");
-        return;
-      }
-      throw error;
-    }
-    await assert.rejects(verifyApplianceArtifacts({ artifactRoot: root }), /symbolic link/i);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact verifier rejects a linked build manifest before it can be dereferenced", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "palziv-appliance-"));
+  const fifo = path.join(os.tmpdir(), `palziv-appliance-manifest-${process.pid}-${Date.now()}`);
+  try {
+    await writeFixture(root);
+    await runProcess("mkfifo", [fifo]);
+    await rm(path.join(root, "BUILD-MANIFEST.json"));
+    await symlink(fifo, path.join(root, "BUILD-MANIFEST.json"), "file");
+    const result = await runProcess(process.execPath, ["scripts/appliance/verify-local-appliance.mjs", root]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.output, /BUILD-MANIFEST\.json must not be a symbolic link/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(fifo, { force: true });
   }
 });
