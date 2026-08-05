@@ -1,7 +1,7 @@
 # Project-A Local Debian QCOW2 Appliance Design
 
 Date: 2026-08-05
-Status: approved architecture; written specification awaiting review
+Status: approved 2026-08-05
 
 ## Goal
 
