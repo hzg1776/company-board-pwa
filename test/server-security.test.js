@@ -2643,7 +2643,7 @@ test("client app does not ship static explanatory copy across the live screens",
   }
 });
 
-test("manifest shortcuts do not expose privileged routes directly", async (t) => {
+test("role-specific install manifests keep employee and HR launch targets separate", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-manifest-gateway-"));
   const port = await findFreePort();
   const server = await startServer(tempDir, port);
@@ -2653,20 +2653,50 @@ test("manifest shortcuts do not expose privileged routes directly", async (t) =>
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  const response = await fetch(`${server.baseUrl}/manifest.webmanifest`);
-  assert.equal(response.status, 200);
+  const [employeePageResponse, hrPageResponse] = await Promise.all([
+    fetch(`${server.baseUrl}/palzivalerts/employee`),
+    fetch(`${server.baseUrl}/palzivalerts/hr`)
+  ]);
+  assert.equal(employeePageResponse.status, 200);
+  assert.equal(hrPageResponse.status, 200);
 
-  const manifest = await response.json();
-  const shortcutUrls = Array.isArray(manifest.shortcuts)
-    ? manifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
+  const [employeeHtml, hrHtml] = await Promise.all([
+    employeePageResponse.text(),
+    hrPageResponse.text()
+  ]);
+  assert.match(employeeHtml, /<link rel="manifest" href="\/manifest\.webmanifest">/);
+  assert.doesNotMatch(employeeHtml, /manifest-hr\.webmanifest/);
+  assert.match(hrHtml, /<link rel="manifest" href="\/manifest-hr\.webmanifest">/);
+  assert.match(hrHtml, /<meta name="apple-mobile-web-app-title" content="Alert Center HR">/);
+
+  const [employeeManifestResponse, hrManifestResponse] = await Promise.all([
+    fetch(`${server.baseUrl}/manifest.webmanifest`),
+    fetch(`${server.baseUrl}/manifest-hr.webmanifest`)
+  ]);
+  assert.equal(employeeManifestResponse.status, 200);
+  assert.equal(hrManifestResponse.status, 200);
+
+  const [employeeManifest, hrManifest] = await Promise.all([
+    employeeManifestResponse.json(),
+    hrManifestResponse.json()
+  ]);
+  const employeeShortcutUrls = Array.isArray(employeeManifest.shortcuts)
+    ? employeeManifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
+    : [];
+  const hrShortcutUrls = Array.isArray(hrManifest.shortcuts)
+    ? hrManifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
     : [];
 
-  assert.equal(manifest.start_url, "/palzivalerts/employee");
-  assert.equal(shortcutUrls.includes("/palzivalerts"), false);
-  assert.ok(shortcutUrls.includes("/palzivalerts/employee"));
-  assert.equal(shortcutUrls.includes("/palzivalerts/hr"), false);
-  assert.equal(shortcutUrls.includes("/palzivalerts/webmaster"), false);
-  assert.equal(shortcutUrls.includes("/palzivalerts/it"), false);
+  assert.equal(employeeManifest.id, "/palzivalerts/employee");
+  assert.equal(employeeManifest.start_url, "/palzivalerts/employee");
+  assert.equal(employeeManifest.scope, "/palzivalerts/");
+  assert.deepEqual(employeeShortcutUrls, ["/palzivalerts/employee"]);
+
+  assert.equal(hrManifest.id, "/palzivalerts/hr");
+  assert.equal(hrManifest.start_url, "/palzivalerts/hr");
+  assert.equal(hrManifest.scope, "/palzivalerts/");
+  assert.equal(hrManifest.short_name, "Alert Center HR");
+  assert.deepEqual(hrShortcutUrls, ["/palzivalerts/hr"]);
 });
 
 test("legacy owner cookie alias no longer authorizes IT access", async (t) => {
@@ -3121,6 +3151,7 @@ test("device setup changes rotate the generated asset version", async (t) => {
   await mkdir(publicDir, { recursive: true });
   await writeFile(path.join(publicDir, "index.html"), '<script type="module" src="/app.js?v=__ASSET_VERSION__"></script>\n', "utf8");
   await writeFile(path.join(publicDir, "app.js"), 'import "./device-setup.js?v=__ASSET_VERSION__";\n', "utf8");
+  await writeFile(path.join(publicDir, "app-routing.js"), "export const version = 1;\n", "utf8");
   await writeFile(path.join(publicDir, "styles.css"), "body {}\n", "utf8");
   await writeFile(path.join(publicDir, "sw.js"), "self.__version = '__ASSET_VERSION__';\n", "utf8");
   await writeFile(path.join(publicDir, "sw-routing.js"), "self.__routing = true;\n", "utf8");

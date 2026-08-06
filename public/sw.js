@@ -6,9 +6,11 @@ const SHELL_ASSETS = [
   "/index.html",
   "/styles.css?v=__ASSET_VERSION__",
   "/app.js?v=__ASSET_VERSION__",
+  "/app-routing.js?v=__ASSET_VERSION__",
   "/sw-routing.js?v=__ASSET_VERSION__",
   "/device-setup.js?v=__ASSET_VERSION__",
   "/manifest.webmanifest",
+  "/manifest-hr.webmanifest",
   "/assets/logo.svg?v=__ASSET_VERSION__",
   "/assets/palziv-logo-transparent.png?v=20260625b",
   "/assets/palziv-wordmark.png?v=__ASSET_VERSION__"

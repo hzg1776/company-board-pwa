@@ -34,6 +34,8 @@ const APP_SCRIPT_TEMPLATE_PATH = path.join(PUBLIC_DIR, "app.js");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
 const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
 const APP_BASE_PATH = "/palzivalerts";
+const EMPLOYEE_MANIFEST_PATH = "/manifest.webmanifest";
+const HR_MANIFEST_PATH = "/manifest-hr.webmanifest";
 const RUNTIME_DATA_DIR = process.env.RUNTIME_DATA_DIR ? path.resolve(process.env.RUNTIME_DATA_DIR) : "";
 const CONFIGURED_ASSET_VERSION = String(process.env.ASSET_VERSION || "")
   .replace(/[^a-zA-Z0-9._-]/g, "")
@@ -121,6 +123,7 @@ function parseBoolean(value) {
 const siteConfig = readSiteConfig();
 const ASSET_VERSION_PATHS = [
   APP_SCRIPT_TEMPLATE_PATH,
+  path.join(PUBLIC_DIR, "app-routing.js"),
   path.join(PUBLIC_DIR, "device-setup.js"),
   path.join(PUBLIC_DIR, "styles.css"),
   INDEX_HTML_TEMPLATE_PATH,
@@ -735,13 +738,30 @@ async function resolveAssetVersion() {
   }
 }
 
-async function renderIndexHtml() {
+function installProfileForPath(pathname = "") {
+  if (pathname === appPath("hr")) {
+    return {
+      manifestUrl: HR_MANIFEST_PATH,
+      mobileAppTitle: `${siteConfig.shortName} HR`
+    };
+  }
+
+  return {
+    manifestUrl: EMPLOYEE_MANIFEST_PATH,
+    mobileAppTitle: siteConfig.shortName
+  };
+}
+
+async function renderIndexHtml(pathname = "") {
   const assetVersion = await resolveAssetVersion();
   const indexHtmlTemplate = await readFile(INDEX_HTML_TEMPLATE_PATH, "utf8");
+  const installProfile = installProfileForPath(pathname);
 
   return indexHtmlTemplate
     .replaceAll("__SITE_NAME__", escapeHtml(displayBrandName(siteConfig)))
     .replaceAll("__SITE_SHORT_NAME__", escapeHtml(siteConfig.shortName))
+    .replaceAll("__MOBILE_APP_TITLE__", escapeHtml(installProfile.mobileAppTitle))
+    .replaceAll("__MANIFEST_URL__", escapeHtml(installProfile.manifestUrl))
     .replaceAll("__SITE_SUBTITLE__", escapeHtml(siteConfig.subtitle))
     .replaceAll("__SITE_DESCRIPTION__", escapeHtml(siteConfig.description))
     .replaceAll("__SITE_THEME_COLOR__", escapeHtml(siteConfig.themeColor))
@@ -800,13 +820,13 @@ async function buildHealthDiagnostics() {
   };
 }
 
-async function sendIndexHtml(res) {
+async function sendIndexHtml(res, pathname = "") {
   res.writeHead(200, {
     ...SECURITY_HEADERS,
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store"
   });
-  res.end(await renderIndexHtml());
+  res.end(await renderIndexHtml(pathname));
 }
 
 async function sendServiceWorker(res) {
@@ -836,19 +856,28 @@ async function sendAppScript(res) {
   res.end(await renderAppScript());
 }
 
-function sendManifest(res) {
+function sendManifest(res, profile = "employee") {
   const icon = {
-      src: "/assets/palziv-logo-transparent.png?v=20260617c",
+    src: "/assets/palziv-logo-transparent.png?v=20260617c",
     sizes: "1054x1055",
     type: "image/png",
     purpose: "any maskable"
   };
+  const isHr = profile === "hr";
+  const route = isHr ? "hr" : "employee";
+  const routeUrl = appPath(route);
+  const routeName = isHr ? "HR Portal" : "Employee Portal";
+  const routeShortName = isHr ? "HR" : "Employee";
+  const routeDescription = isHr
+    ? "Open the HR administration portal"
+    : "Open the employee login and feed";
 
   const manifest = {
-    name: displayBrandName(siteConfig),
-    short_name: siteConfig.shortName,
-    description: siteConfig.description,
-    start_url: appPath("employee"),
+    id: routeUrl,
+    name: isHr ? `${displayBrandName(siteConfig)} HR` : displayBrandName(siteConfig),
+    short_name: isHr ? `${siteConfig.shortName} HR` : siteConfig.shortName,
+    description: isHr ? `${displayBrandName(siteConfig)} HR administration portal.` : siteConfig.description,
+    start_url: routeUrl,
     scope: `${APP_BASE_PATH}/`,
     display: "standalone",
     background_color: siteConfig.backgroundColor,
@@ -856,10 +885,10 @@ function sendManifest(res) {
     orientation: "portrait-primary",
     shortcuts: [
       {
-        name: "Employee Portal",
-        short_name: "Employee",
-        description: "Open the employee login and feed",
-        url: appPath("employee"),
+        name: routeName,
+        short_name: routeShortName,
+        description: routeDescription,
+        url: routeUrl,
         icons: [icon]
       }
     ],
@@ -3287,13 +3316,13 @@ const server = http.createServer(async (req, res) => {
     if (nextLocation && url.pathname !== nextLocation) {
       redirectTo(res, nextLocation);
     } else {
-      await sendIndexHtml(res);
+      await sendIndexHtml(res, url.pathname);
     }
     return;
   }
 
   if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it"))) {
-    await sendIndexHtml(res);
+    await sendIndexHtml(res, url.pathname);
     return;
   }
 
@@ -3312,8 +3341,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/manifest.webmanifest") {
-    sendManifest(res);
+  if (req.method === "GET" && url.pathname === EMPLOYEE_MANIFEST_PATH) {
+    sendManifest(res, "employee");
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === HR_MANIFEST_PATH) {
+    sendManifest(res, "hr");
     return;
   }
 
