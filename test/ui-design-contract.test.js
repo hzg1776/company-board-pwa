@@ -152,7 +152,7 @@ test("employee masthead omits the alert-count status strip", async () => {
   assert.doesNotMatch(app, /\$\{notices\.length\} live/);
 });
 
-test("employee masthead identifies the signed-in employee", async () => {
+test("employee masthead shows only the signed-in employee name", async () => {
   const app = await loadClientApp();
   const css = await loadStylesheet();
   const start = app.indexOf("function formatEmployeeIdentity(employee = {})");
@@ -163,6 +163,17 @@ test("employee masthead identifies the signed-in employee", async () => {
 
   const functionSource = app.slice(start, end + 2);
   const formatEmployeeIdentity = Function(`${functionSource}; return formatEmployeeIdentity;`)();
+  const escapeHtmlSource = app.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const sessionIdentitySource =
+    app.match(/function renderEmployeeSessionIdentity\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const renderEmployeeSessionIdentity = Function(
+    "state",
+    "icon",
+    `${escapeHtmlSource}\n${functionSource}\n${sessionIdentitySource}\nreturn renderEmployeeSessionIdentity;`
+  )(
+    { access: { employee: { employee: { name: "Test User1", username: "testuser1" } } } },
+    () => '<svg class="icon"></svg>'
+  );
   const employeeRenderer = app.match(/function renderEmployee\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   const titleIndex = employeeRenderer.indexOf("Announcements &amp; Alerts");
   const identityIndex = employeeRenderer.indexOf("renderEmployeeSessionIdentity()");
@@ -180,6 +191,10 @@ test("employee masthead identifies the signed-in employee", async () => {
   assert.equal(formatEmployeeIdentity({ name: "Test User1", username: "testuser1" }), "Test User1");
   assert.equal(formatEmployeeIdentity({ username: "testuser1" }), "testuser1");
   assert.equal(formatEmployeeIdentity({}), "");
+  assert.equal(
+    renderEmployeeSessionIdentity(),
+    '<span class="sync-pill employee-session-pill"><strong>Test User1</strong></span>'
+  );
   assert.ok(titleIndex >= 0);
   assert.ok(identityIndex > titleIndex);
   assert.ok(weatherIndex > identityIndex);

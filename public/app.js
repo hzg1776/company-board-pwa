@@ -1017,7 +1017,7 @@ function renderEmployeeSessionIdentity() {
 
   if (!identity) return "";
 
-  return `<span class="sync-pill employee-session-pill">${icon("users")} Signed in as <strong>${escapeHtml(identity)}</strong></span>`;
+  return `<span class="sync-pill employee-session-pill"><strong>${escapeHtml(identity)}</strong></span>`;
 }
 
 function renderAuthFrame({
