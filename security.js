@@ -282,6 +282,60 @@ function isAdminRecoveryExpired(user = {}) {
   return isAdminRecoveryOnly(user) && toTimestamp(user.recoveryExpiresAt) > 0 && toTimestamp(user.recoveryExpiresAt) <= Date.now();
 }
 
+function normalizeGroupIds(input = []) {
+  const groupIds = [];
+  const seen = new Set();
+
+  for (const value of Array.isArray(input) ? input : []) {
+    const groupId = cleanText(value, 80);
+
+    if (!groupId || seen.has(groupId)) {
+      continue;
+    }
+
+    seen.add(groupId);
+    groupIds.push(groupId);
+  }
+
+  return groupIds;
+}
+
+function normalizeMessageGroup(input = {}) {
+  const createdAt = cleanText(input.createdAt, 40) || cleanText(input.updatedAt, 40) || nowIso();
+  const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
+  const active = input.active !== false;
+
+  return {
+    id: cleanText(input.id, 80) || crypto.randomUUID(),
+    name: cleanText(input.name, 120),
+    active,
+    createdAt,
+    updatedAt,
+    deactivatedAt: active ? "" : cleanText(input.deactivatedAt, 40) || updatedAt
+  };
+}
+
+function normalizeMessageGroups(input = []) {
+  const groups = [];
+  const ids = new Set();
+  const names = new Set();
+
+  for (const value of Array.isArray(input) ? input : []) {
+    const group = normalizeMessageGroup(value);
+    const nameKey = group.name.toLowerCase();
+
+    if (!group.name || ids.has(group.id) || names.has(nameKey)) {
+      continue;
+    }
+
+    ids.add(group.id);
+    names.add(nameKey);
+    groups.push(group);
+  }
+
+  return groups;
+}
+
 function normalizeEmployee(input = {}) {
   const createdAt = cleanText(input.createdAt, 40) || nowIso();
   const updatedAt = cleanText(input.updatedAt, 40) || createdAt;
@@ -313,6 +367,7 @@ function normalizeEmployee(input = {}) {
     passwordSalt,
     passwordHash,
     active: input.active !== false,
+    groupIds: normalizeGroupIds(input.groupIds),
     sessionVersion,
     lastLoginAt: cleanText(input.lastLoginAt, 40),
     createdAt,
@@ -691,6 +746,7 @@ function normalizeAdminMfaPolicy(input = {}) {
 
 function normalizeSecurityState(input = {}) {
   const adminUsers = normalizeAdminUsers(input);
+  const messageGroups = normalizeMessageGroups(input.messageGroups);
   const employees = Array.isArray(input.employees)
     ? input.employees
       .map((employee) => normalizeEmployee(employee))
@@ -715,6 +771,7 @@ function normalizeSecurityState(input = {}) {
   return {
     adminUsers,
     adminSessions,
+    messageGroups,
     employees,
     employeeSessions,
     adminMfaPolicy,
@@ -759,6 +816,7 @@ function publicEmployeeRecord(employee, sessions = []) {
     inviteAcceptedAt: employee.inviteAcceptedAt || "",
     passwordResetRequired: employee.passwordResetRequired === true,
     active: employee.active !== false,
+    groupIds: normalizeGroupIds(employee.groupIds),
     sessionVersion: employee.sessionVersion || 0,
     activeSessions,
     lastLoginAt: employee.lastLoginAt || "",
@@ -1403,9 +1461,31 @@ function employeeAccessResponse(employee, session) {
     employee: {
       id: employee.id,
       name: employee.name,
-      username: employee.username
+      username: employee.username,
+      groupIds: normalizeGroupIds(employee.groupIds)
     },
     sessionExpiresAt: session.expiresAt
+  };
+}
+
+function validateMessageGroupName(name) {
+  const groupName = cleanText(name, 120);
+
+  if (!groupName) {
+    throw new Error("Message group name is required.");
+  }
+
+  return groupName;
+}
+
+function publicMessageGroupRecord(group = {}) {
+  return {
+    id: group.id,
+    name: group.name,
+    active: group.active !== false,
+    createdAt: group.createdAt || "",
+    updatedAt: group.updatedAt || "",
+    deactivatedAt: group.deactivatedAt || ""
   };
 }
 
@@ -1951,6 +2031,14 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     return next;
   }
 
+  async function readQueuedData(reader) {
+    await init();
+
+    const next = writeQueue.then(async () => reader(await readStoredState()));
+    writeQueue = next.then(() => {}, () => {});
+    return next;
+  }
+
   async function readSecurityState() {
     await init();
     return readStoredState();
@@ -2134,11 +2222,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
 
       return {
         ...employeeAccessResponse(
-          {
-            id: result.employee.id,
-            name: result.employee.name,
-            username: result.employee.username
-          },
+          result.employee,
           result.session
         ),
         sessionId: result.session.id
@@ -2661,6 +2745,204 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
         hrAdmin: employeeHasHrAdminAccess(employee, data.adminUsers)
       }))
       .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+  }
+
+  async function listMessageGroups() {
+    const data = await readSecurityState();
+    return data.messageGroups
+      .map((group) => publicMessageGroupRecord(group))
+      .sort((left, right) => (
+        Number(right.active) - Number(left.active) ||
+        left.name.localeCompare(right.name)
+      ));
+  }
+
+  async function resolveMessageAudience(groupIds = []) {
+    if (!Array.isArray(groupIds)) {
+      throw new Error("Group ids must be an array.");
+    }
+
+    const targetGroupIds = normalizeGroupIds(groupIds);
+    return readQueuedData((data) => {
+      const groups = targetGroupIds.map((groupId) => data.messageGroups.find((group) => (
+        group.id === groupId && group.active !== false
+      )));
+
+      if (groups.some((group) => !group)) {
+        throw new Error("One or more selected message groups are unavailable.");
+      }
+
+      const targets = new Set(targetGroupIds);
+      const employees = data.employees.filter((employee) => (
+        employee.active !== false
+        && (!targets.size || normalizeGroupIds(employee.groupIds).some((groupId) => targets.has(groupId)))
+      ));
+
+      return {
+        groups: groups.map((group) => publicMessageGroupRecord(group)),
+        employeeIds: employees.map((employee) => employee.id)
+      };
+    });
+  }
+
+  async function createMessageGroup({ name } = {}) {
+    const groupName = validateMessageGroupName(name);
+
+    return updateData((data) => {
+      const duplicate = data.messageGroups.some((group) => (
+        group.name.toLowerCase() === groupName.toLowerCase()
+      ));
+
+      if (duplicate) {
+        throw new Error("A message group with that name already exists.");
+      }
+
+      const createdAt = nowIso();
+      const group = normalizeMessageGroup({
+        id: crypto.randomUUID(),
+        name: groupName,
+        active: true,
+        createdAt,
+        updatedAt: createdAt,
+        deactivatedAt: ""
+      });
+      data.messageGroups.push(group);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "message_group_created",
+        actor: "hr",
+        accountKey: group.id,
+        outcome: "success",
+        detail: group.name
+      }));
+      return group;
+    }).then(({ result, snapshot }) => ({
+      group: publicMessageGroupRecord(result),
+      snapshot
+    }));
+  }
+
+  async function renameMessageGroup(groupId, name) {
+    const targetId = cleanText(groupId, 80);
+    const groupName = validateMessageGroupName(name);
+
+    if (!targetId) {
+      throw new Error("Message group id is required.");
+    }
+
+    return updateData((data) => {
+      const group = data.messageGroups.find((entry) => entry.id === targetId);
+
+      if (!group) {
+        throw new Error("Message group not found.");
+      }
+
+      const duplicate = data.messageGroups.some((entry) => (
+        entry.id !== group.id && entry.name.toLowerCase() === groupName.toLowerCase()
+      ));
+
+      if (duplicate) {
+        throw new Error("A message group with that name already exists.");
+      }
+
+      const previousName = group.name;
+      group.name = groupName;
+      group.updatedAt = nowIso();
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "message_group_renamed",
+        actor: "hr",
+        accountKey: group.id,
+        outcome: "success",
+        detail: `${previousName} -> ${group.name}`
+      }));
+      return group;
+    }).then(({ result, snapshot }) => ({
+      group: publicMessageGroupRecord(result),
+      snapshot
+    }));
+  }
+
+  async function setMessageGroupActive(groupId, active) {
+    const targetId = cleanText(groupId, 80);
+
+    if (!targetId) {
+      throw new Error("Message group id is required.");
+    }
+
+    return updateData((data) => {
+      const group = data.messageGroups.find((entry) => entry.id === targetId);
+
+      if (!group) {
+        throw new Error("Message group not found.");
+      }
+
+      const nextActive = Boolean(active);
+      if (group.active !== nextActive) {
+        group.active = nextActive;
+        group.updatedAt = nowIso();
+        group.deactivatedAt = nextActive ? "" : group.updatedAt;
+        appendSecurityEvent(data, createSecurityEvent({
+          type: "message_group_status_changed",
+          actor: "hr",
+          accountKey: group.id,
+          outcome: "success",
+          detail: nextActive ? "active" : "inactive"
+        }));
+      }
+
+      return group;
+    }).then(({ result, snapshot }) => ({
+      group: publicMessageGroupRecord(result),
+      snapshot
+    }));
+  }
+
+  async function setEmployeeGroups(employeeId, groupIds) {
+    const targetId = cleanText(employeeId, 80);
+
+    if (!targetId) {
+      throw new Error("Employee id is required.");
+    }
+
+    if (!Array.isArray(groupIds)) {
+      throw new Error("Group ids must be an array.");
+    }
+
+    const nextGroupIds = normalizeGroupIds(groupIds);
+    return updateData((data) => {
+      const employee = data.employees.find((entry) => entry.id === targetId);
+
+      if (!employee) {
+        throw new Error("Employee not found.");
+      }
+
+      const currentGroupIds = new Set(normalizeGroupIds(employee.groupIds));
+      for (const groupId of nextGroupIds) {
+        const group = data.messageGroups.find((entry) => entry.id === groupId);
+
+        if (!group) {
+          throw new Error(`Message group not found: ${groupId}.`);
+        }
+
+        if (!currentGroupIds.has(groupId) && group.active === false) {
+          throw new Error("Only active message groups can be newly assigned.");
+        }
+      }
+
+      employee.groupIds = nextGroupIds;
+      employee.updatedAt = nowIso();
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "employee_message_groups_updated",
+        actor: "hr",
+        accountKey: employee.username,
+        employeeId: employee.id,
+        outcome: "success",
+        detail: `${nextGroupIds.length} group${nextGroupIds.length === 1 ? "" : "s"}`
+      }));
+      return employee;
+    }).then(({ result, snapshot }) => ({
+      employee: publicEmployeeRecord(result, []),
+      snapshot
+    }));
   }
 
   async function listAdminUsers({ currentUserId = "" } = {}) {
@@ -4202,7 +4484,8 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     ssoSubject,
     inviteSentAt,
     inviteAcceptedAt,
-    passwordResetRequired
+    passwordResetRequired,
+    groupIds
   } = {}) {
     const employeeName = cleanText(name, 120);
     const employeeUsername = normalizeUsername(username);
@@ -4217,11 +4500,29 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
 
     validateEmployeePassword(password);
 
+    if (groupIds !== undefined && !Array.isArray(groupIds)) {
+      throw new Error("Group ids must be an array.");
+    }
+
+    const employeeGroupIds = normalizeGroupIds(groupIds);
+
     return updateData((data) => {
       const duplicate = data.employees.some((employee) => employee.username === employeeUsername);
 
       if (duplicate) {
         throw new Error("That username is already in use.");
+      }
+
+      for (const groupId of employeeGroupIds) {
+        const group = data.messageGroups.find((entry) => entry.id === groupId);
+
+        if (!group) {
+          throw new Error(`Message group not found: ${groupId}.`);
+        }
+
+        if (group.active === false) {
+          throw new Error("Only active message groups can be assigned to a new employee.");
+        }
       }
 
       const passwordHash = createPasswordHash(password);
@@ -4240,6 +4541,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
         inviteSentAt,
         inviteAcceptedAt,
         passwordResetRequired,
+        groupIds: employeeGroupIds,
         passwordSalt: passwordHash.salt,
         passwordHash: passwordHash.hash,
         active: true,
@@ -5130,6 +5432,12 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     deleteEmployeeAccount,
     deleteAdminUser,
     deleteItAdminUser,
+    listMessageGroups,
+    resolveMessageAudience,
+    createMessageGroup,
+    renameMessageGroup,
+    setMessageGroupActive,
+    setEmployeeGroups,
     listEmployees,
     createEmployeeAccount,
     createEmployeeAccountsBatch,

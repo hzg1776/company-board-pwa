@@ -785,7 +785,10 @@ test(
         setField('body', 'Published from the HR feed control E2E test.');
         setField('type', 'HR');
         setField('priority', 'Important');
-        setField('audience', 'All Employees');
+        const allEmployeesAudience = form.querySelector('[name="audienceMode"][value="all"]');
+        if (!allEmployeesAudience?.checked) {
+          throw new Error('All Employees must be the default post audience.');
+        }
         setField('alertRetention', '24h');
         form.requestSubmit();
         return true;

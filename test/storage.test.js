@@ -59,6 +59,35 @@ test("normalizeDataShape repairs legacy board data", () => {
   assert.equal(normalized.settings, undefined);
 });
 
+test("normalizeDataShape preserves group targets and treats legacy audience labels as unrestricted", () => {
+  const normalized = normalizeDataShape({
+    posts: [
+      {
+        id: "targeted-post",
+        title: "Warehouse update",
+        body: "Only assigned employees should receive this.",
+        audience: "Warehouse",
+        audienceGroupIds: ["group-warehouse", "group-warehouse", "", "group-leadership"],
+        createdAt: "2026-08-06T12:00:00.000Z",
+        expiresAt: ""
+      },
+      {
+        id: "legacy-labeled-post",
+        title: "Legacy operations update",
+        body: "This label was not historically a delivery restriction.",
+        audience: "Operations",
+        createdAt: "2026-08-06T11:00:00.000Z",
+        expiresAt: ""
+      }
+    ],
+    weather: {},
+    acknowledgements: []
+  });
+
+  assert.deepEqual(normalized.posts[0].audienceGroupIds, ["group-warehouse", "group-leadership"]);
+  assert.deepEqual(normalized.posts[1].audienceGroupIds, []);
+});
+
 test("normalizeDataShape preserves valid acknowledgement records", () => {
   const normalized = normalizeDataShape({
     posts: [],

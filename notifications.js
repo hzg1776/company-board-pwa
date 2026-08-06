@@ -362,13 +362,19 @@ export function createNotificationHub({ dataFile, subject = DEFAULT_SUBJECT } = 
     });
   }
 
-  async function broadcast(notificationInput) {
+  async function broadcast(notificationInput, options = {}) {
     await init();
 
     const payload = buildNotificationPayload(notificationInput);
     const body = JSON.stringify(payload);
     const snapshot = await readData();
-    const activeSubscriptions = snapshot.subscriptions.filter((subscription) => isSubscriptionAuthorized(subscription));
+    const targetedEmployeeIds = Array.isArray(options?.employeeIds)
+      ? new Set(options.employeeIds.map((employeeId) => cleanText(employeeId, 80)))
+      : null;
+    const activeSubscriptions = snapshot.subscriptions.filter((subscription) => (
+      isSubscriptionAuthorized(subscription)
+      && (targetedEmployeeIds === null || targetedEmployeeIds.has(subscription.employeeId))
+    ));
 
     if (!activeSubscriptions.length) {
       return {

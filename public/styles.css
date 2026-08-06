@@ -8148,6 +8148,10 @@ body {
   font-size: 0.92rem;
 }
 
+.message-group-table {
+  min-width: 0;
+}
+
 .page-shell:is(.employee-shell, .hr-shell, .webmaster-shell, .it-shell) .admin-table th {
   font-size: 0.82rem !important;
   font-weight: 700 !important;
@@ -8356,6 +8360,16 @@ body {
   width: max-content !important;
   max-width: min(15rem, 100%) !important;
   text-align: center !important;
+}
+
+.employee-shell .employee-brand-banner .employee-session-pill {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+  justify-self: center;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .auth-gate-card.entry-surface .auth-frame-eyebrow,
@@ -8788,6 +8802,23 @@ body {
   justify-self: stretch;
 }
 
+.page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .admin-session-pill {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .admin-session-row {
+  display: flex;
+  flex: 1 1 100%;
+  min-width: 0;
+  justify-content: center;
+}
+
 .hr-shell .page-actions .ghost-button,
 .webmaster-shell .page-actions .ghost-button,
 .it-shell .page-actions .ghost-button {
@@ -8921,6 +8952,7 @@ body {
     width: 100%;
     justify-self: stretch;
   }
+
 }
 
 .ghost-button.danger {
