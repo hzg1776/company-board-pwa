@@ -1390,7 +1390,7 @@ async function requestJson(path, options = {}) {
 }
 
 function parseAssetVersionFromHtml(html) {
-  const match = String(html || "").match(/assetVersion":"([^"]+)"/);
+  const match = String(html || "").match(/\/app\.js\?v=([a-zA-Z0-9._-]+)/);
   return match ? String(match[1] || "").trim() : "";
 }
 
@@ -1433,17 +1433,25 @@ async function checkForAppUpdate() {
 async function reloadForAppUpdate() {
   try {
     if ("serviceWorker" in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map((registration) => registration.update().catch(() => {})));
+      void navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) =>
+          Promise.all(registrations.map((registration) => registration.update().catch(() => {})))
+        )
+        .catch(() => {});
     }
 
     if ("caches" in window) {
-      const keys = await caches.keys();
-      await Promise.all(
-        keys
-          .filter((key) => String(key || "").startsWith("palziv-portal-v"))
-          .map((key) => caches.delete(key).catch(() => false))
-      );
+      void caches
+        .keys()
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => String(key || "").startsWith("palziv-portal-v"))
+              .map((key) => caches.delete(key).catch(() => false))
+          )
+        )
+        .catch(() => {});
     }
   } catch {
     // Ignore update cleanup failures and fall through to reload.
