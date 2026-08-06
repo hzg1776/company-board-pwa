@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { requiresInstallProfileReload } from "../public/app-routing.js";
+import {
+  requiresDocumentProfileReload,
+  requiresInstallProfileReload
+} from "../public/app-routing.js";
 
 test("route changes reload the document only when the install profile changes", () => {
   const expectations = [
@@ -21,6 +24,25 @@ test("route changes reload the document only when the install profile changes", 
       requiresInstallProfileReload(expectation.current, expectation.next),
       expectation.expected,
       `${expectation.current} -> ${expectation.next}`
+    );
+  }
+});
+
+test("the document manifest stays aligned with hash and history routes", () => {
+  const expectations = [
+    { manifest: "/manifest.webmanifest", route: "employee", expected: false },
+    { manifest: "/manifest.webmanifest", route: "hr", expected: true },
+    { manifest: "/manifest-hr.webmanifest", route: "hr", expected: false },
+    { manifest: "/manifest-hr.webmanifest", route: "launcher", expected: true },
+    { manifest: "/manifest-hr.webmanifest", route: "webmaster", expected: true },
+    { manifest: "https://itotexpress.com/manifest-hr.webmanifest?v=7", route: "hr", expected: false }
+  ];
+
+  for (const expectation of expectations) {
+    assert.equal(
+      requiresDocumentProfileReload(expectation.manifest, expectation.route),
+      expectation.expected,
+      `${expectation.manifest} -> ${expectation.route}`
     );
   }
 });

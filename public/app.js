@@ -3,7 +3,10 @@ import {
   resolveDeviceSetupAction,
   resolveDeviceSetupSecondaryAction
 } from "./device-setup.js?v=__ASSET_VERSION__";
-import { requiresInstallProfileReload } from "./app-routing.js?v=__ASSET_VERSION__";
+import {
+  requiresDocumentProfileReload,
+  requiresInstallProfileReload
+} from "./app-routing.js?v=__ASSET_VERSION__";
 
 const DEFAULT_SITE_CONFIG = {
   name: "Communications and Alert Center",
@@ -5002,6 +5005,12 @@ async function routeTo(route) {
 
 async function hydrateRoute() {
   const route = currentRoute();
+
+  const manifestUrl = document.querySelector('link[rel="manifest"]')?.getAttribute("href") || "";
+  if (requiresDocumentProfileReload(manifestUrl, route)) {
+    window.location.replace(routePath(route));
+    return false;
+  }
 
   const canonicalPath = routePath(route);
 
