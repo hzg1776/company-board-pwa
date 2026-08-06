@@ -3085,6 +3085,8 @@ test("service worker ships versioned shell assets for client cache busting", asy
 
   assert.match(text, /\/device-setup\.js\?v=/i);
   assert.match(text, /\/assets\/palziv-wordmark\.png\?v=/i);
+  assert.match(text, /["']\/palzivalerts\/employee["']/i);
+  assert.match(text, /["']\/palzivalerts\/hr["']/i);
 });
 
 test("app module versions the device setup dependency with the current asset version", async (t) => {
