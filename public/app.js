@@ -3,6 +3,10 @@ import {
   resolveDeviceSetupAction,
   resolveDeviceSetupSecondaryAction
 } from "./device-setup.js?v=__ASSET_VERSION__";
+import {
+  requiresDocumentProfileReload,
+  requiresInstallProfileReload
+} from "./app-routing.js?v=__ASSET_VERSION__";
 
 const DEFAULT_SITE_CONFIG = {
   name: "Communications and Alert Center",
@@ -4967,6 +4971,12 @@ function clearMessageSoon() {
 
 async function routeTo(route) {
   const nextPath = routePath(route);
+
+  if (requiresInstallProfileReload(currentRoute(), route)) {
+    window.location.assign(nextPath);
+    return;
+  }
+
   state.authRecovery.hr = false;
   state.authRecovery.it = false;
   state.authRecovery.webmaster = false;
@@ -4995,6 +5005,12 @@ async function routeTo(route) {
 
 async function hydrateRoute() {
   const route = currentRoute();
+
+  const manifestUrl = document.querySelector('link[rel="manifest"]')?.getAttribute("href") || "";
+  if (requiresDocumentProfileReload(manifestUrl, route)) {
+    window.location.replace(routePath(route));
+    return false;
+  }
 
   const canonicalPath = routePath(route);
 
