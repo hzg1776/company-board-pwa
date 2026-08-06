@@ -1,7 +1,7 @@
 # HR Users Full-Width Directory Design
 
 Date: August 6, 2026  
-Status: Approved design; implementation pending written-spec review
+Status: Implemented; untested by explicit user direction
 
 ## Problem
 
@@ -76,18 +76,12 @@ Filtered entries are hidden with the standard `hidden` attribute. Because every 
 
 - `public/app.js`: pure filter matcher, accordion rendering, directory toolbar, and targeted DOM filter handlers.
 - `public/styles.css`: HR Users-only desktop width override and responsive directory/card layouts in the final cascade.
-- `test/ui-design-contract.test.js`: source and final-cascade contracts for the wide Users shell, accordion structure, search/filter controls, and no employee-table dependency.
-- A focused behavior test will cover search, status, and group matching before implementation code is added.
+- Existing test files and QA infrastructure remain untouched.
 
-## Verification
+## Testing And QA Exclusion
 
-- Demonstrate the new behavior test failing before implementation, then passing.
-- Run `node --check public/app.js`.
-- Run `node --test test/ui-design-contract.test.js` and the focused behavior test.
-- Run `npm test` and `git diff --check`.
-- Inspect the authenticated HR Users route at approximately 390px, 768px, 1440px, and 1920px.
-- Verify search, both filters, zero-result behavior, keyboard expansion, every employee form, horizontal overflow, and browser console output.
+At the user's explicit direction, this task will not add or modify tests, run automated checks, perform browser QA, or perform responsive QA. The implementation will be handed back as untested.
 
 ## Definition of Done
 
-The HR Users tab uses desktop width without horizontal page or form scrolling; 58 or more employees can be searched and filtered; each employee can be expanded independently; all existing management actions still work; responsive and accessibility checks pass; and no unrelated runtime behavior changes.
+The HR Users tab implements the approved desktop width, search, filters, and independently expandable employee entries without intentionally changing unrelated runtime behavior. Testing and QA are outside this task by explicit user direction.
