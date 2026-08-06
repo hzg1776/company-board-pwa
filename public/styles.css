@@ -9330,3 +9330,97 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* HR panels: make the complete h3 heading row the disclosure control. */
+.hr-shell .hr-section-collapse {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hr-shell .hr-section-collapse > .hr-section-collapse-summary {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--ui-control-min-height);
+  margin: 0 !important;
+  padding: 4px 44px 4px 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  list-style: none;
+}
+
+.hr-shell .hr-section-collapse-summary:is(.employee-access-head, .panel-title) {
+  display: flex;
+  justify-content: space-between;
+}
+
+.hr-shell .hr-section-collapse-summary::-webkit-details-marker {
+  display: none;
+}
+
+.hr-shell .hr-section-collapse-summary::marker {
+  content: "";
+}
+
+.hr-shell .hr-section-collapse-summary::after {
+  content: "\203A";
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--steel);
+  font-size: 1.4rem;
+  line-height: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: transform 160ms ease;
+}
+
+.hr-shell .hr-section-collapse[open] > .hr-section-collapse-summary::after {
+  transform: translateY(-50%) rotate(90deg);
+}
+
+.hr-shell .hr-section-collapse-summary:focus-visible {
+  outline: 3px solid var(--steel);
+  outline-offset: 2px;
+}
+
+.hr-shell .hr-section-collapse-summary > :first-child {
+  min-width: 0;
+}
+
+.hr-shell .hr-section-collapse[open] > .hr-section-collapse-summary {
+  margin-bottom: 14px !important;
+}
+
+.hr-shell .employee-access-card > .hr-section-collapse[open] > .hr-section-collapse-summary {
+  margin-bottom: 18px !important;
+}
+
+.hr-shell .hr-feed-preview > .hr-section-collapse[open] > .hr-section-collapse-summary {
+  margin-bottom: 8px !important;
+}
+
+.hr-shell .hr-section-collapse-body,
+.hr-shell .hr-section-collapse-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hr-shell .hr-section-collapse-body {
+  width: 100%;
+}
+
+.hr-shell .employee-access-card > .hr-section-collapse > .hr-section-collapse-body {
+  display: grid;
+  gap: 18px;
+}
+
+.hr-shell .hr-section-collapse:not([open]) > .hr-section-collapse-body {
+  display: none;
+}

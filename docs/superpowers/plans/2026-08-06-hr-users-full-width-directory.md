@@ -49,3 +49,14 @@
 - [ ] Review the edited source diff only to ensure no unrelated files were intentionally changed.
 - [ ] Do not run syntax checks, automated tests, the local app, browser inspection, responsive inspection, or any QA command.
 - [ ] Report the exact files changed and state clearly that the result is untested.
+
+## Task 4: Collapsible HR H3 Sections
+
+- [ ] Use one shared native `<details class="hr-section-collapse" open>` pattern.
+- [ ] Make each complete `<h3>` heading row the `<summary>` control.
+- [ ] Collapse the entire section body, not only its table or list.
+- [ ] Apply the pattern to New Announcement, Live Employee Updates, Messaging Groups, Employee Accounts, HR Google Authenticator, and HR Admin Accounts.
+- [ ] Keep every section open by default.
+- [ ] Do not apply the new pattern to System Ops or IT panels.
+- [ ] Add a consistent heading-row caret and visible focus styling using existing design tokens.
+- [ ] Do not run tests or QA.

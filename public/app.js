@@ -3096,15 +3096,19 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
   const needsVerify = access.mfaRequired && access.mfaMode === "verify";
   const needsSetup = access.mfaRequired && access.mfaMode === "setup";
   const showEnrollment = Boolean(setup.details);
+  const collapsible = normalizedRoute === "hr";
+  const headingTag = collapsible ? "summary" : "div";
   return `
     <section class="panel-card settings-credential-card">
-      <div class="panel-title panel-title-wide">
+      ${collapsible ? '<details class="hr-section-collapse" open>' : ""}
+      <${headingTag} class="${collapsible ? "hr-section-collapse-summary " : ""}panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("shield")} Multi-factor authentication</p>
           <h3>${escapeHtml(roleLabel)} Google Authenticator</h3>
         </div>
         <span class="admin-table-chip ${mfa.status === "enabled" ? "is-positive" : mfa.status === "grace" ? "is-info" : "is-muted"}">${escapeHtml(mfa.status === "enabled" ? "Enabled" : mfa.status === "grace" ? "Grace" : "Required")}</span>
-      </div>
+      </${headingTag}>
+      ${collapsible ? '<div class="hr-section-collapse-body">' : ""}
       ${showEnrollment ? `
         <div class="auth-recovery-stack">
           <div class="invite-summary">
@@ -3134,6 +3138,7 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
           <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Preparing..." : compact ? "Set Up Google Authenticator" : "Generate Google Authenticator QR")}</button>
         </form>
       `}
+      ${collapsible ? "</div></details>" : ""}
     </section>
   `;
 }
@@ -3347,41 +3352,45 @@ function renderMessageGroupManagementPanel() {
 
   return `
     <section class="panel-card employee-access-card" aria-labelledby="message-groups-heading">
-      <div class="employee-access-head">
-        <div>
-          <h3 id="message-groups-heading">Messaging Groups</h3>
-        </div>
-        <span class="sync-pill">${escapeHtml(`${activeCount} Active`)}</span>
-      </div>
+      <details class="hr-section-collapse" open>
+        <summary class="hr-section-collapse-summary employee-access-head">
+          <div>
+            <h3 id="message-groups-heading">Messaging Groups</h3>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${activeCount} Active`)}</span>
+        </summary>
+        <div class="hr-section-collapse-body">
 
-      <form class="admin-create-grid" data-create-message-group-form>
-        <label class="field">
-          <span>New group name</span>
-          <input name="name" maxlength="80" required>
-        </label>
-        <div class="admin-create-actions">
-          <button class="button" type="submit">${icon("users")} Create Group</button>
-        </div>
-      </form>
-
-      ${
-        groups.length
-          ? `
-            <div class="admin-table-wrap">
-              <table class="admin-table message-group-table">
-                <thead>
-                  <tr>
-                    <th>Group</th>
-                    <th>Rename</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>${groups.map((group) => renderMessageGroupManagementRow(group)).join("")}</tbody>
-              </table>
+          <form class="admin-create-grid" data-create-message-group-form>
+            <label class="field">
+              <span>New group name</span>
+              <input name="name" maxlength="80" required>
+            </label>
+            <div class="admin-create-actions">
+              <button class="button" type="submit">${icon("users")} Create Group</button>
             </div>
-          `
-          : '<div class="empty-state">No messaging groups yet.</div>'
-      }
+          </form>
+
+          ${
+            groups.length
+              ? `
+                <div class="admin-table-wrap">
+                  <table class="admin-table message-group-table">
+                    <thead>
+                      <tr>
+                        <th>Group</th>
+                        <th>Rename</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>${groups.map((group) => renderMessageGroupManagementRow(group)).join("")}</tbody>
+                  </table>
+                </div>
+              `
+              : '<div class="empty-state">No messaging groups yet.</div>'
+          }
+        </div>
+      </details>
     </section>
   `;
 }
@@ -3702,6 +3711,8 @@ function renderAdminAccountsPanel(scope = "hr") {
   const adminUsers = Array.isArray(readAdminDirectory(normalizedScope).adminUsers) ? readAdminDirectory(normalizedScope).adminUsers : [];
   const title = normalizedScope === "it" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
   const countLabel = normalizedScope === "it" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
+  const collapsible = normalizedScope === "hr";
+  const headingTag = collapsible ? "summary" : "div";
   const roleControl = normalizedScope === "it"
     ? `
         <div class="field">
@@ -3740,12 +3751,14 @@ function renderAdminAccountsPanel(scope = "hr") {
 
   return `
     <section class="panel-card employee-access-card">
-      <div class="employee-access-head">
+      ${collapsible ? '<details class="hr-section-collapse" open>' : ""}
+      <${headingTag} class="${collapsible ? "hr-section-collapse-summary " : ""}employee-access-head">
         <div>
           <h3>${escapeHtml(title)}</h3>
         </div>
         <span class="sync-pill">${escapeHtml(`${adminUsers.length} ${countLabel}${adminUsers.length === 1 ? "" : "s"}`)}</span>
-      </div>
+      </${headingTag}>
+      ${collapsible ? '<div class="hr-section-collapse-body">' : ""}
 
       <form class="employee-create-form admin-create-grid" data-create-admin-form data-admin-scope="${escapeHtml(normalizedScope)}">
         <label class="field">
@@ -3767,6 +3780,7 @@ function renderAdminAccountsPanel(scope = "hr") {
       </form>
 
       ${renderAdminDirectoryTable(adminUsers, normalizedScope)}
+      ${collapsible ? "</div></details>" : ""}
     </section>
   `;
 }
@@ -3789,49 +3803,53 @@ function renderEmployeeDirectoryPanel() {
 
   return `
     <section class="panel-card employee-access-card" data-employee-directory>
-      <div class="employee-access-head">
-        <div>
-          <h3>Employee Accounts</h3>
+      <details class="hr-section-collapse" open>
+        <summary class="hr-section-collapse-summary employee-access-head">
+          <div>
+            <h3>Employee Accounts</h3>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
+        </summary>
+        <div class="hr-section-collapse-body">
+
+          <div class="employee-directory-toolbar" role="search" aria-label="Filter employee accounts">
+            <label class="field employee-directory-search">
+              <span>Search employees</span>
+              <input
+                type="search"
+                placeholder="Name or username"
+                autocomplete="off"
+                aria-controls="employee-directory-list"
+                data-employee-directory-search
+              >
+            </label>
+            <label class="field employee-directory-status">
+              <span>Status</span>
+              <select aria-controls="employee-directory-list" data-employee-directory-status>
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label class="field employee-directory-group">
+              <span>Messaging group</span>
+              <select aria-controls="employee-directory-list" data-employee-directory-group>
+                <option value="all">All Groups</option>
+                ${groups
+                  .map(
+                    (group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(`${group.name}${group.active === false ? " (Inactive)" : ""}`)}</option>`
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <p class="employee-directory-count" data-employee-directory-count aria-live="polite" aria-atomic="true">
+              ${escapeHtml(`Showing ${employees.length} of ${employees.length} employee account${employees.length === 1 ? "" : "s"}.`)}
+            </p>
+          </div>
+
+          ${renderEmployeeDirectoryList(employees)}
         </div>
-        <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
-      </div>
-
-      <div class="employee-directory-toolbar" role="search" aria-label="Filter employee accounts">
-        <label class="field employee-directory-search">
-          <span>Search employees</span>
-          <input
-            type="search"
-            placeholder="Name or username"
-            autocomplete="off"
-            aria-controls="employee-directory-list"
-            data-employee-directory-search
-          >
-        </label>
-        <label class="field employee-directory-status">
-          <span>Status</span>
-          <select aria-controls="employee-directory-list" data-employee-directory-status>
-            <option value="all">All</option>
-            <option value="active">Active</option>
-            <option value="disabled">Disabled</option>
-          </select>
-        </label>
-        <label class="field employee-directory-group">
-          <span>Messaging group</span>
-          <select aria-controls="employee-directory-list" data-employee-directory-group>
-            <option value="all">All Groups</option>
-            ${groups
-              .map(
-                (group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(`${group.name}${group.active === false ? " (Inactive)" : ""}`)}</option>`
-              )
-              .join("")}
-          </select>
-        </label>
-        <p class="employee-directory-count" data-employee-directory-count aria-live="polite" aria-atomic="true">
-          ${escapeHtml(`Showing ${employees.length} of ${employees.length} employee account${employees.length === 1 ? "" : "s"}.`)}
-        </p>
-      </div>
-
-      ${renderEmployeeDirectoryList(employees)}
+      </details>
     </section>
   `;
 }
@@ -4150,72 +4168,80 @@ function renderHrFeedPanel() {
     <section class="panel-stack">
       <section class="admin-workspace hr-feed-workspace" aria-label="HR feed control center">
         <section class="tool-panel composer-panel panel-card" aria-label="Publish update">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("megaphone")} Publish update</p>
-              <h3>New announcement</h3>
+          <details class="hr-section-collapse" open>
+            <summary class="hr-section-collapse-summary panel-title panel-title-wide">
+              <div>
+                <p class="eyebrow">${icon("megaphone")} Publish update</p>
+                <h3>New announcement</h3>
+              </div>
+            </summary>
+            <div class="hr-section-collapse-body">
+              <form data-post-form>
+                <div class="composer-grid">
+                  <label class="field field-span-2">
+                    <span>Title</span>
+                    <input name="title" maxlength="90" required>
+                  </label>
+                  <label class="field field-span-2">
+                    <span>Message</span>
+                    <textarea name="body" maxlength="700" required></textarea>
+                  </label>
+                  <label class="field">
+                    <span>Category</span>
+                    <select name="type">
+                      <option>News</option>
+                      <option>Weather</option>
+                      <option>Shift</option>
+                      <option>Safety</option>
+                      <option value="HR">HR</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Priority</span>
+                    <select name="priority">
+                      <option>Normal</option>
+                      <option>Important</option>
+                      <option>Urgent</option>
+                    </select>
+                  </label>
+                  ${renderPostAudienceControls()}
+                  <label class="field">
+                    <span>Retention</span>
+                    <select name="alertRetention">
+                      <option value="24h">24 Hours</option>
+                      <option value="168h">7 Days</option>
+                      <option value="720h" selected>30 Days</option>
+                      <option value="manual">Manual Only</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-actions">
+                  <button class="button" type="submit">${icon("send")} Publish update</button>
+                </div>
+              </form>
             </div>
-          </div>
-          <form data-post-form>
-            <div class="composer-grid">
-              <label class="field field-span-2">
-                <span>Title</span>
-                <input name="title" maxlength="90" required>
-              </label>
-              <label class="field field-span-2">
-                <span>Message</span>
-                <textarea name="body" maxlength="700" required></textarea>
-              </label>
-              <label class="field">
-                <span>Category</span>
-                <select name="type">
-                  <option>News</option>
-                  <option>Weather</option>
-                  <option>Shift</option>
-                  <option>Safety</option>
-                  <option value="HR">HR</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Priority</span>
-                <select name="priority">
-                  <option>Normal</option>
-                  <option>Important</option>
-                  <option>Urgent</option>
-                </select>
-              </label>
-              ${renderPostAudienceControls()}
-              <label class="field">
-                <span>Retention</span>
-                <select name="alertRetention">
-                  <option value="24h">24 Hours</option>
-                  <option value="168h">7 Days</option>
-                  <option value="720h" selected>30 Days</option>
-                  <option value="manual">Manual Only</option>
-                </select>
-              </label>
-            </div>
-            <div class="form-actions">
-              <button class="button" type="submit">${icon("send")} Publish update</button>
-            </div>
-          </form>
+          </details>
         </section>
 
         <section class="feed-shell feed-shell-quiet feed-shell-bare hr-feed-preview" aria-label="Live managed employee feed">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("board")} Stream</p>
-              <h3>Live employee updates</h3>
+          <details class="hr-section-collapse" open>
+            <summary class="hr-section-collapse-summary panel-title panel-title-wide">
+              <div>
+                <p class="eyebrow">${icon("board")} Stream</p>
+                <h3>Live employee updates</h3>
+              </div>
+              ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
+            </summary>
+            <div class="hr-section-collapse-body">
+              <div class="feed-list feed-list-quiet">
+                ${
+                  notices.length
+                    ? notices.map((post) => renderManagedFeedItem(post)).join("")
+                    : `<div class="empty-state">No updates are live right now.</div>`
+                }
+              </div>
             </div>
-            ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
-          </div>
-          <div class="feed-list feed-list-quiet">
-            ${
-              notices.length
-                ? notices.map((post) => renderManagedFeedItem(post)).join("")
-                : `<div class="empty-state">No updates are live right now.</div>`
-            }
-          </div>
+          </details>
         </section>
       </section>
     </section>

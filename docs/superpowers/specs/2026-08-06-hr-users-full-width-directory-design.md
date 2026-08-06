@@ -16,6 +16,7 @@ The HR Users workspace is constrained by the shared 720px control-center column 
 - Filter employees by access status and messaging group.
 - Preserve every existing employee management action and API contract.
 - Keep mobile and tablet layouts readable without changing the Feed or Settings tabs.
+- Make every HR section headed by an `<h3>` collapsible from its complete heading row.
 
 ## Non-Goals
 
@@ -49,6 +50,10 @@ The eight-column table is replaced with native `<details>` entries:
 - Expanding an entry reveals messaging-group assignment, password reset, device unenrollment, session revocation, access enable/disable, Add to HR, and account deletion.
 - Existing `data-*` form selectors and submission handlers remain unchanged.
 - Entries are collapsed by default so a large roster stays compact.
+
+### HR section headings
+
+Every HR panel whose visible section title is an `<h3>` uses that full heading row as a native collapse control. Each section is open by default, and collapsing it hides the entire section body. The behavior applies to New Announcement, Live Employee Updates, Messaging Groups, Employee Accounts, HR Google Authenticator, and HR Admin Accounts without changing System Ops or IT panels.
 
 ### Search and filtering behavior
 
