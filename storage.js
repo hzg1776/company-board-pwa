@@ -36,6 +36,12 @@ function cleanLongText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function cleanTextList(values, maxLength = 80) {
+  if (!Array.isArray(values)) return [];
+
+  return [...new Set(values.map((value) => cleanText(value, maxLength)).filter(Boolean))];
+}
+
 function isValidIsoDate(value) {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
@@ -137,6 +143,7 @@ function normalizeStoredPost(post = {}) {
     title: title || "Untitled post",
     body,
     audience: cleanText(post.audience || "All employees", 80),
+    audienceGroupIds: cleanTextList(post.audienceGroupIds),
     author: cleanText(post.author || "HR", 80) || "HR",
     createdAt: isValidIsoDate(post.createdAt) ? post.createdAt : nowIso(),
     expiresAt: isValidExpiry(expiresAt) ? expiresAt : ""

@@ -275,7 +275,8 @@ const state = {
   },
   employeeDirectory: {
     loaded: false,
-    employees: []
+    employees: [],
+    messageGroups: []
   },
   employeeBatchUpload: {
     busy: false,
@@ -988,6 +989,37 @@ Copying this into Codex should give it enough context to trace the site health a
     `;
   }
 
+function formatAdminIdentity(user = {}) {
+  const displayName = String(user.displayName || "").trim();
+  const username = String(user.username || "").trim();
+
+  if (displayName && username && displayName.toLowerCase() !== username.toLowerCase()) {
+    return `${displayName} (${username})`;
+  }
+
+  return displayName || username;
+}
+
+function renderAdminSessionIdentity(scope) {
+  const identity = formatAdminIdentity(state.access?.[scope]?.user || {});
+
+  if (!identity) return "";
+
+  return `<span class="admin-session-row"><span class="sync-pill admin-session-pill">${icon("users")} Signed in as <strong>${escapeHtml(identity)}</strong></span></span>`;
+}
+
+function formatEmployeeIdentity(employee = {}) {
+  return String(employee.name || employee.username || "").trim();
+}
+
+function renderEmployeeSessionIdentity() {
+  const identity = formatEmployeeIdentity(state.access.employee.employee || {});
+
+  if (!identity) return "";
+
+  return `<span class="sync-pill employee-session-pill">${icon("users")} Signed in as <strong>${escapeHtml(identity)}</strong></span>`;
+}
+
 function renderAuthFrame({
   title,
   error = "",
@@ -1252,6 +1284,8 @@ function csrfTokenForPath(pathname) {
     route === "/api/webmaster/setup" ||
     route === "/api/admin-users" ||
     route.startsWith("/api/admin-users/") ||
+    route === "/api/message-groups" ||
+    route.startsWith("/api/message-groups/") ||
     route === "/api/employees" ||
     route.startsWith("/api/employees/") ||
     route === "/api/posts" ||
@@ -1503,12 +1537,14 @@ async function loadEmployeeDirectory() {
     const result = await requestJson("/api/employees");
     state.employeeDirectory = {
       loaded: true,
-      employees: Array.isArray(result.employees) ? result.employees : []
+      employees: Array.isArray(result.employees) ? result.employees : [],
+      messageGroups: Array.isArray(result.messageGroups) ? result.messageGroups : []
     };
   } catch {
     state.employeeDirectory = {
       loaded: true,
-      employees: []
+      employees: [],
+      messageGroups: []
     };
   }
 
@@ -1559,7 +1595,8 @@ async function refreshAdminData() {
     });
     state.employeeDirectory = {
       loaded: false,
-      employees: []
+      employees: [],
+      messageGroups: []
     };
     state.securityEvents = {
       loaded: false,
@@ -3210,6 +3247,133 @@ function renderAdminAuthGate(route) {
   });
 }
 
+function messageGroups() {
+  const groups = Array.isArray(state.employeeDirectory?.messageGroups) ? state.employeeDirectory.messageGroups : [];
+
+  return groups
+    .filter((group) => group && group.id)
+    .slice()
+    .sort((first, second) => String(first.name || "").localeCompare(String(second.name || "")));
+}
+
+function activeMessageGroups() {
+  return messageGroups().filter((group) => group.active !== false);
+}
+
+function renderMessageGroupSelector({ selectedIds = [], preserveInactive = false } = {}) {
+  const selected = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id)));
+  const activeGroups = activeMessageGroups();
+  const inactiveAssignedGroups = preserveInactive
+    ? messageGroups().filter((group) => group.active === false && selected.has(String(group.id)))
+    : [];
+
+  return `
+    <fieldset class="admin-role-picker message-group-selector field-span-2">
+      <legend>Messaging groups</legend>
+      <div class="admin-role-editor">
+        ${
+          activeGroups.length || inactiveAssignedGroups.length
+            ? activeGroups
+                .map(
+                  (group) => `
+                    <label class="checkbox-row">
+                      <input name="groupIds" type="checkbox" value="${escapeHtml(group.id)}"${selected.has(String(group.id)) ? " checked" : ""}>
+                      <span>${escapeHtml(group.name)}</span>
+                    </label>
+                  `
+                )
+                .join("") + inactiveAssignedGroups
+                .map(
+                  (group) => `
+                    <label class="checkbox-row">
+                      <input name="groupIds" type="checkbox" value="${escapeHtml(group.id)}" checked>
+                      <span>${escapeHtml(group.name)} (Inactive)</span>
+                    </label>
+                  `
+                )
+                .join("")
+            : '<span class="admin-table-secondary">No active messaging groups available.</span>'
+        }
+      </div>
+    </fieldset>
+  `;
+}
+
+function renderMessageGroupManagementRow(group) {
+  const active = group.active !== false;
+
+  return `
+    <tr>
+      <td>
+        <div class="admin-table-primary">${escapeHtml(group.name)}</div>
+        <span class="admin-table-chip ${active ? "is-positive" : "is-muted"}">${active ? "Active" : "Inactive"}</span>
+      </td>
+      <td>
+        <form class="admin-table-inline-form employee-password-inline-form" data-rename-message-group-form aria-label="Rename ${escapeHtml(group.name)}">
+          <input type="hidden" name="groupId" value="${escapeHtml(group.id)}">
+          <label class="field">
+            <span>Group name</span>
+            <input name="name" value="${escapeHtml(group.name)}" maxlength="80" required>
+          </label>
+          <button class="ghost-button" type="submit">Save name</button>
+        </form>
+      </td>
+      <td>
+        <form data-message-group-status-form>
+          <input type="hidden" name="groupId" value="${escapeHtml(group.id)}">
+          <input type="hidden" name="active" value="${active ? "false" : "true"}">
+          <button class="ghost-button" type="submit">${active ? `${icon("alert")} Deactivate` : `${icon("check")} Reactivate`}</button>
+        </form>
+      </td>
+    </tr>
+  `;
+}
+
+function renderMessageGroupManagementPanel() {
+  const groups = messageGroups();
+  const activeCount = groups.filter((group) => group.active !== false).length;
+
+  return `
+    <section class="panel-card employee-access-card" aria-labelledby="message-groups-heading">
+      <div class="employee-access-head">
+        <div>
+          <h3 id="message-groups-heading">Messaging Groups</h3>
+        </div>
+        <span class="sync-pill">${escapeHtml(`${activeCount} Active`)}</span>
+      </div>
+
+      <form class="admin-create-grid" data-create-message-group-form>
+        <label class="field">
+          <span>New group name</span>
+          <input name="name" maxlength="80" required>
+        </label>
+        <div class="admin-create-actions">
+          <button class="button" type="submit">${icon("users")} Create Group</button>
+        </div>
+      </form>
+
+      ${
+        groups.length
+          ? `
+            <div class="admin-table-wrap">
+              <table class="admin-table message-group-table">
+                <thead>
+                  <tr>
+                    <th>Group</th>
+                    <th>Rename</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>${groups.map((group) => renderMessageGroupManagementRow(group)).join("")}</tbody>
+              </table>
+            </div>
+          `
+          : '<div class="empty-state">No messaging groups yet.</div>'
+      }
+    </section>
+  `;
+}
+
 function renderEmployeeDirectoryRow(employee) {
   return `
     <tr>
@@ -3236,6 +3400,13 @@ function renderEmployeeDirectoryRow(employee) {
           <button class="ghost-button" type="submit"${employee.devices ? "" : " disabled"}>
             ${icon("delete")} Unenroll
           </button>
+        </form>
+      </td>
+      <td>
+        <form class="admin-table-inline-form" data-employee-groups-form>
+          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+          ${renderMessageGroupSelector({ selectedIds: employee.groupIds, preserveInactive: true })}
+          <button class="ghost-button" type="submit">Save groups</button>
         </form>
       </td>
       <td>
@@ -3550,6 +3721,7 @@ function renderEmployeeDirectoryTable(employees) {
             <th>Status</th>
             <th>Sessions</th>
             <th>Devices</th>
+            <th>Messaging Groups</th>
             <th>Reset Password</th>
             <th>Actions</th>
           </tr>
@@ -3597,6 +3769,7 @@ function renderEmployeeCreatePanel() {
             <span>Temporary password</span>
             <input name="password" type="password" minlength="10" required>
           </label>
+          ${renderMessageGroupSelector()}
           <label class="checkbox-row field-span-2">
             <input name="passwordResetRequired" type="checkbox" checked>
             <span>Require password reset on first use</span>
@@ -3711,6 +3884,7 @@ function renderEmployee() {
               <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
               <div class="employee-brand-banner-copy">
                 <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
+                ${renderEmployeeSessionIdentity()}
               </div>
               ${renderEmployeeWeatherCard()}
             </div>
@@ -3794,6 +3968,45 @@ function hrFeedPosts() {
   return notices;
 }
 
+function renderPostAudienceControls() {
+  const groups = activeMessageGroups();
+
+  return `
+    <fieldset class="admin-role-picker field-span-2">
+      <legend>Audience</legend>
+      <div class="admin-role-editor">
+        <label class="checkbox-row">
+          <input name="audienceMode" type="radio" value="all" checked data-post-audience-mode>
+          <span>All Employees</span>
+        </label>
+        <label class="checkbox-row">
+          <input name="audienceMode" type="radio" value="groups" data-post-audience-mode${groups.length ? "" : " disabled"}>
+          <span>Selected groups</span>
+        </label>
+      </div>
+    </fieldset>
+    <fieldset class="admin-role-picker field-span-2" data-post-audience-groups disabled hidden>
+      <legend>Messaging groups</legend>
+      <div class="admin-role-editor">
+        ${
+          groups.length
+            ? groups
+                .map(
+                  (group) => `
+                    <label class="checkbox-row">
+                      <input name="audienceGroupIds" type="checkbox" value="${escapeHtml(group.id)}">
+                      <span>${escapeHtml(group.name)}</span>
+                    </label>
+                  `
+                )
+                .join("")
+            : '<span class="admin-table-secondary">Create an active messaging group before targeting an announcement.</span>'
+        }
+      </div>
+    </fieldset>
+  `;
+}
+
 function renderHrFeedPanel() {
   const notices = hrFeedPosts();
 
@@ -3835,17 +4048,7 @@ function renderHrFeedPanel() {
                   <option>Urgent</option>
                 </select>
               </label>
-              <label class="field">
-                <span>Audience</span>
-                <select name="audience">
-                  <option>All Employees</option>
-                  <option>Operations</option>
-                  <option>Office Staff</option>
-                  <option>Warehouse</option>
-                  <option>Leadership</option>
-                  <option value="HR">HR</option>
-                </select>
-              </label>
+              ${renderPostAudienceControls()}
               <label class="field">
                 <span>Retention</span>
                 <select name="alertRetention">
@@ -4080,6 +4283,7 @@ function renderWebmasterSettingsPanel() {
 function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
+      ${renderMessageGroupManagementPanel()}
       ${renderEmployeeDirectoryPanel()}
       ${renderEmployeeBatchUploadPanel()}
       ${renderEmployeeCreatePanel()}
@@ -4457,6 +4661,7 @@ function renderWebmaster() {
       <header class="page-head">
         ${brandBlock("Systems Command Center")}
         <div class="page-actions">
+          ${renderAdminSessionIdentity("webmaster")}
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
@@ -4652,6 +4857,7 @@ function renderIt() {
       <header class="page-head">
         ${brandBlock("IT Control Center")}
         <div class="page-actions">
+          ${renderAdminSessionIdentity("it")}
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
           <button class="ghost-button" type="button" data-route="webmaster">${icon("monitor")} Systems Console</button>
@@ -4699,6 +4905,7 @@ function renderAdmin() {
       <header class="page-head">
         ${brandBlock("HR Control Center")}
         <div class="page-actions">
+          ${renderAdminSessionIdentity("hr")}
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
@@ -4935,23 +5142,34 @@ async function handleDeleteAction(id) {
 async function handlePostSubmit(event) {
   event.preventDefault();
   const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
+  const formData = new FormData(form);
+  const data = Object.fromEntries(formData);
+  data.audienceGroupIds = formData.getAll("audienceGroupIds");
+
+  if (data.audienceMode !== "groups") {
+    data.audienceMode = "all";
+    data.audienceGroupIds = [];
+  } else if (!data.audienceGroupIds.length) {
+    const firstGroup = form.querySelector('[name="audienceGroupIds"]');
+    firstGroup?.setCustomValidity("Select at least one messaging group.");
+    firstGroup?.reportValidity();
+    return;
+  }
 
   try {
     const result = await createPost(data);
     form.reset();
-    form.elements.audience.value = "All Employees";
     form.elements.alertRetention.value = "720h";
     if (result.notification?.error) {
       setMessage(`Published, but alert delivery failed: ${result.notification.error}`, "warning");
     } else if (result.post.notifyEmployees) {
       const pushResult = result.notification?.push || result.notification || {};
       const delivered = Number(pushResult.delivered || 0);
-      const total = Number(pushResult.total || 0);
+      const eligible = Number(pushResult.authorized || 0);
       setMessage(
-        total > 0
-          ? `Published and notified ${delivered}/${total} subscribed device${total === 1 ? "" : "s"}.`
-          : "Published. No devices are subscribed for alerts.",
+        eligible > 0
+          ? `Published and notified ${delivered}/${eligible} eligible subscribed device${eligible === 1 ? "" : "s"}.`
+          : "Published. No eligible devices are subscribed for alerts.",
         "success"
       );
     } else {
@@ -4963,6 +5181,27 @@ async function handlePostSubmit(event) {
 
   render();
   clearMessageSoon();
+}
+
+function handlePostAudienceChange(event) {
+  const input = event.target;
+
+  if (!(input instanceof HTMLInputElement)) return;
+  if (!input.matches('[data-post-audience-mode], [name="audienceGroupIds"]')) return;
+
+  const form = input.closest("[data-post-form]");
+  if (!(form instanceof HTMLFormElement)) return;
+
+  const groupsFieldset = form.querySelector("[data-post-audience-groups]");
+  const targeted = form.querySelector('[name="audienceMode"]:checked')?.value === "groups";
+
+  if (groupsFieldset instanceof HTMLFieldSetElement) {
+    groupsFieldset.disabled = !targeted;
+    groupsFieldset.hidden = !targeted;
+  }
+
+  const firstGroup = form.querySelector('[name="audienceGroupIds"]');
+  firstGroup?.setCustomValidity("");
 }
 
 async function handleWeatherSubmit(event) {
@@ -5155,6 +5394,7 @@ async function handleCreateEmployeeSubmit(event) {
   const formData = new FormData(form);
   const data = Object.fromEntries(formData);
   data.passwordResetRequired = formData.get("passwordResetRequired") !== null;
+  data.groupIds = formData.getAll("groupIds");
 
   try {
     await requestJson("/api/employees", {
@@ -5166,6 +5406,68 @@ async function handleCreateEmployeeSubmit(event) {
     setMessage("Employee account created.", "success");
   } catch (error) {
     setMessage(error.message || "Could not create the employee account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleCreateMessageGroupSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+
+  try {
+    await requestJson("/api/message-groups", {
+      method: "POST",
+      body: JSON.stringify({ name: formData.get("name") })
+    });
+    form.reset();
+    await refreshAdminData();
+    setMessage("Messaging group created.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not create the messaging group.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleRenameMessageGroupSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const groupId = String(formData.get("groupId") || "");
+
+  try {
+    await requestJson(`/api/message-groups/${encodeURIComponent(groupId)}/name`, {
+      method: "POST",
+      body: JSON.stringify({ name: formData.get("name") })
+    });
+    await refreshAdminData();
+    setMessage("Messaging group renamed.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not rename the messaging group.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleMessageGroupStatusSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const groupId = String(formData.get("groupId") || "");
+  const active = String(formData.get("active") || "") === "true";
+
+  try {
+    await requestJson(`/api/message-groups/${encodeURIComponent(groupId)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ active })
+    });
+    await refreshAdminData();
+    setMessage(active ? "Messaging group reactivated." : "Messaging group deactivated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update the messaging group.");
   }
 
   render();
@@ -5639,6 +5941,28 @@ async function handleEmployeeAccessSubmit(event) {
     setMessage(String(data.active || "") === "true" ? "Employee access restored." : "Employee access disabled.", "success");
   } catch (error) {
     setMessage(error.message || "Could not update employee access.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleEmployeeGroupsSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const employeeId = String(formData.get("employeeId") || "");
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(employeeId)}/groups`, {
+      method: "POST",
+      body: JSON.stringify({
+        groupIds: formData.getAll("groupIds")
+      })
+    });
+    await refreshAdminData();
+    setMessage("Employee messaging groups updated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update employee messaging groups.");
   }
 
   render();
@@ -6225,6 +6549,21 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.matches("[data-create-message-group-form]")) {
+    await handleCreateMessageGroupSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-rename-message-group-form]")) {
+    await handleRenameMessageGroupSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-message-group-status-form]")) {
+    await handleMessageGroupStatusSubmit(event);
+    return;
+  }
+
   if (event.target.matches("[data-create-employee-form]")) {
     await handleCreateEmployeeSubmit(event);
     return;
@@ -6272,6 +6611,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-employee-access-form]")) {
     await handleEmployeeAccessSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-employee-groups-form]")) {
+    await handleEmployeeGroupsSubmit(event);
     return;
   }
 
@@ -6339,6 +6683,7 @@ app.addEventListener("submit", async (event) => {
 });
 
 app.addEventListener("change", async (event) => {
+  handlePostAudienceChange(event);
   await handleEmployeeBatchFileChange(event);
 });
 
