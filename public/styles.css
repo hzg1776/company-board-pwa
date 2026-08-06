@@ -8362,14 +8362,30 @@ body {
   text-align: center !important;
 }
 
+.employee-shell .employee-brand-banner {
+  position: relative;
+}
+
 .employee-shell .employee-brand-banner .employee-session-pill {
+  position: absolute;
+  top: 14px;
+  right: 14px;
   min-width: 0;
-  max-width: 100%;
+  max-width: min(260px, calc(50% - 54px));
   box-sizing: border-box;
   justify-content: center;
-  justify-self: center;
+  justify-self: auto;
   overflow-wrap: anywhere;
   text-align: center;
+  z-index: 1;
+}
+
+@media (max-width: 720px) {
+  .employee-shell .employee-brand-banner-copy > .employee-session-pill {
+    position: static;
+    max-width: 100%;
+    justify-self: center;
+  }
 }
 
 .auth-gate-card.entry-surface .auth-frame-eyebrow,

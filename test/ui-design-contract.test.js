@@ -171,6 +171,11 @@ test("employee masthead identifies the signed-in employee", async () => {
     css,
     ".employee-shell .employee-brand-banner .employee-session-pill"
   );
+  const employeeBannerBody = getLastSelectorBody(css, ".employee-shell .employee-brand-banner");
+  const mobileIdentityBody = getLastSelectorBody(
+    css,
+    ".employee-shell .employee-brand-banner-copy > .employee-session-pill"
+  );
 
   assert.equal(formatEmployeeIdentity({ name: "Test User1", username: "testuser1" }), "Test User1");
   assert.equal(formatEmployeeIdentity({ username: "testuser1" }), "testuser1");
@@ -179,8 +184,14 @@ test("employee masthead identifies the signed-in employee", async () => {
   assert.ok(identityIndex > titleIndex);
   assert.ok(weatherIndex > identityIndex);
   assert.equal(getDeclarationValue(identityBody, "min-width"), "0");
-  assert.equal(getDeclarationValue(identityBody, "max-width"), "100%");
+  assert.equal(getDeclarationValue(identityBody, "position"), "absolute");
+  assert.equal(getDeclarationValue(identityBody, "top"), "14px");
+  assert.equal(getDeclarationValue(identityBody, "right"), "14px");
+  assert.equal(getDeclarationValue(identityBody, "max-width"), "min(260px, calc(50% - 54px))");
   assert.equal(getDeclarationValue(identityBody, "overflow-wrap"), "anywhere");
+  assert.equal(getDeclarationValue(employeeBannerBody, "position"), "relative");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "position"), "static");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "max-width"), "100%");
 });
 
 test("HR users panel exposes JSON and YAML employee batch upload controls", async () => {
