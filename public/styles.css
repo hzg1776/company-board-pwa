@@ -8381,10 +8381,17 @@ body {
 }
 
 @media (max-width: 720px) {
+  .employee-shell .employee-brand-banner {
+    position: relative;
+    padding-top: 48px !important;
+  }
+
   .employee-shell .employee-brand-banner-copy > .employee-session-pill {
-    position: static;
-    max-width: 100%;
-    justify-self: center;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    max-width: calc(100% - 24px);
+    justify-self: auto;
   }
 }
 

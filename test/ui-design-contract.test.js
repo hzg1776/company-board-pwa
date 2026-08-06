@@ -190,8 +190,11 @@ test("employee masthead identifies the signed-in employee", async () => {
   assert.equal(getDeclarationValue(identityBody, "max-width"), "min(260px, calc(50% - 54px))");
   assert.equal(getDeclarationValue(identityBody, "overflow-wrap"), "anywhere");
   assert.equal(getDeclarationValue(employeeBannerBody, "position"), "relative");
-  assert.equal(getDeclarationValue(mobileIdentityBody, "position"), "static");
-  assert.equal(getDeclarationValue(mobileIdentityBody, "max-width"), "100%");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "position"), "absolute");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "top"), "12px");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "right"), "12px");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "max-width"), "calc(100% - 24px)");
+  assert.equal(getDeclarationValue(employeeBannerBody, "padding-top"), "48px !important");
 });
 
 test("HR users panel exposes JSON and YAML employee batch upload controls", async () => {
