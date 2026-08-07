@@ -1,6 +1,6 @@
 # Test Group Rollout Guide
 
-**Document status:** Targeted-delivery workflow verified August 6, 2026.
+**Document status:** Targeted-delivery workflow verified August 7, 2026.
 
 ## Purpose
 

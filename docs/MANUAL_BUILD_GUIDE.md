@@ -1,6 +1,6 @@
 # Manual Build Guide
 
-**Document status:** Verified August 6, 2026.
+**Document status:** Verified August 7, 2026.
 
 Use this guide to rebuild the current Quick Start, full User Manual, HTML files, PDF files, and route screenshots.
 

@@ -1,6 +1,6 @@
 # Beginner Guide: What To Do When The App Looks Black Or Blank
 
-**Document status:** Verified August 6, 2026.
+**Document status:** Verified August 7, 2026.
 
 Use this guide when the portal is black, blank, partly loaded, or missing its normal buttons.
 

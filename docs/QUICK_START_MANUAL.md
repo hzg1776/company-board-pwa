@@ -1,6 +1,6 @@
 # Quick Start: Use the Communications and Alert Center
 
-**Document status:** Verified against the shipped application source on August 6, 2026 (revision `0a523a3`).
+**Document status:** Verified against the release-candidate application source on August 7, 2026 (revision `deae9f1`).
 
 This is the short, practical guide. Use the full [User Manual](USER_MANUAL.md) for account recovery, governance, troubleshooting, and detailed role instructions.
 

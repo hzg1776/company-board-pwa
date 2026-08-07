@@ -1,34 +1,34 @@
 ﻿{
-    "generatedAt":  "2026-08-06T19:34:48.3094320Z",
-    "applicationRevision":  "0a523a3",
+    "generatedAt":  "2026-08-07T13:57:14.4400366Z",
+    "applicationRevision":  "deae9f1",
     "captureMode":  "public-sign-in",
     "baseUrl":  "http://127.0.0.1:3116",
     "sources":  [
                     {
                         "path":  "docs/USER_MANUAL.md",
-                        "sha256":  "087388CA2737BE058DCB8AD28CA079048BFFAC55010B869EBF81574F2B8ABD5C"
+                        "sha256":  "327A608EE81E10094C14A806ADAF04B0B31D98227AC821163529C245065E7BCF"
                     },
                     {
                         "path":  "docs/QUICK_START_MANUAL.md",
-                        "sha256":  "E361BB8B439524E230B6B2E7E60BAEC7F3839EC37BD21060ED52EAC29C37AF77"
+                        "sha256":  "7F98C12D6D54DD0702F39E91536061F1AAF2930DFF7661E77E8F13F9BD3C0B03"
                     }
                 ],
     "artifacts":  [
                       {
                           "path":  "docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.html",
-                          "sha256":  "2A8511E28E747B6265BF90C96413D860216F094C38058ADF4921BC80A963D004"
+                          "sha256":  "84CE3AC4A983E50788C3C0D60CAC273C9BDC964D9C81B23B23F0F00A16FFA127"
                       },
                       {
                           "path":  "docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf",
-                          "sha256":  "AD4382DB6152E7F71811BC751C8CE0ABA841C700237725F770EE7FC9FE560225"
+                          "sha256":  "D28CC2F668892C9E13E879665F098DC8FFB0894517AB633AD96BE385C131FB68"
                       },
                       {
                           "path":  "docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.html",
-                          "sha256":  "E717F39388CA5C8D5B627A1195AFA71A26AF04D9BD15104C601F37CD97AD3253"
+                          "sha256":  "DB82EB18C54873FF8FA71E2CA033567F4E806A17A1F090B2D39D2A6C7C303487"
                       },
                       {
                           "path":  "docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.pdf",
-                          "sha256":  "602EBBDB0C09070AF3622713FF349F0E0D28BCB8A5B1921D2A37E9A3D8C9B35E"
+                          "sha256":  "F8874F014FEE7A750890E0E69C1792EEE0571341075F4B277203C65005DBA68B"
                       },
                       {
                           "path":  "docs/manual-artifacts/screenshots/01-launcher.png",

@@ -6,7 +6,7 @@
 
 **Tech Stack:** Existing browser JavaScript in `public/app.js` and the existing CSS design system in `public/styles.css`.
 
-**Status:** Implemented and handed off without testing or QA by explicit user direction.
+**Status:** Implemented and initially handed off without testing or QA by explicit user direction; release verification resumed August 7, 2026.
 
 ## Global Constraints
 

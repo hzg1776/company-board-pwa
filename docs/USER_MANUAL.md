@@ -1,6 +1,6 @@
 # Communications and Alert Center User Manual
 
-**Document status:** Verified against the shipped application source on August 6, 2026 (revision `0a523a3`).
+**Document status:** Verified against the release-candidate application source on August 7, 2026 (revision `deae9f1`).
 
 ## 1. Purpose
 

@@ -88,13 +88,13 @@ function New-ScreenshotAppendix {
     $relativePath = "screenshots/$($route.name).png"
     $screenClass = if ($isFirst) { "screen" } else { "screen screen-following" }
     $intro = if ($isFirst) {
-      "<h2>Route Screenshots</h2><p class=`"caption`">Use these images to recognize the current entry points. Capture mode: $CaptureMode.</p>"
+      "    <h2>Route Screenshots</h2><p class=`"caption`">Use these images to recognize the current entry points. Capture mode: $CaptureMode.</p>"
     } else {
       ""
     }
     $html += @"
   <div class="$screenClass">
-    $intro
+$intro
     <div class="caption">$($route.label)</div>
     <img src="$relativePath" alt="$($route.label)" />
   </div>

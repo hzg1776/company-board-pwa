@@ -1,7 +1,7 @@
 # Project-A Manual Index
 
-**Last reviewed:** August 6, 2026
-**Application revision reviewed:** `0a523a3`
+**Last reviewed:** August 7, 2026
+**Application revision reviewed:** `deae9f1`
 
 This file is the starting point for finding Project-A manuals and deciding whether a document is safe to use.
 
@@ -17,9 +17,9 @@ This file is the starting point for finding Project-A manuals and deciding wheth
 
 | Manual | Location | Status | Audience |
 | --- | --- | --- | --- |
-| Quick Start | `docs/QUICK_START_MANUAL.md` | Current - verified August 6, 2026 | Employees, HR, Systems, IT |
+| Quick Start | `docs/QUICK_START_MANUAL.md` | Current - verified August 7, 2026 | Employees, HR, Systems, IT |
 | Quick Start PDF/HTML | `docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.pdf` and `.html` | Current after the August 6 rebuild | Distribution copy |
-| Full User Manual | `docs/USER_MANUAL.md` | Current - verified August 6, 2026 | Employees and all admin roles |
+| Full User Manual | `docs/USER_MANUAL.md` | Current - verified August 7, 2026 | Employees and all admin roles |
 | Full User Manual PDF/HTML | `docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf` and `.html` | Current after the August 6 rebuild | Distribution copy |
 | Black/Blank Screen Guide | `docs/BEGINNER_BLACK_SCREEN_GUIDE.md` plus `docs/manual-artifacts/black-screen-guide/Beginner_Black_Screen_Guide.pdf` | Current - public health first; protected diagnostics for Systems/IT | Employees and support |
 | Test Group Rollout Guide | `docs/TEST_GROUP_ROLLOUT_GUIDE.md` | Current targeted-delivery workflow; confirm the named roster before use | Pilot operator and HR |
@@ -30,9 +30,9 @@ This file is the starting point for finding Project-A manuals and deciding wheth
 | Document or tool | Location | Status |
 | --- | --- | --- |
 | Manual build guide | `docs/MANUAL_BUILD_GUIDE.md` | Current |
-| Full/quick manual builder | `scripts/build-user-manual-pdf.ps1` | Current after August 6 safety update |
+| Full/quick manual builder | `scripts/build-user-manual-pdf.ps1` | Current after August 7 release verification |
 | Optional auth-state helper | `scripts/capture-manual-screenshots.mjs` | Use only through the builder with disposable nonproduction accounts; MFA-enforced sessions are rejected |
-| Black-screen guide builder | `scripts/build-beginner-black-screen-guide-pdf.ps1` | Current after August 6 route and failure-handling update; build only against a safe local/demo runtime |
+| Black-screen guide builder | `scripts/build-beginner-black-screen-guide-pdf.ps1` | Current after August 7 release verification; build only against a safe local/demo runtime |
 
 ## Operator, Deployment, And Governance Documents
 
