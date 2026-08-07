@@ -528,6 +528,173 @@ test("server protects board reads and revokes disabled employees", async (t) => 
   assert.equal(removedPushRoute.status, 404);
 });
 
+test("signed-in employee can change only their own password", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-employee-self-password-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const maria = await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    passwordResetRequired: true
+  });
+  await provisionStore.createEmployeeAccount({
+    name: "John Smith",
+    username: "john.smith",
+    password: "EmployeePass3!"
+  });
+  await writeFile(path.join(tempDir, "push.json"), `${JSON.stringify({
+    subscriptions: [
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/maria-self-password",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key",
+          auth: "sample-auth-key"
+        },
+        deviceId: "maria-phone",
+        employeeId: maria.employee.id,
+        employeeName: maria.employee.name,
+        username: maria.employee.username,
+        authorized: true
+      }
+    ]
+  }, null, 2)}\n`, "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const login = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(login.status, 200);
+  const cookie = readSetCookie(login);
+
+  const anonymous = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(anonymous.status, 401);
+
+  const crossSite = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: "https://attacker.example",
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(crossSite.status, 403);
+
+  const wrongCurrent = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      currentPassword: "WrongPassword1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(wrongCurrent.status, 400);
+  assert.match((await wrongCurrent.json()).error, /Current password is incorrect\./);
+
+  const pushBefore = JSON.parse(await readFile(path.join(tempDir, "push.json"), "utf8"));
+  const changed = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(changed.status, 200);
+  const changedBody = await changed.json();
+  assert.equal(changedBody.authorized, true);
+  assert.equal(changedBody.employee.username, "maria.lopez");
+  assert.equal(changedBody.employee.passwordResetRequired, false);
+  assert.equal(changedBody.hrReauthenticationRequired, false);
+  assert.equal("password" in changedBody, false);
+  assert.equal("passwordHash" in changedBody.employee, false);
+  const pushAfter = JSON.parse(await readFile(path.join(tempDir, "push.json"), "utf8"));
+  assert.deepEqual(pushAfter, pushBefore);
+
+  const currentSession = await fetch(`${server.baseUrl}/api/employee/check`, {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(currentSession.status, 200);
+  assert.equal((await currentSession.json()).authorized, true);
+
+  const oldLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(oldLogin.status, 400);
+
+  const newLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(newLogin.status, 200);
+
+  const johnLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "john.smith",
+      password: "EmployeePass3!"
+    })
+  });
+  assert.equal(johnLogin.status, 200);
+});
+
 test("HR can unenroll all devices for one employee", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-unenroll-"));
   const securityFile = path.join(tempDir, "security.json");

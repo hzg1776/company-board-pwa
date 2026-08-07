@@ -36,12 +36,12 @@
 <div class="cover">
   <div class="kicker">Communications and Alert Center</div>
   <h1>Professional User Manual</h1>
-  <div class="meta">Generated: August 07, 2026 09:56:43 -04:00</div>
-  <div class="meta">Application revision: deae9f1</div>
+  <div class="meta">Generated: August 07, 2026 11:23:48 -04:00</div>
+  <div class="meta">Application revision: 3ef50a1</div>
   <p class="summary">Current workflows for employees, HR admins, Systems operators, and IT governance admins.</p>
 </div>
 <h1>Communications and Alert Center User Manual</h1>
-<p><strong>Document status:</strong> Verified against the release-candidate application source on August 7, 2026 (revision <code>deae9f1</code>).</p>
+<p><strong>Document status:</strong> Verified against the release-candidate application source on August 7, 2026 (revision <code>3ef50a1</code>).</p>
 <h2>1. Purpose</h2>
 <p>The Communications and Alert Center provides five role-specific entry points:</p>
 <ul>
@@ -135,8 +135,16 @@
 <li>Enter the employee password.</li>
 <li>Select <code>Sign In</code>.</li>
 </ol>
-<p>Employees do not currently have a self-service password-change screen. HR must reset an employee password when a change is required.</p>
-<h3>3.2 Admin Sign-In</h3>
+<h3>3.2 Employee Password Change</h3>
+<ol>
+<li>Sign in to <code>/palzivalerts/employee</code> with the current username and password.</li>
+<li>Scroll below the updates feed and open <code>Change Password</code>.</li>
+<li>Enter the current password.</li>
+<li>Enter the new password twice. It must contain at least 10 characters and must differ from the current password.</li>
+<li>Select <code>Save New Password</code>.</li>
+</ol>
+<p>The current device remains signed in and the employee&#39;s other sessions are signed out. Notification enrollment remains attached to its existing devices. Employees who also have HR access must sign in to HR again with the new password.</p>
+<h3>3.3 Admin Sign-In</h3>
 <ol>
 <li>Open the HR, Systems, or IT route.</li>
 <li>Enter the named admin username and password.</li>
@@ -144,7 +152,7 @@
 <li>If prompted, complete Google Authenticator setup or enter the current 6-digit code.</li>
 </ol>
 <p>The header shows the signed-in admin identity. Confirm it before changing accounts, publishing, or performing recovery work.</p>
-<h3>3.3 First-Run Admin Setup</h3>
+<h3>3.4 First-Run Admin Setup</h3>
 <p>For a new deployment:</p>
 <ol>
 <li>Start the application with the required runtime configuration.</li>
@@ -157,7 +165,7 @@
 <li>Test employee sign-in and alert enrollment on a real device.</li>
 </ol>
 <p>Systems first-run setup remains blocked until HR is authorized.</p>
-<h3>3.4 Admin Invitation Links</h3>
+<h3>3.5 Admin Invitation Links</h3>
 <p>If an authorized operator provides an admin invitation URL:</p>
 <ol>
 <li>Open the original URL before it expires.</li>
@@ -167,7 +175,7 @@
 <li>Complete MFA if prompted.</li>
 </ol>
 <p>If the link is invalid or expired, request a new authorized setup path. Do not forward invitation URLs.</p>
-<h3>3.5 Multi-Factor Authentication</h3>
+<h3>3.6 Multi-Factor Authentication</h3>
 <p>When MFA setup is required:</p>
 <ol>
 <li>Select the Google Authenticator setup action.</li>
@@ -176,7 +184,7 @@
 <li>Select <code>Verify Authenticator</code>.</li>
 </ol>
 <p>When MFA is already enrolled, enter the current 6-digit code after password sign-in. IT can control the application-level admin MFA requirement when the server configuration allows it.</p>
-<h3>3.6 New Portal Update Banner</h3>
+<h3>3.7 New Portal Update Banner</h3>
 <p>If the page shows <code>New portal update available</code>, select <code>Reload now</code>. The reload clears stale service-worker assets and opens the current portal build.</p>
 <h2>4. Employee Guide</h2>
 <h3>4.1 What Employees Can Do</h3>
@@ -185,6 +193,7 @@
 <li>See the signed-in employee name</li>
 <li>See current weather and its refresh age</li>
 <li>Read active company updates assigned to them</li>
+<li>Change their own local account password while signed in</li>
 <li>Sign up the current device for alerts when supported</li>
 <li>Install the portal on a phone home screen</li>
 <li>Sign out</li>
@@ -226,7 +235,19 @@
 <li>Select <code>Sign up for alerts</code> and allow notifications.</li>
 </ol>
 <p>If the setup panel offers <code>Unenroll</code>, it removes the current device. If that control is not visible after setup is complete, remove the site&#39;s notification permission or ask HR or Systems to unenroll the device.</p>
-<h3>4.5 Sign Out</h3>
+<h3>4.5 Change Your Password</h3>
+<ol>
+<li>Scroll below the updates feed.</li>
+<li>Open <code>Change Password</code>.</li>
+<li>Enter the current password.</li>
+<li>Enter a different new password of at least 10 characters.</li>
+<li>Enter the new password again under <code>Confirm New Password</code>.</li>
+<li>Select <code>Save New Password</code>.</li>
+</ol>
+<p>When <code>Require password reset on first use</code> is selected, the employee&#39;s <code>Change Password</code> section opens automatically after sign-in. The news feed remains visible.</p>
+<p>After a successful change, the current device stays signed in and the employee&#39;s other signed-in sessions end. Existing notification enrollment stays attached to its devices. An employee who also has HR access must sign in to HR again with the new password.</p>
+<p>If the employee does not know the current password or cannot sign in, HR must reset it from <code>Employee Accounts</code> and deliver the replacement through an approved secure channel.</p>
+<h3>4.6 Sign Out</h3>
 <p>Select <code>Sign Out</code> at the bottom of the employee screen. Always sign out on a shared device.</p>
 <h2>5. HR Guide</h2>
 <h3>5.1 HR Screen Layout</h3>
@@ -281,7 +302,7 @@
 <li>Select any active messaging groups.</li>
 <li>Select <code>Create Account</code>.</li>
 </ol>
-<p>The interface records <code>Require password reset on first use</code>, but the current employee portal does not enforce a self-service password-change step. HR remains responsible for securely setting or resetting the password.</p>
+<p>When <code>Require password reset on first use</code> is selected, the employee&#39;s <code>Change Password</code> section opens automatically after sign-in. The news feed remains visible. The employee must know the temporary password to replace it. If the employee cannot sign in or does not know the current password, HR must reset it from <code>Employee Accounts</code> and deliver the replacement through an approved secure channel.</p>
 <h3>5.7 Batch Import Employees</h3>
 <p>Use batch upload for JSON or YAML rosters of up to 500 employees.</p>
 <ol>
@@ -402,7 +423,8 @@
 <ul>
 <li>Confirm the employee is using <code>/palzivalerts/employee</code>.</li>
 <li>Confirm the account is active and the username is correct.</li>
-<li>Have HR reset the password if needed.</li>
+<li>If the employee is already signed in, have them open <code>Change Password</code> and replace the temporary or known password.</li>
+<li>If the employee cannot sign in or does not know the current password, have HR reset it from <code>Employee Accounts</code> and deliver the replacement through an approved secure channel.</li>
 <li>Confirm the employee belongs to the required messaging groups.</li>
 <li>Confirm browser notification permission and device enrollment when alerts are expected.</li>
 <li>On iPhone, confirm the portal was opened from its Home Screen icon.</li>
@@ -436,7 +458,8 @@
 <ul>
 <li>Verify the direct employee URL, username, and password.</li>
 <li>Confirm the employee account is active.</li>
-<li>Ask HR to reset the employee password when needed.</li>
+<li>If the employee is already signed in, have them open <code>Change Password</code> and replace the temporary or known password.</li>
+<li>If the employee cannot sign in or does not know the current password, ask HR to reset it from <code>Employee Accounts</code> and deliver the replacement through an approved secure channel.</li>
 </ul>
 <h3>9.2 Admin Cannot Sign In</h3>
 <ul>

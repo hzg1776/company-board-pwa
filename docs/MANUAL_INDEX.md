@@ -1,7 +1,7 @@
 # Project-A Manual Index
 
 **Last reviewed:** August 7, 2026
-**Application revision reviewed:** `deae9f1`
+**Application revision reviewed:** `3ef50a1`
 
 This file is the starting point for finding Project-A manuals and deciding whether a document is safe to use.
 
@@ -18,9 +18,9 @@ This file is the starting point for finding Project-A manuals and deciding wheth
 | Manual | Location | Status | Audience |
 | --- | --- | --- | --- |
 | Quick Start | `docs/QUICK_START_MANUAL.md` | Current - verified August 7, 2026 | Employees, HR, Systems, IT |
-| Quick Start PDF/HTML | `docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.pdf` and `.html` | Current after the August 6 rebuild | Distribution copy |
+| Quick Start PDF/HTML | `docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.pdf` and `.html` | Current after the August 7 rebuild | Distribution copy |
 | Full User Manual | `docs/USER_MANUAL.md` | Current - verified August 7, 2026 | Employees and all admin roles |
-| Full User Manual PDF/HTML | `docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf` and `.html` | Current after the August 6 rebuild | Distribution copy |
+| Full User Manual PDF/HTML | `docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf` and `.html` | Current after the August 7 rebuild | Distribution copy |
 | Black/Blank Screen Guide | `docs/BEGINNER_BLACK_SCREEN_GUIDE.md` plus `docs/manual-artifacts/black-screen-guide/Beginner_Black_Screen_Guide.pdf` | Current - public health first; protected diagnostics for Systems/IT | Employees and support |
 | Test Group Rollout Guide | `docs/TEST_GROUP_ROLLOUT_GUIDE.md` | Current targeted-delivery workflow; confirm the named roster before use | Pilot operator and HR |
 | Rollout Announcements | `docs/ROLLOUT_ANNOUNCEMENTS.md` | Mostly current; deployment-specific copy needs owner review before reuse | Rollout coordinator |

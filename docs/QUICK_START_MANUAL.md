@@ -1,6 +1,6 @@
 # Quick Start: Use the Communications and Alert Center
 
-**Document status:** Verified against the release-candidate application source on August 7, 2026 (revision `deae9f1`).
+**Document status:** Verified against the release-candidate application source on August 7, 2026 (revision `3ef50a1`).
 
 This is the short, practical guide. Use the full [User Manual](USER_MANUAL.md) for account recovery, governance, troubleshooting, and detailed role instructions.
 
@@ -27,9 +27,18 @@ Send employees only the employee link. Keep HR, Systems, and IT onboarding separ
 5. Read the newest active updates below the weather card.
 6. Select `Sign Out` at the bottom when using a shared device.
 
-Employees see all-company posts plus posts sent to any messaging group assigned to them. If someone else sees a targeted post that you do not, ask HR to check your group assignment.
+Employees see all-company posts and posts for their messaging groups. If a targeted post is missing, ask HR to check the group assignment.
 
-There is no `Mark read` button in the current app.
+### Change Your Password
+
+1. Open `Change Password` below the updates feed.
+2. Enter the current password.
+3. Enter a different new password of at least 10 characters twice.
+4. Select `Save New Password`.
+
+If the section opens automatically, the account is using a temporary password. The news feed remains visible while the password is changed. The current device stays signed in, other sessions are signed out, and existing notification enrollment remains attached to its devices.
+
+If the employee cannot sign in or does not know the current password, HR must reset it from `Employee Accounts` and deliver the replacement through an approved secure channel.
 
 ## 3. Employee: Install On A Phone And Get Alerts
 
@@ -97,7 +106,7 @@ Open `Users`.
 4. Copy the generated credentials immediately.
 5. Deliver them through an approved secure channel, then clear the results.
 
-The current employee portal does not force a self-service first-login password change. HR remains responsible for secure password resets.
+When `Require password reset on first use` is selected, `Change Password` opens automatically after employee sign-in. If the employee cannot sign in or does not know the current password, HR must reset it from `Employee Accounts` and deliver the replacement through an approved secure channel.
 
 ### Existing employee controls
 
