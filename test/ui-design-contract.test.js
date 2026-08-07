@@ -1546,7 +1546,7 @@ test("HR and IT account directories expose confirmed destructive deletion contro
     loadStylesheet()
   ]);
   const employeeRenderer = app.match(
-    /function renderEmployeeDirectoryRow\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
+    /function renderEmployeeDirectoryCard\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
   )?.[0] || "";
   const adminRenderer = app.match(
     /function renderAdminDirectoryRow\(adminUser, scope = "hr"\) \{[\s\S]*?\n\}\n\nfunction renderAdminDirectoryTable/

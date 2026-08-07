@@ -3817,7 +3817,6 @@ function renderEmployeeDirectoryPanel() {
               <span>Search employees</span>
               <input
                 type="search"
-                placeholder="Name or username"
                 autocomplete="off"
                 aria-controls="employee-directory-list"
                 data-employee-directory-search
