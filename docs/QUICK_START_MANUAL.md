@@ -1,83 +1,157 @@
-# Quick Start: Build and Share the Full App Manual
+# Quick Start: Use the Communications and Alert Center
 
-## 1) What this manual covers
+**Document status:** Verified against the shipped application source on August 6, 2026 (revision `0a523a3`).
 
-The main source file now documents:
+This is the short, practical guide. Use the full [User Manual](USER_MANUAL.md) for account recovery, governance, troubleshooting, and detailed role instructions.
 
-- Launcher login
-- Employee login and feed use
-- HR login and HR features
-- Systems login and Systems features
-- IT login and IT governance features
-- MFA, invitations, recovery, push alerts, and troubleshooting
+## 1. Open The Correct Page
 
-## 2) Generate the PDF (5 minutes)
+Production links:
 
-From the project root:
+| User | Link |
+| --- | --- |
+| Employee | `https://itotexpress.com/palzivalerts/employee` |
+| HR | `https://itotexpress.com/palzivalerts/hr` |
+| Systems | `https://itotexpress.com/palzivalerts/webmaster` |
+| IT | `https://itotexpress.com/palzivalerts/it` |
+| Shared launcher | `https://itotexpress.com/palzivalerts` |
 
-```powershell
-$env:PORT = "3116"
-npm start
-```
+Send employees only the employee link. Keep HR, Systems, and IT onboarding separate.
 
-In a second terminal:
+## 2. Employee: Sign In And Read Updates
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-user-manual-pdf.ps1
-```
+1. Open the employee link.
+2. Enter the employee username and password.
+3. Select `Sign In`.
+4. Confirm your name appears near the top of the page.
+5. Read the newest active updates below the weather card.
+6. Select `Sign Out` at the bottom when using a shared device.
 
-The output will be in:
+Employees see all-company posts plus posts sent to any messaging group assigned to them. If someone else sees a targeted post that you do not, ask HR to check your group assignment.
 
-- `docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf`
-- `docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.html`
-- `docs/manual-artifacts/screenshots/`
+There is no `Mark read` button in the current app.
 
-## 3) Generate signed-in workflow screenshots
+## 3. Employee: Install On A Phone And Get Alerts
 
-If you want the PDF to show authenticated employee, HR, Systems, and IT screens instead of public login routes, set temporary manual-build credentials in the current shell and run:
+### iPhone
 
-```powershell
-$env:MANUAL_EMPLOYEE_USERNAME = "employee-username"
-$env:MANUAL_EMPLOYEE_PASSWORD = "employee-password"
-$env:MANUAL_HR_USERNAME = "hr-username"
-$env:MANUAL_HR_PASSWORD = "hr-password"
-$env:MANUAL_WEBMASTER_USERNAME = "systems-username"
-$env:MANUAL_WEBMASTER_PASSWORD = "systems-password"
-$env:MANUAL_IT_USERNAME = "it-username"
-$env:MANUAL_IT_PASSWORD = "it-password"
-powershell -ExecutionPolicy Bypass -File .\scripts\build-user-manual-pdf.ps1 -BaseUrl "http://localhost:3116" -AuthenticatedScreenshots
-```
+1. Open the employee link in Safari and sign in.
+2. Tap Share.
+3. Tap `Add to Home Screen`, then confirm.
+4. Open the installed app from the Home Screen.
+5. Sign in again if asked.
+6. Select `Sign up for alerts`.
+7. Tap `Allow` when iPhone asks about notifications.
 
-The script now logs in, saves temporary browser storage state, captures the signed-in screens, and rebuilds the PDF.
+For iPhone alerts, finish setup inside the installed Home Screen app, not only in a Safari tab.
 
-## 4) Update the content first
+### Android
 
-Edit the manual text in:
+1. Open the employee link in Chrome or Samsung Internet and sign in.
+2. Open the browser menu.
+3. Choose `Install app`, `Add to Home screen`, or the equivalent option.
+4. Open the installed app.
+5. Select `Sign up for alerts`.
+6. Allow notifications.
 
-- `docs/USER_MANUAL.md`
+If alerts do not arrive, reopen the installed app while signed in. Ask HR or Systems to check whether the device is enrolled and active.
 
-Then rerun step 2 to update the PDF.
+## 4. HR: Publish An Update
 
-## 5) What to send to your team
+1. Open the HR link and sign in.
+2. Complete Google Authenticator if prompted.
+3. Open `Feed`.
+4. Enter the title and message.
+5. Choose category, priority, and retention.
+6. Keep `All Employees`, or select `Selected groups` and choose at least one active group.
+7. Select `Publish update`.
+8. Read the delivery result shown after publishing.
 
-1. Send the PDF link to users.
-2. For support staff, share the same PDF and point them to the login and troubleshooting sections first.
-3. Keep one copy in your internal docs folder for onboarding.
+Every publication attempts push delivery to eligible subscribed devices in the selected audience. Priority does not turn push delivery on or off.
 
-## 6) What to do when something fails
+To remove a live post, find it below the composer and select `Take down`.
 
-If the build fails:
+## 5. HR: Set Up Groups And Employees
 
-1. Confirm Node is running at `http://localhost:3116/palzivalerts` or the local URL you started it on.
-2. Re-run script:
+Open `Users`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-user-manual-pdf.ps1
-```
+### Messaging groups
 
-3. If screenshots are blank/missing, open the app URLs manually and verify the routes.
-4. Re-run the command once routes are correct.
+- Enter a name and select `Create Group`.
+- Rename with `Save name`.
+- Use `Deactivate` or `Reactivate` to control whether the group can receive new targeted posts.
+- In an employee row, select groups and use `Save groups`.
 
-## 7) One-line distribution text (copy/paste)
+### One employee
 
-"Your Communications and Alert Center manual is ready. It covers how to log in to every part of the app and how to use each major feature. Open the PDF for onboarding, training, and support."
+1. Expand `Create User`.
+2. Enter name, username, and a temporary password of at least 10 characters.
+3. Select messaging groups when needed.
+4. Select `Create Account`.
+
+### Many employees
+
+1. Expand `Batch Upload`.
+2. Paste or upload JSON/YAML.
+3. Select `Import Employees`.
+4. Copy the generated credentials immediately.
+5. Deliver them through an approved secure channel, then clear the results.
+
+The current employee portal does not force a self-service first-login password change. HR remains responsible for secure password resets.
+
+### Existing employee controls
+
+From the employee row, HR can reset a password, enable or disable access, sign out sessions, unenroll devices, update groups, add an active employee to HR, or permanently delete the employee account.
+
+`Delete Account` cannot be undone. Verify the employee name before confirming.
+
+## 6. HR: Settings
+
+Open `Settings` to:
+
+- Refresh the employee weather location
+- Set up or verify HR Google Authenticator
+- Change the HR password
+- Manage named HR admin accounts
+
+## 7. Systems: Daily Check
+
+1. Open the Systems link and sign in.
+2. Use `Overview` for route, health, and push status.
+3. Use `Traffic` for request failures and timing.
+4. Use `System` for runtime and browser diagnostics.
+5. Use `Content` to compare saved posts and audiences with intended communications.
+6. Use `Codex` only for a sanitized engineering incident brief.
+7. Use `Settings` for Systems credentials, System Ops accounts, or an authorized primary HR password reset.
+
+## 8. IT: Governance Check
+
+1. Open the IT link and sign in.
+2. Use `Admin Accounts` to review named HR, System Ops, and IT access.
+3. Use `Audit Log` to review authentication and account-security events.
+4. Use `Emergency Access` to confirm a backup IT account and admin MFA posture.
+5. Treat `Company Settings` as informational; its broader business controls are still planned.
+
+Permanent admin deletion and MFA-policy changes are privileged actions. Verify the target and authorization before confirming.
+
+## 9. When The Page Looks Old Or Wrong
+
+- If `New portal update available` appears, select `Reload now`.
+- Confirm you opened the correct role link.
+- Confirm the signed-in name is correct.
+- Sign out and sign back in if the identity is wrong.
+- For a black or blank page, first open `https://itotexpress.com/api/health`. It should show `"ok": true` when the server is responding.
+- Systems or IT can then use the protected diagnostics route. Employees should send a screenshot and the time of the problem to support.
+
+## 10. Safety Rules
+
+- Never send passwords, recovery keys, MFA setup keys, or invitation links in ordinary chat or email.
+- Do not include credentials in screenshots.
+- Send temporary passwords separately through the approved secure method.
+- Verify the signed-in identity before publishing, resetting, disabling, or deleting an account.
+
+## 11. Full Documentation
+
+- Full role guide: [USER_MANUAL.md](USER_MANUAL.md)
+- Complete manual catalog and freshness status: [MANUAL_INDEX.md](MANUAL_INDEX.md)
+- Manual generation instructions: [MANUAL_BUILD_GUIDE.md](MANUAL_BUILD_GUIDE.md)

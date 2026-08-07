@@ -1,9 +1,9 @@
 param(
-  [string]$BaseUrl = "http://127.0.0.1:3222"
+  [string]$BaseUrl = "http://127.0.0.1:3116"
 )
 $ErrorActionPreference = "Stop"
 
-$root = "C:\Users\admin\Documents\Codex\Project-A"
+$root = Split-Path -Parent $PSScriptRoot
 $mdPath = Join-Path $root "docs\BEGINNER_BLACK_SCREEN_GUIDE.md"
 $outDir = Join-Path $root "docs\manual-artifacts\black-screen-guide"
 $shotDir = Join-Path $outDir "screenshots"
@@ -15,23 +15,21 @@ New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
 
 $routes = @(
   @{ name = "01-main-page"; label = "Step 1: Open the main app page"; url = "$resolvedBaseUrl/palzivalerts" },
-  @{ name = "02-diagnostics-page"; label = "Step 2: Open the diagnostics page"; url = "$resolvedBaseUrl/api/health/diagnostics" },
-  @{ name = "03-diagnostics-confirmation"; label = "Step 3 and Step 4: Confirm the server is up and inspect recent client errors"; url = "$resolvedBaseUrl/api/health/diagnostics" }
+  @{ name = "02-health-page"; label = "Step 2: Open the public health page"; url = "$resolvedBaseUrl/api/health" }
 )
 
 foreach ($route in $routes) {
   $out = Join-Path $shotDir ("$($route.name).png")
-  npx playwright screenshot --device="Desktop Chrome HiDPI" --wait-for-timeout=1200 $route.url $out
+  npx playwright screenshot --browser="chromium" --channel="chrome" --viewport-size="720,480" --full-page --wait-for-timeout=1200 $route.url $out
+  if ($LASTEXITCODE -ne 0) { throw "Screenshot capture failed for $($route.url)." }
 }
 
 $markdownHtml = ((& npx -y marked --gfm $mdPath) | Out-String).TrimEnd()
+if ($LASTEXITCODE -ne 0) { throw "Markdown conversion failed." }
 
 $stepShots = @(
   @{ title = "Step 1"; body = "Open the normal app page first and confirm the usual launcher buttons are visible."; file = "01-main-page.png" },
-  @{ title = "Step 2"; body = "Open the diagnostics address when the page looks black, blank, or partly loaded."; file = "02-diagnostics-page.png" },
-  @{ title = "Step 3"; body = "Check for `" + '"ok": true' + "` near the top of the diagnostics page."; file = "03-diagnostics-confirmation.png" },
-  @{ title = "Step 4"; body = "Look for recent client events such as `blank-screen`, `runtime-error`, or `unhandled-rejection`."; file = "03-diagnostics-confirmation.png" },
-  @{ title = "Step 5"; body = "Take one screenshot of the diagnostics page and send it with the time and device you used."; file = "03-diagnostics-confirmation.png" }
+  @{ title = "Step 2"; body = 'Open the public health address and look for &quot;ok&quot;: true. The written guide explains what to report next.'; file = "02-health-page.png" }
 )
 
 $stepHtml = "<div class='step-sections'>"
@@ -63,7 +61,9 @@ $header = @"
   .cover { border-left: 6px solid #1d4ed8; padding-left: 14px; margin-bottom: 22px; }
   .meta { color: #475569; font-size: 11px; }
   .summary { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; margin: 16px 0 22px; }
+  .step-sections { page-break-before: always; }
   .step-card { page-break-inside: avoid; margin: 18px 0 26px; }
+  .step-card + .step-card { page-break-before: always; }
   img { width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 10px; }
   code { background: #f8fafc; padding: 2px 4px; border-radius: 4px; }
   ul { padding-left: 18px; }
@@ -79,7 +79,7 @@ $header = @"
     <strong>What this guide helps you do</strong>
     <ul>
       <li>Check whether the app is up</li>
-      <li>Check whether the browser had a client-side problem</li>
+      <li>Separate a server outage from a browser or sign-in problem</li>
       <li>Send a useful screenshot for support</li>
     </ul>
   </div>
@@ -90,5 +90,6 @@ $footer = "</body></html>"
 $manualHtml = ($header + "`n" + $markdownHtml + "`n" + $stepHtml + "`n" + $footer).TrimEnd()
 Set-Content -Encoding UTF8 -Path $htmlPath -Value $manualHtml
 
-npx playwright pdf "file:///$($htmlPath -replace '\\','/')" $pdfPath --viewport-size "1440,2200" --wait-for-timeout 1200
+npx playwright pdf "file:///$($htmlPath -replace '\\','/')" $pdfPath --browser="chromium" --channel="chrome" --paper-format="A4" --viewport-size "1440,2200" --wait-for-timeout 1200
+if ($LASTEXITCODE -ne 0) { throw "Black-screen guide PDF generation failed." }
 Write-Host "Generated PDF: $pdfPath"

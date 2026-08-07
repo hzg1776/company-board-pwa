@@ -1,0 +1,54 @@
+﻿{
+    "generatedAt":  "2026-08-06T19:34:48.3094320Z",
+    "applicationRevision":  "0a523a3",
+    "captureMode":  "public-sign-in",
+    "baseUrl":  "http://127.0.0.1:3116",
+    "sources":  [
+                    {
+                        "path":  "docs/USER_MANUAL.md",
+                        "sha256":  "087388CA2737BE058DCB8AD28CA079048BFFAC55010B869EBF81574F2B8ABD5C"
+                    },
+                    {
+                        "path":  "docs/QUICK_START_MANUAL.md",
+                        "sha256":  "E361BB8B439524E230B6B2E7E60BAEC7F3839EC37BD21060ED52EAC29C37AF77"
+                    }
+                ],
+    "artifacts":  [
+                      {
+                          "path":  "docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.html",
+                          "sha256":  "2A8511E28E747B6265BF90C96413D860216F094C38058ADF4921BC80A963D004"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.pdf",
+                          "sha256":  "AD4382DB6152E7F71811BC751C8CE0ABA841C700237725F770EE7FC9FE560225"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.html",
+                          "sha256":  "E717F39388CA5C8D5B627A1195AFA71A26AF04D9BD15104C601F37CD97AD3253"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.pdf",
+                          "sha256":  "602EBBDB0C09070AF3622713FF349F0E0D28BCB8A5B1921D2A37E9A3D8C9B35E"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/screenshots/01-launcher.png",
+                          "sha256":  "980B3F00F78FE6923A6D6F41C206194EA5C5B068B9E63CA8F2653A3EA1E021F1"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/screenshots/02-employee.png",
+                          "sha256":  "5284D573BB979E33C8F0A48C78F036DB02F098F0DB0492FAFB2090E4025166B0"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/screenshots/03-hr.png",
+                          "sha256":  "77A9264E4F01984BC65774B1D135299E1B7057C7AD19CB298AAE09E33ABAC947"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/screenshots/04-webmaster.png",
+                          "sha256":  "6A7050F3B0C2590DD1E2337D5C35BB21BCC03DE0AE3C307BA8D11852845F0756"
+                      },
+                      {
+                          "path":  "docs/manual-artifacts/screenshots/05-it.png",
+                          "sha256":  "A79E9A80A93B034B2EBA2A2647FC2045AF3DA0F2036AD4A450640485C636E7D2"
+                      }
+                  ]
+}

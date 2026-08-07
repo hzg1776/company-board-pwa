@@ -2,373 +2,331 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Communications and Alert Center User Manual</title>
+<title>Professional User Manual</title>
 <style>
-  @page { size: A4; margin: 18mm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.45; }
-  h1, h2, h3, h4 { color: #0f172a; page-break-after: avoid; }
+  @page { size: A4; margin: 18mm 18mm 20mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.45; margin: 0; }
+  h1, h2, h3, h4 { color: #0f172a; page-break-after: avoid; break-after: avoid-page; }
   h1 { font-size: 28px; margin-bottom: 2px; }
   h2 { font-size: 20px; margin-top: 24px; }
   h3 { font-size: 16px; }
-  p, li { font-size: 11.5px; }
-  .meta { color: #334155; font-size: 11px; margin-bottom: 20px; }
-  .cover { border-left: 6px solid #0f172a; padding-left: 14px; margin-bottom: 28px; }
-  .toc { background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 14px; margin: 14px 0 18px; border-radius: 6px; }
-  ul { padding-left: 18px; }
-  pre { background: #0f172a; color: #f8fafc; padding: 10px; border-radius: 6px; overflow-wrap: break-word; }
-  img { max-width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; margin: 8px 0; page-break-inside: avoid; }
-  .screen img { width: 72%; max-width: 72%; display: block; }
+  p, li, td, th { font-size: 11.5px; }
+  a { color: #1d4ed8; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 7px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  .cover { border-left: 6px solid #0f172a; padding-left: 14px; margin-bottom: 24px; }
+  .meta { color: #475569; font-size: 10.5px; margin: 2px 0; }
+  .summary { color: #334155; max-width: 90%; }
+  ul, ol { padding-left: 20px; }
+  pre { background: #0f172a; color: #f8fafc; padding: 10px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; break-inside: avoid; }
+  code { overflow-wrap: anywhere; }
+  img { max-width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; margin: 8px 0; }
+  .screenshot-appendix { break-before: page; page-break-before: always; }
+  .screen { break-inside: avoid; page-break-inside: avoid; margin: 14px 0 22px; }
+  .screen-following { break-before: page; page-break-before: always; }
+  .screen img { width: 50%; display: block; }
   .caption { font-weight: 600; color: #334155; margin-top: 2px; }
-  .shot-grid { display: block; }
-  .section { page-break-inside: avoid; margin: 14px 0; }
   .kicker { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #64748b; font-size: 10px; }
-  hr { border: none; border-top: 1px solid #e2e8f0; margin: 16px 0; }
 </style>
 </head>
 <body>
 <div class="cover">
   <div class="kicker">Communications and Alert Center</div>
   <h1>Professional User Manual</h1>
-  <div class="meta">Generated: June 26, 2026 20:57:38</div>
-  <p>This manual explains core workflows for employees, HR admins, Systems operators, and IT governance admins.</p>
+  <div class="meta">Generated: August 06, 2026 15:34:11 -04:00</div>
+  <div class="meta">Application revision: 0a523a3</div>
+  <p class="summary">Current workflows for employees, HR admins, Systems operators, and IT governance admins.</p>
 </div>
-<div class="toc">
-  <strong>Quick navigation</strong>
-  <ul>
-    <li>Employee onboarding and feed usage</li>
-    <li>HR publishing and employee management</li>
-    <li>Systems monitoring and recovery tasks</li>
-    <li>IT governance and recovery oversight</li>
-    <li>Operational checks and troubleshooting</li>
-  </ul>
-</div>
-<hr/>
-
 <h1>Communications and Alert Center User Manual</h1>
+<p><strong>Document status:</strong> Verified against the shipped application source on August 6, 2026 (revision <code>0a523a3</code>).</p>
 <h2>1. Purpose</h2>
-<p>Communications and Alert Center is a secure internal communications application with separate entry points for:</p>
+<p>The Communications and Alert Center provides five role-specific entry points:</p>
 <ul>
-<li>Launcher</li>
-<li>Employee access</li>
-<li>HR operations</li>
-<li>Systems and analytics</li>
-<li>IT governance</li>
+<li>A shared launcher</li>
+<li>An employee updates feed</li>
+<li>An HR publishing and user-management console</li>
+<li>A Systems monitoring and recovery console</li>
+<li>An IT governance console</li>
 </ul>
-<p>This manual explains how each group signs in, what each area is for, and how to use the major features safely.</p>
-<hr>
+<p>This manual explains the current visible workflows. It does not document planned controls as if they are already available.</p>
 <h2>2. Portal Map</h2>
 <h3>2.1 Main URLs</h3>
-<ul>
-<li>Launcher: <code>https://&lt;your-host&gt;/palzivalerts</code></li>
-<li>Employee: <code>https://&lt;your-host&gt;/palzivalerts/employee</code></li>
-<li>HR: <code>https://&lt;your-host&gt;/palzivalerts/hr</code></li>
-<li>Systems: <code>https://&lt;your-host&gt;/palzivalerts/webmaster</code></li>
-<li>IT: <code>https://&lt;your-host&gt;/palzivalerts/it</code></li>
-</ul>
-<p>Legacy routes such as <code>/employee</code>, <code>/hr</code>, <code>/webmaster</code>, and <code>/it</code> redirect into the <code>/palzivalerts</code> path.</p>
-<h3>2.2 Who Uses What</h3>
+<p>Replace <code>&lt;your-host&gt;</code> with the deployed hostname.</p>
 <table>
 <thead>
 <tr>
-<th>Entry</th>
-<th>Intended user</th>
-<th>Main purpose</th>
+<th>Area</th>
+<th>URL</th>
+<th>Primary user</th>
 </tr>
 </thead>
 <tbody><tr>
 <td>Launcher</td>
+<td><code>https://&lt;your-host&gt;/palzivalerts</code></td>
 <td>Internal staff</td>
-<td>Choose the correct sign-in area</td>
 </tr>
 <tr>
 <td>Employee</td>
+<td><code>https://&lt;your-host&gt;/palzivalerts/employee</code></td>
 <td>Employees</td>
-<td>Read updates, enable alerts, mark required notices as read</td>
 </tr>
 <tr>
 <td>HR</td>
+<td><code>https://&lt;your-host&gt;/palzivalerts/hr</code></td>
 <td>HR admins</td>
-<td>Publish updates, manage employee accounts, review auth events</td>
 </tr>
 <tr>
 <td>Systems</td>
+<td><code>https://&lt;your-host&gt;/palzivalerts/webmaster</code></td>
 <td>System Ops admins</td>
-<td>Monitor health, traffic, diagnostics, content state, and admin settings</td>
 </tr>
 <tr>
 <td>IT</td>
+<td><code>https://&lt;your-host&gt;/palzivalerts/it</code></td>
 <td>IT admins</td>
-<td>Govern privileged admin accounts, audit events, emergency readiness</td>
 </tr>
 </tbody></table>
-<h3>2.3 Sign-In Rules</h3>
+<p>Legacy routes such as <code>/employee</code>, <code>/hr</code>, <code>/webmaster</code>, and <code>/it</code> redirect to the matching <code>/palzivalerts</code> route.</p>
+<h3>2.2 What Each Area Does</h3>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Current purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Launcher</td>
+<td>Opens the four role-specific sign-in routes</td>
+</tr>
+<tr>
+<td>Employee</td>
+<td>Shows weather and the signed-in employee&#39;s current updates; supports alert enrollment</td>
+</tr>
+<tr>
+<td>HR</td>
+<td>Publishes updates, targets messaging groups, and manages employee and HR accounts</td>
+</tr>
+<tr>
+<td>Systems</td>
+<td>Monitors health, traffic, content, diagnostics, and push-delivery state</td>
+</tr>
+<tr>
+<td>IT</td>
+<td>Governs privileged accounts, audit visibility, MFA policy, and emergency readiness</td>
+</tr>
+</tbody></table>
+<h3>2.3 Account Boundaries</h3>
 <ul>
-<li>Employee accounts use employee usernames and passwords.</li>
-<li>HR, Systems, and IT use separate named admin accounts.</li>
-<li>HR and Systems use separate sessions and separate cookies.</li>
-<li>IT is a separate privileged role with its own sign-in and oversight screens.</li>
-<li>Admin invitations can require the invited user to create a password before first use.</li>
-<li>Multi-factor authentication may be required for HR, Systems, and IT.</li>
+<li>Employees use employee usernames and passwords.</li>
+<li>HR, Systems, and IT use named privileged accounts with role-scoped access.</li>
+<li>Use the route for the account&#39;s assigned role.</li>
+<li>MFA may be required after an admin password is accepted.</li>
+<li>Do not share privileged credentials or reuse one person&#39;s account for another person.</li>
 </ul>
-<hr>
-<h2>3. Login Guide For Every Entry Point</h2>
-<h3>3.1 Launcher</h3>
-<p>Use the launcher when internal staff need one shared starting point.</p>
-<ol>
-<li>Open <code>/palzivalerts</code>.</li>
-<li>Select one of the four buttons:<ul>
-<li>Employee Login</li>
-<li>HR Login</li>
-<li>Systems and Analytics Login</li>
-<li>IT Login</li>
-</ul>
-</li>
-<li>Continue on the selected route.</li>
-</ol>
-<p>The launcher itself does not grant access. It only routes users to the correct login screen.</p>
-<h3>3.2 Employee Login</h3>
+<h2>3. Sign-In And Access</h2>
+<h3>3.1 Employee Sign-In</h3>
 <ol>
 <li>Open <code>/palzivalerts/employee</code>.</li>
 <li>Enter the employee username.</li>
 <li>Enter the employee password.</li>
 <li>Select <code>Sign In</code>.</li>
 </ol>
-<p>If the employee was created with a temporary password, HR may require a password reset during onboarding or reissue a password manually.</p>
-<h3>3.3 HR Login</h3>
+<p>Employees do not currently have a self-service password-change screen. HR must reset an employee password when a change is required.</p>
+<h3>3.2 Admin Sign-In</h3>
 <ol>
+<li>Open the HR, Systems, or IT route.</li>
+<li>Enter the named admin username and password.</li>
+<li>Select <code>Sign In</code>.</li>
+<li>If prompted, complete Google Authenticator setup or enter the current 6-digit code.</li>
+</ol>
+<p>The header shows the signed-in admin identity. Confirm it before changing accounts, publishing, or performing recovery work.</p>
+<h3>3.3 First-Run Admin Setup</h3>
+<p>For a new deployment:</p>
+<ol>
+<li>Start the application with the required runtime configuration.</li>
 <li>Open <code>/palzivalerts/hr</code>.</li>
-<li>If HR has not been configured yet, the first administrator must complete first-run setup:<ul>
-<li>Enter the deployment setup secret.</li>
-<li>Create the first HR username.</li>
-<li>Create the first HR password.</li>
-<li>Select <code>Save Credentials</code>.</li>
-</ul>
-</li>
-<li>If HR already exists, enter the HR username and password.</li>
-<li>If prompted, complete Google Authenticator verification.</li>
+<li>Enter the deployment setup secret and create the first HR username and password.</li>
+<li>Sign in to HR and create the required employee and HR accounts.</li>
+<li>Provision Systems access, then verify <code>/palzivalerts/webmaster</code>.</li>
+<li>Open <code>/palzivalerts/it</code> and use the deployment setup secret to create the first IT account.</li>
+<li>Configure and test MFA for privileged accounts.</li>
+<li>Test employee sign-in and alert enrollment on a real device.</li>
 </ol>
-<p>If the password is forgotten, use <code>Forgot Password?</code> on the HR sign-in screen and recover with the configured recovery key or recovery system.</p>
-<h3>3.4 Systems Login</h3>
+<p>Systems first-run setup remains blocked until HR is authorized.</p>
+<h3>3.4 Admin Invitation Links</h3>
+<p>If an authorized operator provides an admin invitation URL:</p>
 <ol>
-<li>Open <code>/palzivalerts/webmaster</code>.</li>
-<li>If Systems has not been provisioned yet, HR must sign in first and create or enable Systems access.</li>
-<li>Enter the Systems username and password.</li>
-<li>If prompted, complete Google Authenticator verification.</li>
-</ol>
-<p>Systems setup is intentionally blocked until HR access already exists.</p>
-<h3>3.5 IT Login</h3>
-<ol>
-<li>Open <code>/palzivalerts/it</code>.</li>
-<li>If IT has not been configured yet, the first IT administrator must complete first-run setup:<ul>
-<li>Enter the deployment setup secret.</li>
-<li>Create the first IT username.</li>
-<li>Create the first IT password.</li>
-<li>Select <code>Save Credentials</code>.</li>
-</ul>
-</li>
-<li>If IT already exists, enter the IT username and password.</li>
-<li>If prompted, complete Google Authenticator verification.</li>
-</ol>
-<p>The IT sign-in does not use the HR recovery screen. IT access is intended to remain tightly controlled.</p>
-<h3>3.6 Accepting An Admin Invitation</h3>
-<p>Some admin accounts are provisioned by invitation.</p>
-<ol>
-<li>Open the invitation link.</li>
+<li>Open the original URL before it expires.</li>
 <li>Confirm the displayed name, username, and role.</li>
-<li>Create a password.</li>
-<li>Confirm the password.</li>
+<li>Create and confirm a password.</li>
 <li>Select <code>Accept Invite</code>.</li>
-<li>Complete MFA enrollment if the portal requires it.</li>
+<li>Complete MFA if prompted.</li>
 </ol>
-<p>If the invitation is expired or invalid, the user must request a new invitation from the appropriate admin owner.</p>
-<h3>3.7 Multi-Factor Authentication</h3>
-<p>When MFA is enabled for an admin role:</p>
+<p>If the link is invalid or expired, request a new authorized setup path. Do not forward invitation URLs.</p>
+<h3>3.5 Multi-Factor Authentication</h3>
+<p>When MFA setup is required:</p>
 <ol>
-<li>After password sign-in, select the QR setup action if enrollment is still required.</li>
-<li>Scan the QR code with Google Authenticator.</li>
-<li>Enter the 6-digit code.</li>
-<li>Select <code>Verify</code>.</li>
+<li>Select the Google Authenticator setup action.</li>
+<li>Scan the QR code or enter the manual key in the authenticator app.</li>
+<li>Enter the current 6-digit code.</li>
+<li>Select <code>Verify Authenticator</code>.</li>
 </ol>
-<p>When MFA is already active, the portal will ask only for the current 6-digit code after username and password entry.</p>
-<hr>
-<h2>4. Employee Manual</h2>
+<p>When MFA is already enrolled, enter the current 6-digit code after password sign-in. IT can control the application-level admin MFA requirement when the server configuration allows it.</p>
+<h3>3.6 New Portal Update Banner</h3>
+<p>If the page shows <code>New portal update available</code>, select <code>Reload now</code>. The reload clears stale service-worker assets and opens the current portal build.</p>
+<h2>4. Employee Guide</h2>
 <h3>4.1 What Employees Can Do</h3>
 <ul>
-<li>Sign in to the employee board</li>
-<li>Read current company updates</li>
-<li>Enable push alerts on their device</li>
-<li>Install the app to the home screen when supported</li>
-<li>Mark required notices as read</li>
+<li>Sign in to the employee feed</li>
+<li>See the signed-in employee name</li>
+<li>See current weather and its refresh age</li>
+<li>Read active company updates assigned to them</li>
+<li>Sign up the current device for alerts when supported</li>
+<li>Install the portal on a phone home screen</li>
 <li>Sign out</li>
 </ul>
-<h3>4.2 First-Time Employee Setup</h3>
-<ol>
-<li>Open the employee URL on the device that will receive alerts.</li>
-<li>Sign in with employee credentials.</li>
-<li>Review the setup prompts shown on the page.</li>
-<li>Enable notifications when the browser asks.</li>
-<li>If using iPhone, add the site to the home screen and reopen the installed web app before finishing push setup.</li>
-<li>Use the push setup action until the device shows as ready or active.</li>
-</ol>
-<h3>4.3 Reading The Feed</h3>
-<p>The employee feed shows live updates in reverse chronological order.</p>
-<p>Each post can include:</p>
+<p>There is currently no employee <code>Mark read</code> or acknowledgement workflow.</p>
+<h3>4.2 Reading The Feed</h3>
+<p>The feed lists active updates newest first. An item can show:</p>
 <ul>
-<li>Title</li>
-<li>Message body</li>
-<li>Category such as News, Weather, Shift, Safety, or HR</li>
-<li>Priority such as Normal, Important, or Urgent</li>
-<li>Audience label</li>
-<li>Read acknowledgement status when required</li>
-</ul>
-<h3>4.4 Marking A Required Notice As Read</h3>
-<p>Some posts require acknowledgement.</p>
-<ol>
-<li>Open the notice.</li>
-<li>Select <code>Mark read</code>.</li>
-<li>Confirm the badge changes to show it was read.</li>
-</ol>
-<p>HR can later review who has and has not acknowledged those posts.</p>
-<h3>4.5 Push Alerts</h3>
-<p>Employees can enable or disable push alerts on the current device.</p>
-<p>Important points:</p>
-<ul>
-<li>Push enrollment is tied to the signed-in employee session.</li>
-<li>A device may need a refresh or re-enrollment if permissions changed.</li>
-<li>A disabled employee account should no longer remain an authorized alert target.</li>
-</ul>
-<h3>4.6 Employee Sign Out</h3>
-<p>Use <code>Sign Out</code> at the bottom of the employee screen when leaving a shared device.</p>
-<hr>
-<h2>5. HR Manual</h2>
-<h3>5.1 What HR Can Do</h3>
-<ul>
-<li>Publish new updates</li>
-<li>View update history</li>
-<li>Delete updates</li>
-<li>Review read acknowledgements</li>
-<li>Export acknowledgement CSV files</li>
-<li>Create employee accounts</li>
-<li>Reset employee passwords</li>
-<li>Disable or re-enable employee access</li>
-<li>Revoke employee sessions</li>
-<li>Unenroll employee devices</li>
-<li>Change the HR password</li>
-<li>Review recent authentication events</li>
-</ul>
-<h3>5.2 HR Screen Layout</h3>
-<p>The HR Control Center has three main tabs:</p>
-<ul>
-<li><code>Publish</code></li>
-<li><code>Users</code></li>
-<li><code>History</code></li>
-</ul>
-<h3>5.3 Publish A New Update</h3>
-<ol>
-<li>Open the <code>Publish</code> tab.</li>
-<li>Enter a title.</li>
-<li>Enter the message body.</li>
-<li>Choose:<ul>
 <li>Category</li>
-<li>Priority</li>
-<li>Audience</li>
-<li>Retention period</li>
+<li>Important or Urgent priority</li>
+<li>Published date or time</li>
+<li>Title</li>
+<li>Message</li>
 </ul>
-</li>
-<li>Publish the update.</li>
-</ol>
-<p>Use urgent messages carefully. Employees see those notices on the feed, and push-enabled notices can trigger alerts to subscribed devices.</p>
-<h3>5.4 View Published History</h3>
-<p>Use the <code>History</code> tab to review past and active messages.</p>
-<p>HR can:</p>
+<p>Expired or removed posts do not remain in the active employee feed.</p>
+<h3>4.3 Messaging Groups</h3>
+<p>HR may publish to <code>All Employees</code> or to one or more messaging groups.</p>
 <ul>
-<li>Filter by status or type</li>
-<li>Review active and urgent items</li>
-<li>Delete an existing post</li>
-<li>Open acknowledgement detail</li>
-<li>Export acknowledgements to CSV</li>
+<li>Employees see all-employee posts.</li>
+<li>Employees also see a targeted post when they belong to at least one selected group.</li>
+<li>Group membership is managed by HR; employees do not change it themselves.</li>
+<li>The employee feed does not expose internal group-management controls.</li>
 </ul>
-<h3>5.5 Review Read Acknowledgements</h3>
-<p>For posts that require acknowledgement:</p>
+<p>If a coworker sees a targeted post that you do not see, ask HR to verify your group assignment.</p>
+<h3>4.4 Sign Up For Alerts</h3>
+<p>On a supported device:</p>
 <ol>
-<li>Open the post from <code>History</code>.</li>
-<li>Select <code>Review</code>.</li>
-<li>Inspect:<ul>
-<li>Employees who marked the notice as read</li>
-<li>Employees still pending</li>
-</ul>
-</li>
-<li>Export the CSV when a record is needed.</li>
+<li>Open the employee route and sign in.</li>
+<li>Select <code>Sign up for alerts</code> when the setup panel appears.</li>
+<li>Allow notifications when the browser or installed app asks.</li>
+<li>Keep the employee signed in while enrollment completes.</li>
 </ol>
-<h3>5.6 Create An Employee Account</h3>
+<p>For iPhone:</p>
 <ol>
-<li>Open the <code>Users</code> tab.</li>
-<li>Expand <code>Create User</code>.</li>
-<li>Enter:<ul>
-<li>Employee name</li>
-<li>Username</li>
-<li>Temporary password</li>
+<li>Open the employee page in Safari.</li>
+<li>Use Share, then <code>Add to Home Screen</code>.</li>
+<li>Open the installed app from the Home Screen.</li>
+<li>Sign in again if prompted.</li>
+<li>Select <code>Sign up for alerts</code> and allow notifications.</li>
+</ol>
+<p>If the setup panel offers <code>Unenroll</code>, it removes the current device. If that control is not visible after setup is complete, remove the site&#39;s notification permission or ask HR or Systems to unenroll the device.</p>
+<h3>4.5 Sign Out</h3>
+<p>Select <code>Sign Out</code> at the bottom of the employee screen. Always sign out on a shared device.</p>
+<h2>5. HR Guide</h2>
+<h3>5.1 HR Screen Layout</h3>
+<p>The HR Control Center has three tabs:</p>
+<ul>
+<li><code>Feed</code></li>
+<li><code>Users</code></li>
+<li><code>Settings</code></li>
 </ul>
-</li>
-<li>Leave <code>Require password reset on first use</code> enabled unless there is a business reason not to.</li>
+<p>The header also shows the current signed-in admin and links to the launcher and employee feed.</p>
+<h3>5.2 Publish An Update</h3>
+<ol>
+<li>Open <code>Feed</code>.</li>
+<li>Enter the title and message.</li>
+<li>Choose the category and priority.</li>
+<li>Under <code>Audience</code>, keep <code>All Employees</code> or choose <code>Selected groups</code> and select at least one active messaging group.</li>
+<li>Choose a retention period: 24 hours, 7 days, 30 days, or manual removal.</li>
+<li>Select <code>Publish update</code>.</li>
+</ol>
+<p>Every newly published update is added to the selected audience&#39;s feed and attempts push delivery to eligible subscribed devices. Priority changes presentation; it does not turn push delivery on or off.</p>
+<p>After publishing, check the result banner. It reports eligible and delivered device counts or explains why no device was eligible.</p>
+<h3>5.3 Manage Live Updates</h3>
+<p>The lower portion of <code>Feed</code> shows current live employee updates.</p>
+<ul>
+<li>Use the Active or Urgent summary cards to focus the list.</li>
+<li>Review the title, message, audience, and expiration.</li>
+<li>Select <code>Take down</code> to remove an announcement from the live feed.</li>
+</ul>
+<p>The current UI does not provide a separate <code>History</code> tab, acknowledgement review, or acknowledgement CSV export.</p>
+<h3>5.4 Create And Maintain Messaging Groups</h3>
+<ol>
+<li>Open <code>Users</code>.</li>
+<li>In <code>Messaging Groups</code>, enter a group name and select <code>Create Group</code>.</li>
+<li>Use <code>Save name</code> to rename a group.</li>
+<li>Use <code>Deactivate</code> when the group should no longer receive newly targeted posts.</li>
+<li>Use <code>Reactivate</code> to make it available again.</li>
+</ol>
+<p>Deactivation preserves the group&#39;s identity and existing employee membership records. Only active groups can be selected for new assignments or new targeted posts.</p>
+<h3>5.5 Assign Employees To Groups</h3>
+<ol>
+<li>Open <code>Users</code>.</li>
+<li>Find the employee in <code>Employee Accounts</code>.</li>
+<li>Select the applicable entries under <code>Messaging Groups</code>.</li>
+<li>Select <code>Save groups</code>.</li>
+</ol>
+<p>An employee can belong to more than one group.</p>
+<h3>5.6 Create One Employee Account</h3>
+<ol>
+<li>Open <code>Users</code>.</li>
+<li>Expand <code>Create User</code>.</li>
+<li>Enter the employee name, username, and a temporary password of at least 10 characters.</li>
+<li>Select any active messaging groups.</li>
 <li>Select <code>Create Account</code>.</li>
 </ol>
-<h3>5.7 Manage Existing Employee Accounts</h3>
-<p>From the employee accounts table, HR can:</p>
-<ul>
-<li>See whether the account is active or disabled</li>
-<li>See last login timing</li>
-<li>See active session count</li>
-<li>See enrolled and authorized device counts</li>
-<li>Reset a password</li>
-<li>Disable or re-enable access</li>
-<li>Sign out all active sessions</li>
-<li>Unenroll devices</li>
-</ul>
-<h3>5.8 Review Security Events</h3>
-<p>The HR access area also exposes recent persisted authentication events.</p>
-<p>Use this to review:</p>
-<ul>
-<li>Failed sign-ins</li>
-<li>Throttled attempts</li>
-<li>Recent login pressure</li>
-<li>Source IP and event timing</li>
-</ul>
-<h3>5.9 Change The HR Password</h3>
-<p>Use the HR settings/password controls to rotate the current HR password.</p>
-<p>Best practice:</p>
-<ul>
-<li>Change it after staffing changes</li>
-<li>Change it after suspected exposure</li>
-<li>Use a unique password not shared with Systems or IT</li>
-</ul>
-<h3>5.10 Recover HR Access</h3>
-<p>If the HR password is forgotten:</p>
+<p>The interface records <code>Require password reset on first use</code>, but the current employee portal does not enforce a self-service password-change step. HR remains responsible for securely setting or resetting the password.</p>
+<h3>5.7 Batch Import Employees</h3>
+<p>Use batch upload for JSON or YAML rosters of up to 500 employees.</p>
 <ol>
-<li>Open the HR sign-in page.</li>
-<li>Select <code>Forgot Password?</code></li>
-<li>Enter the recovery key if that recovery path is enabled.</li>
-<li>Create and confirm a new password.</li>
+<li>Open <code>Users</code>, then expand <code>Batch Upload</code>.</li>
+<li>Choose <code>Auto</code>, <code>JSON</code>, or <code>YAML</code>.</li>
+<li>Paste the roster or choose a <code>.json</code>, <code>.yaml</code>, or <code>.yml</code> file.</li>
+<li>Select <code>Import Employees</code>.</li>
+<li>Copy the generated credentials immediately.</li>
+<li>Deliver credentials through an approved secure channel, then clear the result from the screen.</li>
 </ol>
-<p>If recovery is not configured, a server-side recovery method must be enabled first.</p>
-<hr>
-<h2>6. Systems Manual</h2>
-<h3>6.1 What Systems Can Do</h3>
+<p>Example JSON:</p>
+<pre><code class="language-json">{
+  &quot;employees&quot;: [
+    { &quot;name&quot;: &quot;Alex Smith&quot;, &quot;email&quot;: &quot;alex.smith@example.com&quot;, &quot;passwordResetRequired&quot;: true }
+  ]
+}
+</code></pre>
+<p>The app can derive a username from the email and generates a temporary password when one is not supplied. Do not store temporary passwords in the roster file or ordinary email/chat.</p>
+<h3>5.8 Manage Employee Accounts</h3>
+<p>The employee table shows identity, password status, access state, sessions, enrolled devices, and messaging groups. Authorized HR users can:</p>
 <ul>
-<li>View systems overview metrics</li>
-<li>Inspect route and health snapshots</li>
-<li>Review push subscription roster</li>
-<li>Review traffic totals and recent failing routes</li>
-<li>Inspect host runtime and browser diagnostics</li>
-<li>Review content inventory and recent posts</li>
-<li>Copy a prepared Codex incident brief</li>
-<li>Change the Systems password</li>
-<li>Configure Systems MFA</li>
-<li>Manage System Ops admin accounts</li>
-<li>Reset the HR password from the Systems settings area</li>
+<li>Reset the password</li>
+<li>Disable or enable access</li>
+<li>Sign out active sessions</li>
+<li>Unenroll devices</li>
+<li>Change messaging-group membership</li>
+<li>Add an active employee identity to HR</li>
+<li>Permanently delete an employee account</li>
 </ul>
-<h3>6.2 Systems Screen Layout</h3>
-<p>The Systems Command Center has these sections:</p>
+<p><code>Delete Account</code> is irreversible. The confirmation warns that credentials, sessions, and associated data will be removed. Verify the name and business authorization before confirming. The current linked HR identity and other protected accounts cannot be deleted through unsafe paths.</p>
+<h3>5.9 HR Settings</h3>
+<p><code>Settings</code> contains:</p>
+<ul>
+<li>Weather location and refresh</li>
+<li>HR Google Authenticator setup/status</li>
+<li>HR password change</li>
+<li>Named HR admin account management</li>
+</ul>
+<p>Changing a privileged password signs out other active sessions for that account.</p>
+<h3>5.10 HR Recovery</h3>
+<p><code>Forgot Password?</code> on the HR sign-in route uses the configured recovery key to establish the dedicated emergency HR recovery identity. It is not a general reset for any named HR user.</p>
+<p>To reset the configured primary HR account, an authorized Systems operator can use <code>Settings</code> &gt; <code>Reset the HR password</code>. That action revokes the affected HR sessions.</p>
+<h2>6. Systems Guide</h2>
+<h3>6.1 Systems Screen Layout</h3>
+<p>The Systems Command Center has six tabs:</p>
 <ul>
 <li><code>Overview</code></li>
 <li><code>Traffic</code></li>
@@ -377,305 +335,179 @@
 <li><code>Codex</code></li>
 <li><code>Settings</code></li>
 </ul>
-<h3>6.3 Overview</h3>
-<p>Use <code>Overview</code> for the fastest operational snapshot.</p>
-<p>It includes:</p>
+<h3>6.2 Overview</h3>
+<p>Use <code>Overview</code> for the fastest operational snapshot. It includes route references, the latest update, push enrollment counts, runtime probe timings, the delivery roster, and diagnostics links.</p>
+<p>Use <code>Send Test Push</code> only when the intended test devices and audience are understood.</p>
+<h3>6.3 Traffic</h3>
+<p>Use <code>Traffic</code> to review:</p>
 <ul>
-<li>Launcher, HR, and employee route references</li>
-<li>Latest published update</li>
-<li>Push enrollment counts</li>
-<li>Runtime probe timings</li>
-<li>Device delivery roster</li>
-<li>Diagnostics and route status links</li>
-</ul>
-<h3>6.4 Traffic</h3>
-<p>Use <code>Traffic</code> to inspect live request behavior.</p>
-<p>It shows:</p>
-<ul>
-<li>Total requests</li>
-<li>API calls</li>
-<li>Page views</li>
-<li>Status code mix</li>
-<li>Route mix</li>
-<li>Recent requests</li>
-<li>Recent failing routes</li>
+<li>Total requests, API calls, and page views</li>
+<li>Status-code and route mix</li>
+<li>Recent requests and failures</li>
 <li>Average response timing</li>
 </ul>
-<p>This is the first place to look when users report loading failures or inconsistent route behavior.</p>
-<h3>6.5 System Diagnostics</h3>
-<p>Use <code>System</code> to inspect:</p>
-<ul>
-<li>Node version</li>
-<li>Platform and uptime</li>
-<li>Memory use</li>
-<li>Data file locations</li>
-<li>Browser secure-context state</li>
-<li>Service worker state</li>
-<li>Push support</li>
-<li>Connection details</li>
-<li>Probe timings</li>
-<li>Browser load performance</li>
-</ul>
-<h3>6.6 Content</h3>
-<p>Use <code>Content</code> to verify what employees are actually seeing.</p>
-<p>It includes:</p>
-<ul>
-<li>Total and active post counts</li>
-<li>Urgent and important post counts</li>
-<li>Notification-enabled post counts</li>
-<li>Expiring-soon counts</li>
-<li>Type, priority, and audience breakdowns</li>
-<li>Recent posts in feed order</li>
-</ul>
-<h3>6.7 Codex Incident Brief</h3>
-<p>Use <code>Codex</code> when handing a live issue to an engineer or support workflow.</p>
-<p>It provides:</p>
-<ul>
-<li>A copyable incident brief</li>
-<li>A raw JSON snapshot of the current Systems summary</li>
-</ul>
-<h3>6.8 Systems Settings</h3>
-<p>The <code>Settings</code> section includes:</p>
+<h3>6.4 System</h3>
+<p>Use <code>System</code> to review host/runtime information, memory and uptime, runtime data locations, browser and service-worker state, push support, connection details, and probe timing.</p>
+<h3>6.5 Content</h3>
+<p>Use <code>Content</code> to compare the saved content inventory with what employees should see. It includes active/urgent counts, notification-enabled counts, expiration state, audience breakdowns, and recent posts.</p>
+<h3>6.6 Codex Incident Brief</h3>
+<p>Use <code>Codex</code> to copy a prepared incident brief or raw JSON snapshot for an authorized engineering/support workflow. Review the copied text before sharing and remove sensitive operational details that are not required.</p>
+<h3>6.7 Systems Settings And HR Reset</h3>
+<p><code>Settings</code> contains:</p>
 <ul>
 <li>Systems password change</li>
-<li>Systems MFA setup or verification</li>
+<li>Systems MFA setup/status</li>
 <li>System Ops admin account management</li>
-<li>HR password reset</li>
+<li>Authorized primary HR password reset</li>
 </ul>
-<h3>6.9 Manage System Ops Admin Accounts</h3>
-<p>From Systems settings, authorized users can:</p>
-<ul>
-<li>Create a named System Ops account</li>
-<li>Edit display names</li>
-<li>Enable or disable access</li>
-<li>Reset passwords</li>
-<li>Revoke live sessions</li>
-</ul>
-<p>System Ops accounts stay single-purpose inside the Systems area.</p>
-<h3>6.10 Reset HR Password From Systems</h3>
-<p>If the organization needs operational recovery and the current user is authorized:</p>
-<ol>
-<li>Open <code>Settings</code>.</li>
-<li>Find the HR recovery panel.</li>
-<li>Enter a new HR password.</li>
-<li>Confirm it.</li>
-<li>Submit the reset.</li>
-</ol>
-<p>This is a privileged recovery action and should be tightly controlled.</p>
-<hr>
-<h2>7. IT Manual</h2>
-<h3>7.1 What IT Can Do</h3>
-<ul>
-<li>View all named admin accounts</li>
-<li>Create privileged admin accounts</li>
-<li>Assign exactly one privileged role per account</li>
-<li>Review audit and recent auth events</li>
-<li>Check emergency readiness</li>
-<li>Review MFA readiness for IT</li>
-<li>Use future business-control features as they are enabled</li>
-</ul>
-<h3>7.2 IT Screen Layout</h3>
-<p>The IT Control Center has these sections:</p>
+<p>System Ops account management supports named accounts, identity edits, access enable/disable, password reset, and session revocation. System Ops accounts remain single-purpose in this console.</p>
+<h2>7. IT Guide</h2>
+<h3>7.1 IT Screen Layout</h3>
+<p>The IT Control Center has four tabs:</p>
 <ul>
 <li><code>Admin Accounts</code></li>
 <li><code>Company Settings</code></li>
 <li><code>Audit Log</code></li>
 <li><code>Emergency Access</code></li>
 </ul>
-<h3>7.3 Admin Accounts</h3>
-<p>The <code>Admin Accounts</code> area is the main governance surface.</p>
-<p>IT can:</p>
+<h3>7.2 Admin Accounts</h3>
+<p>IT can manage named HR, System Ops, and IT accounts. Authorized actions include:</p>
 <ul>
-<li>Create HR, Systems, or IT admin accounts</li>
-<li>Assign one privileged role to each named account</li>
-<li>Edit display names</li>
-<li>Disable or re-enable access</li>
-<li>Reset passwords</li>
-<li>Revoke live sessions</li>
+<li>Create an account with exactly one privileged role</li>
+<li>Edit the display name</li>
+<li>Change the assigned role where allowed</li>
+<li>Disable or enable access</li>
+<li>Reset a password</li>
+<li>Sign out active sessions</li>
+<li>Permanently delete another admin account where allowed</li>
 </ul>
-<p>This is the only area where role assignment across privileged admin types is centrally governed.</p>
-<h3>7.4 Company Settings</h3>
-<p>The <code>Company Settings</code> area is present as a planned control surface.</p>
-<p>It currently indicates future scope such as:</p>
+<p>The current signed-in account and the last required privileged account are protected from unsafe self-lockout actions. Treat <code>Delete Account</code> as irreversible and verify the target before confirming.</p>
+<h3>7.3 Company Settings</h3>
+<p><code>Company Settings</code> is currently a planned control surface. Billing, retention, and broader business controls shown there are informational until separately implemented.</p>
+<h3>7.4 Audit Log</h3>
+<p>Use <code>Audit Log</code> to review persisted authentication and account-security activity, including failed sign-ins, throttling, account changes, source information, and event timing.</p>
+<h3>7.5 Emergency Access And Admin MFA Policy</h3>
+<p><code>Emergency Access</code> shows:</p>
 <ul>
-<li>Billing configuration</li>
-<li>Retention controls</li>
-<li>Broader company-level business controls</li>
-</ul>
-<p>Treat this area as informational unless additional product work enables those controls.</p>
-<h3>7.5 Audit Log</h3>
-<p>IT can review the same recent persisted authentication event stream used for admin security visibility.</p>
-<p>Use it to inspect:</p>
-<ul>
-<li>Failed admin or employee logins</li>
-<li>Throttling and backoff events</li>
-<li>Source IPs</li>
-<li>Recent access pressure</li>
-</ul>
-<h3>7.6 Emergency Access</h3>
-<p>This section helps IT verify governance resilience.</p>
-<p>It highlights:</p>
-<ul>
-<li>Number of active IT accounts</li>
+<li>Active IT account count</li>
 <li>Whether a backup IT administrator exists</li>
-<li>Current MFA posture for IT</li>
+<li>IT MFA readiness</li>
+<li>The effective admin MFA requirement</li>
+<li>Whether a server override prevents in-app MFA enforcement</li>
 </ul>
-<p>Best practice:</p>
+<p>When the control is available, IT can require or disable MFA for admin accounts and record a reason. Disabling privileged MFA should be limited to a documented emergency window and reversed immediately afterward.</p>
+<p>Keep at least two active IT accounts and test both before an emergency occurs.</p>
+<h2>8. Operating Checklists</h2>
+<h3>8.1 Employee Support</h3>
 <ul>
-<li>Keep at least two active IT accounts</li>
-<li>Ensure MFA is enabled and tested</li>
-<li>Avoid depending on one person for privileged recovery</li>
+<li>Confirm the employee is using <code>/palzivalerts/employee</code>.</li>
+<li>Confirm the account is active and the username is correct.</li>
+<li>Have HR reset the password if needed.</li>
+<li>Confirm the employee belongs to the required messaging groups.</li>
+<li>Confirm browser notification permission and device enrollment when alerts are expected.</li>
+<li>On iPhone, confirm the portal was opened from its Home Screen icon.</li>
 </ul>
-<hr>
-<h2>8. First-Run Setup Order</h2>
-<p>For a brand-new deployment, use this order:</p>
-<ol>
-<li>Start the application with the required environment variables.</li>
-<li>Open <code>/palzivalerts/hr</code>.</li>
-<li>Use the deployment setup secret to create the first HR account.</li>
-<li>Sign in to HR.</li>
-<li>Create employee accounts.</li>
-<li>Provision Systems access.</li>
-<li>Open <code>/palzivalerts/webmaster</code> and verify Systems login works.</li>
-<li>Open <code>/palzivalerts/it</code>.</li>
-<li>Use the deployment setup secret to create the first IT account if IT is required for operations.</li>
-<li>Configure MFA for privileged roles.</li>
-<li>Test employee sign-in and push enrollment on a real device.</li>
-</ol>
-<hr>
-<h2>9. Daily Operating Checklists</h2>
-<h3>9.1 Employee Support Checklist</h3>
+<h3>8.2 HR Daily Check</h3>
 <ul>
-<li>Confirm the employee is on the <code>/palzivalerts/employee</code> route.</li>
-<li>Confirm the account is active.</li>
-<li>Confirm the password is current.</li>
-<li>Confirm the browser allows notifications if alerts are expected.</li>
-<li>Confirm the device is enrolled and active if push delivery is required.</li>
+<li>Confirm the signed-in identity.</li>
+<li>Review active and urgent updates.</li>
+<li>Verify audience selection before publishing.</li>
+<li>Check publish-delivery results.</li>
+<li>Disable departed employee accounts promptly.</li>
+<li>Review group assignments when targeted messages are reported missing.</li>
 </ul>
-<h3>9.2 HR Daily Checklist</h3>
+<h3>8.3 Systems Daily Check</h3>
 <ul>
-<li>Verify HR login works.</li>
-<li>Review active and urgent posts.</li>
-<li>Publish new operational messages as needed.</li>
-<li>Review acknowledgements for required notices.</li>
-<li>Disable old employee accounts promptly.</li>
+<li>Review route health, errors, and runtime probes.</li>
+<li>Review push-device counts and stale delivery states.</li>
+<li>Compare recent content with intended communications.</li>
+<li>Escalate repeated failures with a sanitized incident brief.</li>
 </ul>
-<h3>9.3 Systems Daily Checklist</h3>
+<h3>8.4 IT Weekly Check</h3>
 <ul>
-<li>Review traffic errors and request spikes.</li>
-<li>Review route health and runtime probes.</li>
-<li>Confirm push device counts look normal.</li>
-<li>Confirm recent content matches intended communications.</li>
-</ul>
-<h3>9.4 IT Weekly Checklist</h3>
-<ul>
-<li>Review all privileged admin accounts.</li>
+<li>Review all privileged accounts and roles.</li>
 <li>Confirm disabled accounts remain disabled.</li>
-<li>Confirm backup IT access exists.</li>
-<li>Review audit events for suspicious sign-in behavior.</li>
-<li>Rotate passwords or recovery procedures if staff changed.</li>
+<li>Confirm backup IT access and MFA.</li>
+<li>Review audit events for suspicious activity.</li>
+<li>Rotate credentials or recovery procedures after staffing or incident changes.</li>
 </ul>
-<hr>
-<h2>10. Troubleshooting</h2>
-<h3>10.1 Employee Cannot Sign In</h3>
+<h2>9. Troubleshooting</h2>
+<h3>9.1 Employee Cannot Sign In</h3>
 <ul>
-<li>Verify the username is correct.</li>
-<li>Verify the password was entered exactly.</li>
+<li>Verify the direct employee URL, username, and password.</li>
 <li>Confirm the employee account is active.</li>
-<li>If needed, HR should reset the employee password.</li>
+<li>Ask HR to reset the employee password when needed.</li>
 </ul>
-<h3>10.2 Admin Cannot Sign In</h3>
+<h3>9.2 Admin Cannot Sign In</h3>
 <ul>
-<li>Confirm the user is on the correct role route.</li>
-<li>Confirm the account belongs to that role.</li>
-<li>Check whether MFA verification is required.</li>
-<li>Review recent auth events for throttling or repeated failures.</li>
+<li>Confirm the correct role route and assigned role.</li>
+<li>Complete the MFA step if requested.</li>
+<li>Check for throttling after repeated failures.</li>
+<li>Use only the approved recovery path for that role.</li>
 </ul>
-<h3>10.3 Systems Setup Is Blocked</h3>
+<h3>9.3 Employee Cannot See A Targeted Update</h3>
 <ul>
-<li>HR must already exist.</li>
-<li>HR may need to provision Systems access first.</li>
-<li>Verify you are opening <code>/palzivalerts/webmaster</code>.</li>
+<li>Confirm the update is still live.</li>
+<li>Confirm HR selected the intended group.</li>
+<li>Confirm the employee belongs to at least one selected group.</li>
+<li>Reload if a <code>New portal update available</code> banner appears.</li>
 </ul>
-<h3>10.4 Invitation Link Does Not Work</h3>
-<ul>
-<li>Confirm the invite has not expired.</li>
-<li>Confirm the user opened the original invite URL.</li>
-<li>Reissue the invite if the token is no longer valid.</li>
-</ul>
-<h3>10.5 Push Alerts Do Not Arrive</h3>
+<h3>9.4 Push Alerts Do Not Arrive</h3>
 <ul>
 <li>Confirm the employee signed in on that device.</li>
 <li>Confirm notification permission is granted.</li>
-<li>Confirm the browser supports service workers and push.</li>
-<li>On iPhone, confirm the app was added to the home screen and reopened from the installed icon.</li>
-<li>Ask the employee to refresh or re-enroll push setup.</li>
-<li>Review the Systems delivery roster for stale or inactive devices.</li>
+<li>On iPhone, open the installed Home Screen app.</li>
+<li>Reopen the employee portal and use the setup action if it reappears.</li>
+<li>Ask HR or Systems to inspect and, if needed, unenroll the stale device.</li>
 </ul>
-<h3>10.6 HR Recovery Fails</h3>
+<h3>9.5 Page Looks Stale Or Incorrect</h3>
 <ul>
-<li>Confirm the recovery path is configured on the server.</li>
-<li>Confirm the recovery key is correct.</li>
-<li>If unavailable, use the Systems HR reset workflow if authorized.</li>
+<li>Select <code>Reload now</code> when the portal-update banner appears.</li>
+<li>Confirm the correct role route.</li>
+<li>Sign out and sign back in when identity appears wrong.</li>
+<li>Use Systems health/diagnostics only with authorized Systems or IT access.</li>
 </ul>
-<h3>10.7 Portal Loads But Data Looks Wrong</h3>
+<h2>10. Security Rules</h2>
 <ul>
-<li>Review the Systems overview and traffic screens.</li>
-<li>Confirm the correct route was opened.</li>
-<li>Check whether the browser is running stale cached assets.</li>
-<li>Refresh and re-test before escalating.</li>
-</ul>
-<hr>
-<h2>11. Security Rules</h2>
-<ul>
-<li>Use named accounts only.</li>
-<li>Do not share privileged credentials.</li>
-<li>Keep HR, Systems, and IT passwords distinct.</li>
-<li>Enable MFA for privileged roles whenever available.</li>
-<li>Remove access immediately when a person changes roles or leaves.</li>
-<li>Do not capture credentials in screenshots, email, or chat.</li>
+<li>Use named accounts and least-privilege roles.</li>
+<li>Keep HR, Systems, and IT credentials distinct.</li>
+<li>Enable MFA for privileged roles except during a documented emergency.</li>
+<li>Never place passwords, setup secrets, recovery keys, invite links, MFA keys, or browser storage-state files in documentation or screenshots.</li>
+<li>Deliver temporary passwords through an approved secure channel.</li>
+<li>Verify names before permanent account deletion.</li>
 <li>Sign out on shared devices.</li>
 </ul>
-<hr>
-<h2>12. Testing The Manual</h2>
-<p>After updating this manual, verify these paths in the live app:</p>
+<h2>11. Manual Verification And Stewardship</h2>
+<p>After changing application behavior or this source file:</p>
 <ol>
-<li>Launcher route loads.</li>
-<li>Employee sign-in works.</li>
-<li>HR sign-in works.</li>
-<li>Systems sign-in works.</li>
-<li>IT sign-in works.</li>
-<li>HR can publish a post.</li>
-<li>An employee can mark a required post as read.</li>
-<li>Systems can see the traffic and content summary.</li>
-<li>IT can review admin accounts.</li>
+<li>Verify the launcher and four role routes.</li>
+<li>Confirm Employee, HR, Systems, and IT labels match the current UI.</li>
+<li>Confirm HR can publish to all employees and selected groups.</li>
+<li>Confirm an employee sees only eligible active posts.</li>
+<li>Confirm batch import, account-management, and MFA instructions match the current controls.</li>
+<li>Regenerate the HTML, PDF, and route screenshots.</li>
+<li>Inspect every PDF page before distribution.</li>
 </ol>
-<hr>
-<h2>13. Document Stewardship</h2>
-<ul>
-<li>Update this manual whenever login rules, role boundaries, or major features change.</li>
-<li>Regenerate the PDF artifact after every source-doc change.</li>
-<li>Store the PDF with onboarding and operations materials.</li>
-</ul>
+<p>Use <code>docs/MANUAL_INDEX.md</code> for the complete documentation catalog and freshness status.</p>
+<section class="screenshot-appendix">  <div class="screen">
+    <h2>Route Screenshots</h2><p class="caption">Use these images to recognize the current entry points. Capture mode: public-sign-in.</p>
+    <div class="caption">Launcher page (/palzivalerts)</div>
+    <img src="screenshots/01-launcher.png" alt="Launcher page (/palzivalerts)" />
+  </div>  <div class="screen screen-following">
 
-<div class="section">
-  <h2>Appendix: Screenshots</h2>
-  <p class="caption">Use these for quick recognition and training handoff.</p>
-  <div class="shot-grid">    <div class="section screen">
-      <div class="caption">Launcher page (/palzivalerts)</div>
-      <img src="screenshots/01-launcher.png" alt="Launcher page (/palzivalerts)" />
-    </div>    <div class="section screen">
-      <div class="caption">Employee signed-in feed (/palzivalerts/employee)</div>
-      <img src="screenshots/02-employee.png" alt="Employee signed-in feed (/palzivalerts/employee)" />
-    </div>    <div class="section screen">
-      <div class="caption">HR Control Center signed in (/palzivalerts/hr)</div>
-      <img src="screenshots/03-hr.png" alt="HR Control Center signed in (/palzivalerts/hr)" />
-    </div>    <div class="section screen">
-      <div class="caption">Systems Command Center signed in (/palzivalerts/webmaster)</div>
-      <img src="screenshots/04-webmaster.png" alt="Systems Command Center signed in (/palzivalerts/webmaster)" />
-    </div>    <div class="section screen">
-      <div class="caption">IT Control Center signed in (/palzivalerts/it)</div>
-      <img src="screenshots/05-it.png" alt="IT Control Center signed in (/palzivalerts/it)" />
-    </div>  </div>
-</div>
+    <div class="caption">Employee sign-in page (/palzivalerts/employee)</div>
+    <img src="screenshots/02-employee.png" alt="Employee sign-in page (/palzivalerts/employee)" />
+  </div>  <div class="screen screen-following">
+
+    <div class="caption">HR sign-in page (/palzivalerts/hr)</div>
+    <img src="screenshots/03-hr.png" alt="HR sign-in page (/palzivalerts/hr)" />
+  </div>  <div class="screen screen-following">
+
+    <div class="caption">Systems sign-in page (/palzivalerts/webmaster)</div>
+    <img src="screenshots/04-webmaster.png" alt="Systems sign-in page (/palzivalerts/webmaster)" />
+  </div>  <div class="screen screen-following">
+
+    <div class="caption">IT sign-in page (/palzivalerts/it)</div>
+    <img src="screenshots/05-it.png" alt="IT sign-in page (/palzivalerts/it)" />
+  </div></section>
 </body></html>

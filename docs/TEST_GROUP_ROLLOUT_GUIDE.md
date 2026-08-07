@@ -1,17 +1,19 @@
 # Test Group Rollout Guide
 
+**Document status:** Targeted-delivery workflow verified August 6, 2026.
+
 ## Purpose
 
 Use this guide to roll the Communications and Alert Center out to a controlled test group of employees and HR users.
 
 ## Important Delivery Rule
 
-The current `Audience` field on the HR publishing form is a label, not a delivery filter. Published HR updates are visible on the employee feed and are broadcast to every active subscribed employee device.
+The current `Audience` control is a real visibility and delivery filter.
 
-For a controlled test, use one of these approaches:
+- `All Employees` makes the post visible to every active employee and attempts push delivery to every eligible subscribed employee device.
+- `Selected groups` limits feed visibility and eligible push delivery to employees who belong to at least one selected messaging group.
 
-1. Only create and enroll the pilot employee accounts before publishing test messages.
-2. If real employee accounts and devices are already active, do not publish pilot-only messages until true audience targeting is added.
+For a controlled test, create a dedicated active messaging group, assign only the pilot employees, and publish the test message to that group. Recheck the audience immediately before selecting `Publish update`.
 
 ## Links To Use
 
@@ -29,6 +31,8 @@ Do not send HR, Systems, IT, or launcher links in employee-facing messages. Empl
 3. Confirm Systems can sign in at `https://itotexpress.com/palzivalerts/webmaster`.
 4. Create a fresh runtime backup before inviting employees.
 5. Choose the test roster and keep it small.
+6. In HR `Users`, create a dedicated group such as `Pilot Test`.
+7. Assign only the intended pilot employees to that group.
 
 Recommended first test group:
 
@@ -150,7 +154,7 @@ Sign in with the username and temporary password provided separately.
 After you sign in:
 1. Add the app to your Home Screen.
 2. Reopen it from the Home Screen.
-3. Tap Subscribe.
+3. Tap Sign up for alerts.
 4. Allow notifications when your phone asks.
 
 Please confirm back when you can see the employee feed and your phone shows the device as active or ready.
@@ -173,7 +177,7 @@ Title: Pilot test notice
 Message: This is a test notice for the Communications and Alert Center pilot. No action is required.
 Category: News
 Priority: Normal
-Audience: All Employees
+Audience: Selected groups - Pilot Test
 Retention: 24 Hours
 
 After publishing, confirm the success message and verify the notice appears under Live employee updates.
@@ -192,14 +196,11 @@ Use the employee phone that should receive alerts. Push enrollment is tied to th
 5. Tap `Add to Home Screen`.
 6. Open the installed app from the Home Screen.
 7. Sign in again if prompted.
-8. Tap `Subscribe`.
+8. Tap `Sign up for alerts`.
 9. Allow notifications when iOS asks.
-10. Confirm the setup checklist shows:
-    - app installed
-    - notifications allowed
-    - device active or ready
+10. Ask Systems to confirm the device is enrolled and active.
 
-If notifications were blocked, re-enable notifications for the installed app in iOS Settings, reopen the app, and tap `Subscribe` or refresh setup again.
+If notifications were blocked, re-enable notifications for the installed app in iOS Settings, reopen the app, and use `Sign up for alerts` again if the setup control appears.
 
 ### Android
 
@@ -209,12 +210,9 @@ If notifications were blocked, re-enable notifications for the installed app in 
 4. Use the Chrome menu to install the app or add it to the Home Screen.
 5. Open the installed app from the Home Screen.
 6. Sign in again if prompted.
-7. Tap `Subscribe`.
+7. Tap `Sign up for alerts`.
 8. Allow notifications when Android asks.
-9. Confirm the setup checklist shows:
-   - app installed
-   - notifications allowed
-   - device active or ready
+9. Ask Systems to confirm the device is enrolled and active.
 
 If push registration fails on Android, confirm the employee is using Chrome and that Google Play Services is enabled.
 
@@ -241,13 +239,15 @@ Do not use HR publishing as the first push test if non-test employees already ha
    - `Priority`
    - `Audience`
    - `Retention`
-5. Click `Publish update`.
-6. Watch the success message:
-   - `Published and notified X/Y subscribed devices` means push delivery was attempted.
-   - `Published. No devices are subscribed for alerts.` means the feed post exists, but no phone received push.
+5. For a pilot-only message, select `Selected groups` and choose the dedicated pilot group.
+6. Click `Publish update`.
+7. Watch the success message:
+   - `Published and notified X/Y eligible subscribed devices` means targeted push delivery was attempted.
+   - `Published. No eligible devices are subscribed for alerts.` means the targeted feed post exists, but no eligible phone received push.
    - `Published, but alert delivery failed` means the post exists, but push delivery had an error.
-7. Confirm the post appears in `Live employee updates`.
-8. Open an employee phone and confirm the post appears in the employee feed.
+8. Confirm the post appears in `Live employee updates` with the intended audience.
+9. Open a pilot employee phone and confirm the post appears.
+10. Open or ask about one non-pilot employee account and confirm the pilot-only post does not appear.
 
 Recommended first pilot post:
 
@@ -256,11 +256,9 @@ Title: Pilot test notice
 Message: This is a test notice for the Communications and Alert Center pilot. No action is required.
 Category: News
 Priority: Normal
-Audience: All Employees
+Audience: Selected groups - Pilot Test
 Retention: 24 Hours
 ```
-
-Only use that message when the active employee audience is limited to the pilot group.
 
 ## What HR Should Know
 
@@ -268,11 +266,15 @@ HR can:
 
 - publish new updates
 - view live employee updates
+- create and maintain messaging groups
+- target updates to selected groups
 - create employee accounts
+- batch import employee accounts
 - reset employee passwords
 - disable employee access
 - revoke sessions
 - unenroll employee devices
+- permanently delete employee accounts when authorized
 
 HR should not:
 
@@ -295,7 +297,7 @@ HR should not:
 1. Confirm the employee signed in on that phone.
 2. Confirm notifications are allowed.
 3. Confirm the app was installed and reopened from the Home Screen.
-4. Tap `Subscribe` again.
+4. Reopen the app and use `Sign up for alerts` if the setup control appears.
 5. Check Systems device counts.
 6. Send another test push from Systems.
 
@@ -306,6 +308,7 @@ HR should not:
 3. Confirm HR sees the post in `Live employee updates`.
 4. Confirm the post was not removed.
 5. Confirm the employee is using the current `/palzivalerts/employee` route.
+6. Confirm the employee belongs to at least one messaging group selected for the post.
 
 ## End Of Test
 
@@ -316,4 +319,4 @@ After the pilot:
 3. Remove stale test notices if needed.
 4. Disable test accounts that should not remain active.
 5. Unenroll test devices that should stop receiving alerts.
-6. Decide whether to add true audience targeting before a larger rollout.
+6. Deactivate the pilot messaging group when it should no longer receive new targeted posts.

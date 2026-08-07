@@ -56,9 +56,13 @@ test("manual screenshots capture full mobile pages in public and authenticated m
   const manualBuilder = await readProjectFile("scripts/build-user-manual-pdf.ps1");
   const fullPageCaptureCount = (manualBuilder.match(/--full-page/g) || []).length;
 
-  assert.ok(fullPageCaptureCount >= 3);
+  assert.ok(fullPageCaptureCount >= 2);
   assert.match(
     manualBuilder,
-    /npx playwright screenshot --device="iPhone 13" --full-page --wait-for-timeout=1200 \$r\.url \$out/
+    /npx playwright screenshot --browser="chromium" --channel="chrome" --viewport-size="390,844" --full-page --wait-for-timeout=1200 --load-storage \$storagePath \$route\.url \$outputPath/
+  );
+  assert.match(
+    manualBuilder,
+    /npx playwright screenshot --browser="chromium" --channel="chrome" --viewport-size="390,844" --full-page --wait-for-timeout=1200 \$route\.url \$outputPath/
   );
 });

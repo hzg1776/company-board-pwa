@@ -98,6 +98,17 @@ The startup installer also repairs or installs the `cloudflared` Windows service
 
 If you already have old local runtime files under `data/`, the app and startup scripts migrate them into `runtime/data` automatically the first time you run this version.
 
+## Manuals And Runbooks
+
+Start with [docs/MANUAL_INDEX.md](docs/MANUAL_INDEX.md). It lists every user, training, operator, deployment, security, and migration guide and identifies which ones are current, partial, stale, or working-copy only.
+
+- Quick how-to: [docs/QUICK_START_MANUAL.md](docs/QUICK_START_MANUAL.md)
+- Full role manual: [docs/USER_MANUAL.md](docs/USER_MANUAL.md)
+- Generated distribution files: `docs/manual-artifacts/`
+- Manual generation: [docs/MANUAL_BUILD_GUIDE.md](docs/MANUAL_BUILD_GUIDE.md)
+
+Do not assume every older operator runbook is current. In particular, consult the index before using release, rollback, restore, or migration instructions.
+
 ## Production Upgrade Checklist
 
 - Add image/file attachments.
