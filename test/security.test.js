@@ -209,6 +209,12 @@ test("existing employee can be added to HR and use their username for HR login",
     assert.equal(Boolean(hrLogin.authorized), true);
 
     await store.resetEmployeePassword(employeeResult.employee.id, "EmployeePass2!");
+    const staleHrAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${hrLogin.sessionId}`
+      }
+    });
+    assert.equal(staleHrAccess.authorized, false);
     await assert.rejects(
       store.authenticateAdmin({
         username: "alex.rivera",
@@ -224,6 +230,35 @@ test("existing employee can be added to HR and use their username for HR login",
       userAgent: "test"
     });
     assert.equal(Boolean(updatedHrLogin.authorized), true);
+
+    const employeeLogin = await store.authenticateEmployee({
+      username: "alex.rivera",
+      password: "EmployeePass2!",
+      userAgent: "employee-self-change"
+    });
+    const selfChange = await store.changeEmployeePassword({
+      headers: {
+        cookie: `palziv_employee_auth=${employeeLogin.sessionId}`
+      }
+    }, {
+      currentPassword: "EmployeePass2!",
+      password: "EmployeePass3!",
+      userAgent: "employee-self-change",
+      clientIp: "198.51.100.22"
+    });
+    assert.equal(selfChange.hrReauthenticationRequired, true);
+    const staleUpdatedHrAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${updatedHrLogin.sessionId}`
+      }
+    });
+    assert.equal(staleUpdatedHrAccess.authorized, false);
+    const hrAfterSelfChange = await store.authenticateAdmin({
+      username: "alex.rivera",
+      password: "EmployeePass3!",
+      userAgent: "hr-after-self-change"
+    });
+    assert.equal(hrAfterSelfChange.authorized, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -326,6 +361,197 @@ test("employee password reset clears the password reset required status", async 
 
     const employees = await store.listEmployees();
     assert.equal(Boolean(employees[0]?.passwordResetRequired), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee password change preserves only the active employee session", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-self-password-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      passwordResetRequired: true
+    });
+    await store.createEmployeeAccount({
+      name: "John Smith",
+      username: "john.smith",
+      password: "EmployeePass3!"
+    });
+
+    const activeLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "active"
+    });
+    const otherLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "other"
+    });
+    const unrelatedLogin = await store.authenticateEmployee({
+      username: "john.smith",
+      password: "EmployeePass3!",
+      userAgent: "unrelated"
+    });
+
+    const changed = await store.changeEmployeePassword({
+      headers: {
+        cookie: `palziv_employee_auth=${activeLogin.sessionId}`
+      }
+    }, {
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!",
+      userAgent: "active",
+      clientIp: "198.51.100.20"
+    });
+
+    assert.equal(changed.authorized, true);
+    assert.equal(changed.employee.username, "maria.lopez");
+    assert.equal(changed.employee.passwordResetRequired, false);
+    assert.equal(changed.hrReauthenticationRequired, false);
+
+    const activeAccess = await store.checkEmployeeAccess({
+      headers: { cookie: `palziv_employee_auth=${activeLogin.sessionId}` }
+    });
+    const otherAccess = await store.checkEmployeeAccess({
+      headers: { cookie: `palziv_employee_auth=${otherLogin.sessionId}` }
+    });
+    const unrelatedAccess = await store.checkEmployeeAccess({
+      headers: { cookie: `palziv_employee_auth=${unrelatedLogin.sessionId}` }
+    });
+    assert.equal(activeAccess.authorized, true);
+    assert.equal(otherAccess.authorized, false);
+    assert.equal(unrelatedAccess.authorized, true);
+
+    await assert.rejects(
+      store.authenticateEmployee({
+        username: "maria.lopez",
+        password: "EmployeePass1!"
+      }),
+      /Invalid username or password\./
+    );
+    const newLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass2!"
+    });
+    assert.equal(newLogin.authorized, true);
+
+    const state = await store.readSecurityState();
+    assert.equal(state.securityEvents.some((event) => (
+      event.type === "employee_password_changed" &&
+      event.accountKey === "maria.lopez" &&
+      event.outcome === "success"
+    )), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee password change rejects an incorrect current password", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-self-password-current-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const login = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+
+    await assert.rejects(
+      store.changeEmployeePassword({
+        headers: { cookie: `palziv_employee_auth=${login.sessionId}` }
+      }, {
+        currentPassword: "WrongPassword1!",
+        password: "EmployeePass2!",
+        clientIp: "198.51.100.21"
+      }),
+      /Current password is incorrect\./
+    );
+
+    const originalLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    assert.equal(originalLogin.authorized, true);
+    const state = await store.readSecurityState();
+    assert.equal(state.securityEvents.some((event) => (
+      event.type === "employee_password_change_failed" &&
+      event.accountKey === "maria.lopez" &&
+      event.outcome === "failure" &&
+      event.detail === "invalid-current-password"
+    )), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee password change enforces local password policy", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-self-password-policy-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    const created = await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const login = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const req = {
+      headers: { cookie: `palziv_employee_auth=${login.sessionId}` }
+    };
+
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "",
+        password: "EmployeePass2!"
+      }),
+      /Current password is required\./
+    );
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "EmployeePass1!",
+        password: "short"
+      }),
+      /Password must be at least 10 characters\./
+    );
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "EmployeePass1!",
+        password: "EmployeePass1!"
+      }),
+      /Choose a new password\./
+    );
+
+    await store.updateData((data) => {
+      const employee = data.employees.find((entry) => entry.id === created.employee.id);
+      employee.identityProvider = "saml";
+    });
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "EmployeePass1!",
+        password: "EmployeePass2!"
+      }),
+      /This password is externally managed\./
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

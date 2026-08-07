@@ -1143,6 +1143,25 @@ function isSessionExpired(session) {
   return !expiresAt || expiresAt <= Date.now();
 }
 
+function findValidEmployeeSession(data, sessionId = "") {
+  const session = data.employeeSessions.find((entry) => entry.id === cleanText(sessionId, 120));
+
+  if (!session || session.revokedAt || isSessionExpired(session)) {
+    return null;
+  }
+
+  const employee = data.employees.find((entry) => entry.id === session.employeeId);
+  if (
+    !employee ||
+    employee.active === false ||
+    Number(employee.sessionVersion || 0) !== Number(session.sessionVersion || 0)
+  ) {
+    return null;
+  }
+
+  return { session, employee };
+}
+
 function createEmployeeSession(employee, userAgent = "") {
   const createdAt = nowIso();
 
@@ -1462,6 +1481,8 @@ function employeeAccessResponse(employee, session) {
       id: employee.id,
       name: employee.name,
       username: employee.username,
+      identityProvider: employee.identityProvider || "local",
+      passwordResetRequired: employee.passwordResetRequired === true,
       groupIds: normalizeGroupIds(employee.groupIds)
     },
     sessionExpiresAt: session.expiresAt
@@ -1822,6 +1843,65 @@ function revokeAllSessionsForUser(sessions, adminUserId, changedAt, roleFilter =
   });
 }
 
+function revokeOtherEmployeeSessions(sessions, activeSessionId, employeeId, changedAt) {
+  return sessions.map((session) => {
+    if (session.id === activeSessionId) {
+      return {
+        ...session,
+        updatedAt: changedAt,
+        revokedAt: ""
+      };
+    }
+
+    if (
+      session.employeeId !== employeeId ||
+      session.revokedAt ||
+      isSessionExpired(session)
+    ) {
+      return session;
+    }
+
+    return {
+      ...session,
+      revokedAt: changedAt,
+      updatedAt: changedAt
+    };
+  });
+}
+
+function syncHrManagedEmployeeCredential(data, employee, changedAt) {
+  const linkedAdminIds = [];
+
+  data.adminUsers = data.adminUsers.map((adminUser) => {
+    if (
+      adminUser.username !== employee.username ||
+      !adminUserHasRole(adminUser, "hr") ||
+      !isHrManagedAdminUser(adminUser)
+    ) {
+      return adminUser;
+    }
+
+    linkedAdminIds.push(adminUser.id);
+    return normalizeAdminUser({
+      ...adminUser,
+      passwordSalt: employee.passwordSalt,
+      passwordHash: employee.passwordHash,
+      updatedAt: changedAt
+    });
+  });
+
+  for (const adminUserId of linkedAdminIds) {
+    data.adminSessions = revokeAllSessionsForUser(
+      data.adminSessions,
+      adminUserId,
+      changedAt,
+      "hr"
+    );
+  }
+
+  return linkedAdminIds.length > 0;
+}
+
 function loginGuardBucketForActor(loginGuards, actor) {
   return actor === "it"
     ? loginGuards.it
@@ -2150,9 +2230,9 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       };
     }
 
-    const session = data.employeeSessions.find((entry) => entry.id === sessionId);
+    const access = findValidEmployeeSession(data, sessionId);
 
-    if (!session || session.revokedAt || isSessionExpired(session)) {
+    if (!access) {
       return {
         authorized: false,
         sessionExpiresAt: "",
@@ -2160,17 +2240,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       };
     }
 
-    const employee = data.employees.find((entry) => entry.id === session.employeeId);
-
-    if (!employee || employee.active === false || Number(employee.sessionVersion || 0) !== Number(session.sessionVersion || 0)) {
-      return {
-        authorized: false,
-        sessionExpiresAt: "",
-        employee: null
-      };
-    }
-
-    return employeeAccessResponse(employee, session);
+    return employeeAccessResponse(access.employee, access.session);
   }
 
   async function authenticateEmployee({ username, password, userAgent = "", clientIp = "" } = {}) {
@@ -4704,6 +4774,97 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     }));
   }
 
+  async function changeEmployeePassword(req = {}, {
+    currentPassword,
+    password,
+    userAgent = "",
+    clientIp = ""
+  } = {}) {
+    const currentPasswordText = String(currentPassword || "");
+    const nextPasswordText = String(password || "");
+
+    if (!currentPasswordText) {
+      throw new Error("Current password is required.");
+    }
+
+    validateEmployeePassword(nextPasswordText);
+
+    return updateData((data) => {
+      const cookieNames = getAccessCookieNames();
+      const sessionId = parseCookies(req.headers?.cookie || "")[cookieNames.employee];
+      const access = findValidEmployeeSession(data, sessionId);
+
+      if (!access) {
+        throw new Error("You must be signed in as an employee.");
+      }
+
+      const { session, employee } = access;
+
+      if ((employee.identityProvider || "local") !== "local") {
+        throw new Error("This password is externally managed.");
+      }
+
+      if (!verifyPassword(currentPasswordText, employee.passwordSalt, employee.passwordHash)) {
+        const event = appendSecurityEvent(data, createSecurityEvent({
+          type: "employee_password_change_failed",
+          actor: "employee",
+          accountKey: employee.username,
+          employeeId: employee.id,
+          sourceIp: normalizeSecurityKey(clientIp),
+          outcome: "failure",
+          detail: "invalid-current-password",
+          userAgent
+        }));
+        return {
+          ok: false,
+          error: "Current password is incorrect.",
+          event
+        };
+      }
+
+      if (verifyPassword(nextPasswordText, employee.passwordSalt, employee.passwordHash)) {
+        throw new Error("Choose a new password.");
+      }
+
+      const changedAt = nowIso();
+      const nextPassword = createPasswordHash(nextPasswordText);
+      employee.passwordSalt = nextPassword.salt;
+      employee.passwordHash = nextPassword.hash;
+      employee.passwordResetRequired = false;
+      employee.updatedAt = changedAt;
+      data.employeeSessions = revokeOtherEmployeeSessions(
+        data.employeeSessions,
+        session.id,
+        employee.id,
+        changedAt
+      );
+      const hrReauthenticationRequired = syncHrManagedEmployeeCredential(data, employee, changedAt);
+      clearLoginGuards(data.loginGuards.employee, employee.username, clientIp);
+      appendSecurityEvent(data, createSecurityEvent({
+        type: "employee_password_changed",
+        actor: "employee",
+        accountKey: employee.username,
+        employeeId: employee.id,
+        sourceIp: normalizeSecurityKey(clientIp),
+        outcome: "success",
+        detail: hrReauthenticationRequired ? "password-updated-hr-synced" : "password-updated",
+        userAgent
+      }));
+
+      return { ok: true, session, employee, hrReauthenticationRequired };
+    }).then(({ result }) => {
+      if (!result.ok) {
+        logSecurityEvent(result.event);
+        throw new Error(result.error);
+      }
+
+      return {
+        ...employeeAccessResponse(result.employee, result.session),
+        hrReauthenticationRequired: result.hrReauthenticationRequired
+      };
+    });
+  }
+
   async function changeAdminPassword(req = {}, { currentPassword, password, userAgent = "", clientIp = "" } = {}) {
     const currentPasswordText = String(currentPassword || "");
     const nextPasswordText = String(password || "");
@@ -5298,18 +5459,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
       employee.updatedAt = nowIso();
       employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
 
-      data.adminUsers = data.adminUsers.map((adminUser) => {
-        if (adminUser.username !== employee.username || !adminUserHasRole(adminUser, "hr") || !isHrManagedAdminUser(adminUser)) {
-          return adminUser;
-        }
-
-        return normalizeAdminUser({
-          ...adminUser,
-          passwordSalt: employee.passwordSalt,
-          passwordHash: employee.passwordHash,
-          updatedAt: employee.updatedAt
-        });
-      });
+      syncHrManagedEmployeeCredential(data, employee, employee.updatedAt);
 
       data.employeeSessions = data.employeeSessions.map((session) => (
         session.employeeId === employee.id
@@ -5442,6 +5592,7 @@ export function createSecurityStore({ dataFile, adminMfaEnabled = false } = {}) 
     createEmployeeAccount,
     createEmployeeAccountsBatch,
     setEmployeeActive,
+    changeEmployeePassword,
     changeAdminPassword,
     changeWebmasterPassword,
     beginAdminMfaEnrollment,
