@@ -9086,6 +9086,10 @@ body {
   display: none !important;
 }
 
+.page-shell.hr-shell.hr-shell-users .employee-directory-empty[hidden] {
+  display: none !important;
+}
+
 .page-shell.hr-shell.hr-shell-users .employee-directory-summary {
   position: relative;
   display: grid;
