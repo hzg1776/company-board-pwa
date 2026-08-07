@@ -9428,3 +9428,63 @@ body {
 .hr-shell .hr-section-collapse:not([open]) > .hr-section-collapse-body {
   display: none;
 }
+
+/* Employee account: compact self-service password controls. */
+.employee-password-card {
+  width: 100%;
+  max-width: 720px;
+  margin: 18px auto 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.employee-password-card .settings-collapse {
+  width: 100%;
+  margin: 0;
+}
+
+.employee-password-card .settings-collapse-toggle {
+  width: 100%;
+  min-height: 48px;
+  justify-content: flex-start;
+  padding: 12px 18px;
+  color: var(--ink) !important;
+  background: var(--surface) !important;
+  border: 0 !important;
+  border-radius: 0;
+}
+
+.employee-password-card .settings-collapse[open] > .settings-collapse-toggle {
+  border-bottom: 1px solid var(--line) !important;
+}
+
+.employee-password-card-body {
+  display: grid;
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+
+.employee-password-card .auth-form-actions {
+  justify-content: flex-start;
+}
+
+.employee-password-notice {
+  margin: 0;
+  min-height: 0;
+  padding: 12px;
+}
+
+@media (max-width: 720px) {
+  .employee-password-card .employee-password-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .employee-password-card .field-span-2 {
+    grid-column: auto;
+  }
+
+  .employee-password-card .auth-form-actions,
+  .employee-password-card .auth-form-actions .button {
+    width: 100%;
+  }
+}

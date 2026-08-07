@@ -1016,6 +1016,20 @@ function formatEmployeeIdentity(employee = {}) {
   return String(employee.name || employee.username || "").trim();
 }
 
+function employeePasswordPanelState(employee = {}) {
+  const visible = String(employee.identityProvider || "local").trim().toLowerCase() === "local";
+  return {
+    visible,
+    open: visible && employee.passwordResetRequired === true
+  };
+}
+
+function employeePasswordChangeValidation(data = {}) {
+  return String(data.password || "") === String(data.confirmPassword || "")
+    ? ""
+    : "New passwords do not match.";
+}
+
 function renderEmployeeSessionIdentity() {
   const identity = formatEmployeeIdentity(state.access.employee.employee || {});
 
@@ -4025,6 +4039,44 @@ function renderEmployeeBatchUploadPanel() {
   `;
 }
 
+function renderEmployeePasswordPanel() {
+  const panel = employeePasswordPanelState(state.access.employee.employee || {});
+
+  if (!panel.visible) return "";
+
+  return `
+    <section class="panel-card employee-password-card" aria-label="Employee account password">
+      <details class="settings-collapse" ${panel.open ? "open" : ""}>
+        <summary class="ghost-button settings-collapse-toggle">${icon("lock")} Change Password</summary>
+        <div class="employee-password-card-body">
+          ${panel.open
+            ? '<p class="notice-card employee-password-notice">Change the temporary password assigned to this account.</p>'
+            : ""}
+          <form class="auth-form" data-employee-password-form>
+            <div class="composer-grid employee-password-grid">
+              <label class="field field-span-2">
+                <span>Current Password</span>
+                <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password">
+              </label>
+              <label class="field">
+                <span>New Password</span>
+                <input name="password" type="password" minlength="10" required autocomplete="new-password">
+              </label>
+              <label class="field">
+                <span>Confirm New Password</span>
+                <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password">
+              </label>
+            </div>
+            <div class="auth-form-actions">
+              <button class="button" type="submit">${icon("lock")} Save New Password</button>
+            </div>
+          </form>
+        </div>
+      </details>
+    </section>
+  `;
+}
+
 function renderEmployee() {
   const notices = visiblePosts();
   const setup = buildEmployeeSetupState();
@@ -4057,6 +4109,8 @@ function renderEmployee() {
           }
         </div>
       </section>
+
+      ${renderEmployeePasswordPanel()}
 
       <section class="employee-signout-floor" aria-label="Sign out">
         <button class="ghost-button employee-signout-button employee-footer-signout" type="button" data-employee-logout>Sign Out</button>
@@ -6165,6 +6219,51 @@ async function handleResetEmployeePasswordSubmit(event) {
   clearMessageSoon();
 }
 
+async function handleEmployeePasswordChangeSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const validationError = employeePasswordChangeValidation(data);
+
+  if (validationError) {
+    setMessage(validationError);
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  const submitButton = form.querySelector('button[type="submit"]');
+  form.setAttribute("aria-busy", "true");
+  if (submitButton) submitButton.disabled = true;
+
+  try {
+    const result = await requestJson("/api/employee/password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: data.currentPassword,
+        password: data.password
+      })
+    });
+    form.reset();
+    state.access.employee = {
+      ...state.access.employee,
+      ...result,
+      error: ""
+    };
+    setMessage(
+      result.hrReauthenticationRequired
+        ? "Password changed. Other devices were signed out. Sign in to HR again with the new password."
+        : "Password changed. Other devices were signed out.",
+      "success"
+    );
+  } catch (error) {
+    setMessage(error.message || "Could not change the password.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleUnenrollEmployeeDevicesSubmit(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
@@ -6679,6 +6778,11 @@ document.addEventListener("click", async (event) => {
 app.addEventListener("submit", async (event) => {
   if (event.target.matches("[data-employee-login-form]")) {
     await handleEmployeeLoginSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-employee-password-form]")) {
+    await handleEmployeePasswordChangeSubmit(event);
     return;
   }
 

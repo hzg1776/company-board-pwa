@@ -1607,3 +1607,37 @@ test("HR and IT account directories expose confirmed destructive deletion contro
   assert.equal(getDeclarationValue(adminDeleteFormBody, "padding-right"), "8px");
   assert.equal(getDeclarationValue(adminDeleteButtonBody, "width"), "100%");
 });
+
+test("employee password settings use the shared responsive form contract", async () => {
+  const [app, css] = await Promise.all([
+    loadClientApp(),
+    loadStylesheet()
+  ]);
+  const cardBody = getLastSelectorBody(css, ".employee-password-card");
+  const cardContentBody = getLastSelectorBody(css, ".employee-password-card-body");
+  const toggleBody = getLastSelectorBody(css, ".employee-password-card .settings-collapse-toggle");
+  const noticeBody = getLastSelectorBody(css, ".employee-password-notice");
+
+  assert.match(app, /function renderEmployeePasswordPanel\(\)/);
+  assert.match(app, /data-employee-password-form/);
+  assert.match(app, /name="currentPassword" type="password" minlength="10" required autocomplete="current-password"/);
+  assert.match(app, /name="password" type="password" minlength="10" required autocomplete="new-password"/);
+  assert.match(app, /name="confirmPassword" type="password" minlength="10" required autocomplete="new-password"/);
+  assert.match(app, /Change the temporary password assigned to this account\./);
+  assert.match(app, /Password changed\. Other devices were signed out\./);
+  assert.match(app, /renderEmployeePasswordPanel\(\)[\s\S]*?employee-signout-floor/);
+  assert.match(app, /event\.target\.matches\("\[data-employee-password-form\]"\)/);
+
+  assert.equal(getDeclarationValue(cardBody, "width"), "100%");
+  assert.equal(getDeclarationValue(cardBody, "max-width"), "720px");
+  assert.equal(getDeclarationValue(cardBody, "padding"), "0");
+  assert.equal(getDeclarationValue(cardBody, "overflow"), "hidden");
+  assert.equal(getDeclarationValue(cardContentBody, "display"), "grid");
+  assert.equal(getDeclarationValue(toggleBody, "width"), "100%");
+  assert.equal(getDeclarationValue(noticeBody, "min-height"), "0");
+  assert.equal(getDeclarationValue(noticeBody, "padding"), "12px");
+  assert.match(
+    css,
+    /@media \(max-width: 720px\) \{[\s\S]*?\.employee-password-card \.employee-password-grid[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/
+  );
+});
