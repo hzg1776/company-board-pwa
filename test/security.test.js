@@ -321,10 +321,39 @@ test("employee password reset does not alter protected composite admin credentia
     assert.equal(unchangedAdmin?.passwordSalt, protectedAdmin.passwordSalt);
     assert.equal(unchangedAdmin?.passwordHash, protectedAdmin.passwordHash);
 
+    const employeeLogin = await store.authenticateEmployee({
+      username: "protected.ops",
+      password: "EmployeePass2!",
+      userAgent: "employee-self-change"
+    });
+    await store.changeEmployeePassword({
+      headers: {
+        cookie: `palziv_employee_auth=${employeeLogin.sessionId}`
+      }
+    }, {
+      currentPassword: "EmployeePass2!",
+      password: "EmployeePass3!",
+      userAgent: "employee-self-change"
+    });
+    const stateAfterSelfChange = await store.readSecurityState();
+    const protectedAfterSelfChange = stateAfterSelfChange.adminUsers.find(
+      (adminUser) => adminUser.id === protectedAdmin.id
+    );
+    assert.equal(protectedAfterSelfChange?.passwordSalt, protectedAdmin.passwordSalt);
+    assert.equal(protectedAfterSelfChange?.passwordHash, protectedAdmin.passwordHash);
+
     await assert.rejects(
       store.authenticateAdmin({
         username: "protected.ops",
         password: "EmployeePass2!",
+        userAgent: "test"
+      }),
+      /Invalid username or password\./
+    );
+    await assert.rejects(
+      store.authenticateAdmin({
+        username: "protected.ops",
+        password: "EmployeePass3!",
         userAgent: "test"
       }),
       /Invalid username or password\./
