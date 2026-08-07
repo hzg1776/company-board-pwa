@@ -3096,15 +3096,19 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
   const needsVerify = access.mfaRequired && access.mfaMode === "verify";
   const needsSetup = access.mfaRequired && access.mfaMode === "setup";
   const showEnrollment = Boolean(setup.details);
+  const collapsible = normalizedRoute === "hr";
+  const headingTag = collapsible ? "summary" : "div";
   return `
     <section class="panel-card settings-credential-card">
-      <div class="panel-title panel-title-wide">
+      ${collapsible ? '<details class="hr-section-collapse" open>' : ""}
+      <${headingTag} class="${collapsible ? "hr-section-collapse-summary " : ""}panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("shield")} Multi-factor authentication</p>
           <h3>${escapeHtml(roleLabel)} Google Authenticator</h3>
         </div>
         <span class="admin-table-chip ${mfa.status === "enabled" ? "is-positive" : mfa.status === "grace" ? "is-info" : "is-muted"}">${escapeHtml(mfa.status === "enabled" ? "Enabled" : mfa.status === "grace" ? "Grace" : "Required")}</span>
-      </div>
+      </${headingTag}>
+      ${collapsible ? '<div class="hr-section-collapse-body">' : ""}
       ${showEnrollment ? `
         <div class="auth-recovery-stack">
           <div class="invite-summary">
@@ -3134,6 +3138,7 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
           <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Preparing..." : compact ? "Set Up Google Authenticator" : "Generate Google Authenticator QR")}</button>
         </form>
       `}
+      ${collapsible ? "</div></details>" : ""}
     </section>
   `;
 }
@@ -3347,110 +3352,167 @@ function renderMessageGroupManagementPanel() {
 
   return `
     <section class="panel-card employee-access-card" aria-labelledby="message-groups-heading">
-      <div class="employee-access-head">
-        <div>
-          <h3 id="message-groups-heading">Messaging Groups</h3>
-        </div>
-        <span class="sync-pill">${escapeHtml(`${activeCount} Active`)}</span>
-      </div>
+      <details class="hr-section-collapse" open>
+        <summary class="hr-section-collapse-summary employee-access-head">
+          <div>
+            <h3 id="message-groups-heading">Messaging Groups</h3>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${activeCount} Active`)}</span>
+        </summary>
+        <div class="hr-section-collapse-body">
 
-      <form class="admin-create-grid" data-create-message-group-form>
-        <label class="field">
-          <span>New group name</span>
-          <input name="name" maxlength="80" required>
-        </label>
-        <div class="admin-create-actions">
-          <button class="button" type="submit">${icon("users")} Create Group</button>
-        </div>
-      </form>
-
-      ${
-        groups.length
-          ? `
-            <div class="admin-table-wrap">
-              <table class="admin-table message-group-table">
-                <thead>
-                  <tr>
-                    <th>Group</th>
-                    <th>Rename</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>${groups.map((group) => renderMessageGroupManagementRow(group)).join("")}</tbody>
-              </table>
+          <form class="admin-create-grid" data-create-message-group-form>
+            <label class="field">
+              <span>New group name</span>
+              <input name="name" maxlength="80" required>
+            </label>
+            <div class="admin-create-actions">
+              <button class="button" type="submit">${icon("users")} Create Group</button>
             </div>
-          `
-          : '<div class="empty-state">No messaging groups yet.</div>'
-      }
+          </form>
+
+          ${
+            groups.length
+              ? `
+                <div class="admin-table-wrap">
+                  <table class="admin-table message-group-table">
+                    <thead>
+                      <tr>
+                        <th>Group</th>
+                        <th>Rename</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>${groups.map((group) => renderMessageGroupManagementRow(group)).join("")}</tbody>
+                  </table>
+                </div>
+              `
+              : '<div class="empty-state">No messaging groups yet.</div>'
+          }
+        </div>
+      </details>
     </section>
   `;
 }
 
-function renderEmployeeDirectoryRow(employee) {
+function employeeMatchesDirectoryFilters(employee, filters = {}) {
+  const search = String(filters.search || "").trim().toLowerCase();
+  const status = String(filters.status || "all").trim().toLowerCase();
+  const groupId = String(filters.groupId || "all").trim();
+  const active = Boolean(employee?.active);
+  const groupIds = Array.isArray(employee?.groupIds) ? employee.groupIds.map((id) => String(id)) : [];
+  const matchesSearch = !search || [employee?.name, employee?.username]
+    .some((value) => String(value || "").toLowerCase().includes(search));
+  const matchesStatus = status === "all"
+    || (status === "active" && active)
+    || (status === "disabled" && !active);
+  const matchesGroup = !groupId || groupId === "all" || groupIds.includes(groupId);
+
+  return matchesSearch && matchesStatus && matchesGroup;
+}
+
+function renderEmployeeDirectoryCard(employee) {
+  const active = Boolean(employee.active);
+  const activeSessions = Number(employee.activeSessions || 0);
+  const enrolledDevices = Number(employee.devices || 0);
+  const groupIds = (Array.isArray(employee.groupIds) ? employee.groupIds : []).map((id) => String(id));
+
   return `
-    <tr>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">@${escapeHtml(employee.username)}</div>
-        <div class="admin-table-secondary">${escapeHtml(employee.passwordResetRequired ? "Password reset required" : "Password ready")}</div>
-      </td>
-      <td>
-        <span class="admin-table-chip ${employee.active ? "is-positive" : "is-muted"}">${escapeHtml(employee.active ? "Active" : "Disabled")}</span>
-        <div class="admin-table-secondary">${escapeHtml(employee.hrAdmin ? "HR access enabled" : "Employee access only")}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(String(employee.activeSessions || 0))}</div>
-        <div class="admin-table-secondary">${escapeHtml(employee.lastLoginAt ? `Last Login ${formatDate(employee.lastLoginAt)}` : "No Login Yet")}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(String(employee.authorizedDevices || 0))}</div>
-        <div class="admin-table-secondary">${escapeHtml(`${employee.devices || 0} Total Enrolled`)}</div>
-        <form class="employee-device-inline-form" data-unenroll-employee-devices-form>
-          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <button class="ghost-button" type="submit"${employee.devices ? "" : " disabled"}>
-            ${icon("delete")} Unenroll
-          </button>
-        </form>
-      </td>
-      <td>
-        <form class="admin-table-inline-form" data-employee-groups-form>
-          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          ${renderMessageGroupSelector({ selectedIds: employee.groupIds, preserveInactive: true })}
-          <button class="ghost-button" type="submit">Save groups</button>
-        </form>
-      </td>
-      <td>
-        <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
-          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <input name="password" type="password" minlength="10" required autocomplete="new-password">
-          <button class="ghost-button" type="submit">${icon("lock")} Reset</button>
-        </form>
-      </td>
-      <td>
-        <div class="admin-table-actions">
-          <form data-employee-access-form>
+    <details
+      class="employee-directory-card"
+      data-employee-directory-entry
+      data-employee-name="${escapeHtml(employee.name || "")}"
+      data-employee-username="${escapeHtml(employee.username || "")}"
+      data-employee-active="${active ? "true" : "false"}"
+      data-employee-group-ids="${escapeHtml(JSON.stringify(groupIds))}"
+    >
+      <summary class="employee-directory-summary">
+        <span class="employee-directory-identity">
+          <span class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</span>
+          <span class="admin-table-secondary">@${escapeHtml(employee.username)}</span>
+        </span>
+        <span class="employee-directory-status">
+          <span class="admin-table-chip ${active ? "is-positive" : "is-muted"}">${escapeHtml(active ? "Active" : "Disabled")}</span>
+          <span class="employee-directory-status-copy">${escapeHtml(employee.hrAdmin ? "HR access enabled" : "Employee access only")}</span>
+        </span>
+        <span class="employee-directory-summary-meta">
+          <span class="employee-directory-metric">
+            <strong>${escapeHtml(String(activeSessions))}</strong>
+            <span>${escapeHtml(activeSessions === 1 ? "Active session" : "Active sessions")}</span>
+          </span>
+          <span class="employee-directory-metric">
+            <strong>${escapeHtml(String(enrolledDevices))}</strong>
+            <span>${escapeHtml(enrolledDevices === 1 ? "Enrolled device" : "Enrolled devices")}</span>
+          </span>
+        </span>
+      </summary>
+
+      <div class="employee-directory-card-body">
+        <section class="employee-directory-management">
+          <h4>Messaging groups</h4>
+          <form class="admin-table-inline-form" data-employee-groups-form>
             <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <input type="hidden" name="active" value="${employee.active ? "false" : "true"}">
-            <button class="ghost-button" type="submit">${employee.active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}</button>
+            ${renderMessageGroupSelector({ selectedIds: employee.groupIds, preserveInactive: true })}
+            <button class="ghost-button" type="submit">Save groups</button>
           </form>
-          <form data-revoke-employee-sessions-form>
+        </section>
+
+        <section class="employee-directory-management">
+          <h4>Reset password</h4>
+          <div class="employee-directory-status-copy">${escapeHtml(employee.passwordResetRequired ? "Password reset required" : "Password ready")}</div>
+          <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
             <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <button class="ghost-button" type="submit">${icon("refresh")} Sign Out Sessions</button>
+            <label class="field">
+              <span>New temporary password</span>
+              <input name="password" type="password" minlength="10" required autocomplete="new-password">
+            </label>
+            <button class="ghost-button" type="submit">${icon("lock")} Reset</button>
           </form>
-          <form data-add-employee-hr-group-form>
-            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <button class="ghost-button" type="submit"${employee.hrAdmin || !employee.active ? " disabled" : ""}>${icon("users")} Add to HR</button>
-          </form>
-          <form data-delete-employee-form>
-            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <input type="hidden" name="employeeName" value="${escapeHtml(employee.name || employee.username)}">
-            <button class="ghost-button danger" type="submit">${icon("delete")} Delete Account</button>
-          </form>
-        </div>
-      </td>
-    </tr>
+        </section>
+
+        <section class="employee-directory-management">
+          <h4>Devices and sessions</h4>
+          <div class="employee-directory-status-copy">
+            ${escapeHtml(`${employee.authorizedDevices || 0} Authorized · ${employee.devices || 0} Total Enrolled`)}
+          </div>
+          <div class="employee-directory-status-copy">
+            ${escapeHtml(employee.lastLoginAt ? `Last Login ${formatDate(employee.lastLoginAt)}` : "No Login Yet")}
+          </div>
+          <div class="employee-directory-actions">
+            <form class="employee-device-inline-form" data-unenroll-employee-devices-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <button class="ghost-button" type="submit"${employee.devices ? "" : " disabled"}>
+                ${icon("delete")} Unenroll
+              </button>
+            </form>
+            <form data-revoke-employee-sessions-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <button class="ghost-button" type="submit">${icon("refresh")} Sign Out Sessions</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="employee-directory-management">
+          <h4>Account access</h4>
+          <div class="employee-directory-actions">
+            <form data-employee-access-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <input type="hidden" name="active" value="${active ? "false" : "true"}">
+              <button class="ghost-button" type="submit">${active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}</button>
+            </form>
+            <form data-add-employee-hr-group-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <button class="ghost-button" type="submit"${employee.hrAdmin || !active ? " disabled" : ""}>${icon("users")} Add to HR</button>
+            </form>
+            <form data-delete-employee-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <input type="hidden" name="employeeName" value="${escapeHtml(employee.name || employee.username)}">
+              <button class="ghost-button danger" type="submit">${icon("delete")} Delete Account</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    </details>
   `;
 }
 
@@ -3649,6 +3711,8 @@ function renderAdminAccountsPanel(scope = "hr") {
   const adminUsers = Array.isArray(readAdminDirectory(normalizedScope).adminUsers) ? readAdminDirectory(normalizedScope).adminUsers : [];
   const title = normalizedScope === "it" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
   const countLabel = normalizedScope === "it" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
+  const collapsible = normalizedScope === "hr";
+  const headingTag = collapsible ? "summary" : "div";
   const roleControl = normalizedScope === "it"
     ? `
         <div class="field">
@@ -3687,12 +3751,14 @@ function renderAdminAccountsPanel(scope = "hr") {
 
   return `
     <section class="panel-card employee-access-card">
-      <div class="employee-access-head">
+      ${collapsible ? '<details class="hr-section-collapse" open>' : ""}
+      <${headingTag} class="${collapsible ? "hr-section-collapse-summary " : ""}employee-access-head">
         <div>
           <h3>${escapeHtml(title)}</h3>
         </div>
         <span class="sync-pill">${escapeHtml(`${adminUsers.length} ${countLabel}${adminUsers.length === 1 ? "" : "s"}`)}</span>
-      </div>
+      </${headingTag}>
+      ${collapsible ? '<div class="hr-section-collapse-body">' : ""}
 
       <form class="employee-create-form admin-create-grid" data-create-admin-form data-admin-scope="${escapeHtml(normalizedScope)}">
         <label class="field">
@@ -3714,53 +3780,128 @@ function renderAdminAccountsPanel(scope = "hr") {
       </form>
 
       ${renderAdminDirectoryTable(adminUsers, normalizedScope)}
+      ${collapsible ? "</div></details>" : ""}
     </section>
   `;
 }
 
-function renderEmployeeDirectoryTable(employees) {
-  if (!employees.length) {
-    return '<div class="empty-state">No Employee Accounts Yet.</div>';
-  }
-
+function renderEmployeeDirectoryList(employees) {
   return `
-    <div class="admin-table-wrap">
-      <table class="admin-table admin-table-employees">
-        <thead>
-          <tr>
-            <th>Employee</th>
-            <th>Username</th>
-            <th>Status</th>
-            <th>Sessions</th>
-            <th>Devices</th>
-            <th>Messaging Groups</th>
-            <th>Reset Password</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${employees.map((employee) => renderEmployeeDirectoryRow(employee)).join("")}
-        </tbody>
-      </table>
+    <div class="employee-directory-list" id="employee-directory-list">
+      ${employees.map((employee) => renderEmployeeDirectoryCard(employee)).join("")}
+    </div>
+    ${employees.length ? "" : '<div class="empty-state">No Employee Accounts Yet.</div>'}
+    <div class="empty-state employee-directory-empty" data-employee-directory-empty hidden>
+      No employees match the current filters.
     </div>
   `;
 }
 
 function renderEmployeeDirectoryPanel() {
   const employees = Array.isArray(state.employeeDirectory.employees) ? state.employeeDirectory.employees : [];
+  const groups = messageGroups();
 
   return `
-    <section class="panel-card employee-access-card">
-      <div class="employee-access-head">
-        <div>
-          <h3>Employee Accounts</h3>
-        </div>
-        <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
-      </div>
+    <section class="panel-card employee-access-card" data-employee-directory>
+      <details class="hr-section-collapse" open>
+        <summary class="hr-section-collapse-summary employee-access-head">
+          <div>
+            <h3>Employee Accounts</h3>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
+        </summary>
+        <div class="hr-section-collapse-body">
 
-      ${renderEmployeeDirectoryTable(employees)}
+          <div class="employee-directory-toolbar" role="search" aria-label="Filter employee accounts">
+            <label class="field employee-directory-search">
+              <span>Search employees</span>
+              <input
+                type="search"
+                autocomplete="off"
+                aria-controls="employee-directory-list"
+                data-employee-directory-search
+              >
+            </label>
+            <label class="field employee-directory-status">
+              <span>Status</span>
+              <select aria-controls="employee-directory-list" data-employee-directory-status>
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label class="field employee-directory-group">
+              <span>Messaging group</span>
+              <select aria-controls="employee-directory-list" data-employee-directory-group>
+                <option value="all">All Groups</option>
+                ${groups
+                  .map(
+                    (group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(`${group.name}${group.active === false ? " (Inactive)" : ""}`)}</option>`
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <p class="employee-directory-count" data-employee-directory-count aria-live="polite" aria-atomic="true">
+              ${escapeHtml(`Showing ${employees.length} of ${employees.length} employee account${employees.length === 1 ? "" : "s"}.`)}
+            </p>
+          </div>
+
+          ${renderEmployeeDirectoryList(employees)}
+        </div>
+      </details>
     </section>
   `;
+}
+
+function applyEmployeeDirectoryFilters(root = app) {
+  const directory = root?.matches?.("[data-employee-directory]")
+    ? root
+    : root?.querySelector?.("[data-employee-directory]");
+
+  if (!directory) {
+    return;
+  }
+
+  const search = directory.querySelector("[data-employee-directory-search]")?.value || "";
+  const status = directory.querySelector("[data-employee-directory-status]")?.value || "all";
+  const groupId = directory.querySelector("[data-employee-directory-group]")?.value || "all";
+  const entries = Array.from(directory.querySelectorAll("[data-employee-directory-entry]"));
+  let visibleCount = 0;
+
+  entries.forEach((entry) => {
+    let groupIds = [];
+
+    try {
+      const parsedGroupIds = JSON.parse(entry.dataset.employeeGroupIds || "[]");
+      groupIds = Array.isArray(parsedGroupIds) ? parsedGroupIds : [];
+    } catch {
+      groupIds = [];
+    }
+
+    const matches = employeeMatchesDirectoryFilters(
+      {
+        name: entry.dataset.employeeName || "",
+        username: entry.dataset.employeeUsername || "",
+        active: entry.dataset.employeeActive === "true",
+        groupIds
+      },
+      { search, status, groupId }
+    );
+
+    entry.hidden = !matches;
+    if (matches) visibleCount += 1;
+  });
+
+  const resultCount = directory.querySelector("[data-employee-directory-count]");
+  const emptyResult = directory.querySelector("[data-employee-directory-empty]");
+
+  if (resultCount) {
+    resultCount.textContent = `Showing ${visibleCount} of ${entries.length} employee account${entries.length === 1 ? "" : "s"}.`;
+  }
+
+  if (emptyResult) {
+    emptyResult.hidden = entries.length === 0 || visibleCount > 0;
+  }
 }
 
 function renderEmployeeCreatePanel() {
@@ -4026,72 +4167,80 @@ function renderHrFeedPanel() {
     <section class="panel-stack">
       <section class="admin-workspace hr-feed-workspace" aria-label="HR feed control center">
         <section class="tool-panel composer-panel panel-card" aria-label="Publish update">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("megaphone")} Publish update</p>
-              <h3>New announcement</h3>
+          <details class="hr-section-collapse" open>
+            <summary class="hr-section-collapse-summary panel-title panel-title-wide">
+              <div>
+                <p class="eyebrow">${icon("megaphone")} Publish update</p>
+                <h3>New announcement</h3>
+              </div>
+            </summary>
+            <div class="hr-section-collapse-body">
+              <form data-post-form>
+                <div class="composer-grid">
+                  <label class="field field-span-2">
+                    <span>Title</span>
+                    <input name="title" maxlength="90" required>
+                  </label>
+                  <label class="field field-span-2">
+                    <span>Message</span>
+                    <textarea name="body" maxlength="700" required></textarea>
+                  </label>
+                  <label class="field">
+                    <span>Category</span>
+                    <select name="type">
+                      <option>News</option>
+                      <option>Weather</option>
+                      <option>Shift</option>
+                      <option>Safety</option>
+                      <option value="HR">HR</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Priority</span>
+                    <select name="priority">
+                      <option>Normal</option>
+                      <option>Important</option>
+                      <option>Urgent</option>
+                    </select>
+                  </label>
+                  ${renderPostAudienceControls()}
+                  <label class="field">
+                    <span>Retention</span>
+                    <select name="alertRetention">
+                      <option value="24h">24 Hours</option>
+                      <option value="168h">7 Days</option>
+                      <option value="720h" selected>30 Days</option>
+                      <option value="manual">Manual Only</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-actions">
+                  <button class="button" type="submit">${icon("send")} Publish update</button>
+                </div>
+              </form>
             </div>
-          </div>
-          <form data-post-form>
-            <div class="composer-grid">
-              <label class="field field-span-2">
-                <span>Title</span>
-                <input name="title" maxlength="90" required>
-              </label>
-              <label class="field field-span-2">
-                <span>Message</span>
-                <textarea name="body" maxlength="700" required></textarea>
-              </label>
-              <label class="field">
-                <span>Category</span>
-                <select name="type">
-                  <option>News</option>
-                  <option>Weather</option>
-                  <option>Shift</option>
-                  <option>Safety</option>
-                  <option value="HR">HR</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Priority</span>
-                <select name="priority">
-                  <option>Normal</option>
-                  <option>Important</option>
-                  <option>Urgent</option>
-                </select>
-              </label>
-              ${renderPostAudienceControls()}
-              <label class="field">
-                <span>Retention</span>
-                <select name="alertRetention">
-                  <option value="24h">24 Hours</option>
-                  <option value="168h">7 Days</option>
-                  <option value="720h" selected>30 Days</option>
-                  <option value="manual">Manual Only</option>
-                </select>
-              </label>
-            </div>
-            <div class="form-actions">
-              <button class="button" type="submit">${icon("send")} Publish update</button>
-            </div>
-          </form>
+          </details>
         </section>
 
         <section class="feed-shell feed-shell-quiet feed-shell-bare hr-feed-preview" aria-label="Live managed employee feed">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("board")} Stream</p>
-              <h3>Live employee updates</h3>
+          <details class="hr-section-collapse" open>
+            <summary class="hr-section-collapse-summary panel-title panel-title-wide">
+              <div>
+                <p class="eyebrow">${icon("board")} Stream</p>
+                <h3>Live employee updates</h3>
+              </div>
+              ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
+            </summary>
+            <div class="hr-section-collapse-body">
+              <div class="feed-list feed-list-quiet">
+                ${
+                  notices.length
+                    ? notices.map((post) => renderManagedFeedItem(post)).join("")
+                    : `<div class="empty-state">No updates are live right now.</div>`
+                }
+              </div>
             </div>
-            ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
-          </div>
-          <div class="feed-list feed-list-quiet">
-            ${
-              notices.length
-                ? notices.map((post) => renderManagedFeedItem(post)).join("")
-                : `<div class="empty-state">No updates are live right now.</div>`
-            }
-          </div>
+          </details>
         </section>
       </section>
     </section>
@@ -4913,7 +5062,7 @@ function renderAdmin() {
     : 0;
 
   return `
-    <main class="page-shell hr-shell">
+    <main class="page-shell hr-shell${activeAdminTab === "share" ? " hr-shell-users" : ""}">
       <header class="page-head">
         ${brandBlock("HR Control Center")}
         <div class="page-actions">
@@ -6706,7 +6855,21 @@ app.addEventListener("submit", async (event) => {
   }
 });
 
+app.addEventListener("input", (event) => {
+  if (!(event.target instanceof HTMLInputElement)) return;
+  if (!event.target.matches("[data-employee-directory-search]")) return;
+
+  applyEmployeeDirectoryFilters();
+});
+
 app.addEventListener("change", async (event) => {
+  if (
+    event.target instanceof HTMLSelectElement
+    && event.target.matches("[data-employee-directory-status], [data-employee-directory-group]")
+  ) {
+    applyEmployeeDirectoryFilters();
+  }
+
   handlePostAudienceChange(event);
   await handleEmployeeBatchFileChange(event);
 });

@@ -1,0 +1,97 @@
+﻿<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Beginner Black Screen Guide</title>
+<style>
+  @page { size: A4; margin: 16mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; line-height: 1.5; }
+  h1, h2, h3 { color: #0f172a; page-break-after: avoid; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  h2 { font-size: 20px; margin-top: 22px; }
+  p, li { font-size: 12px; }
+  .cover { border-left: 6px solid #1d4ed8; padding-left: 14px; margin-bottom: 22px; }
+  .meta { color: #475569; font-size: 11px; }
+  .summary { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; margin: 16px 0 22px; }
+  .step-sections { page-break-before: always; }
+  .step-card { page-break-inside: avoid; margin: 18px 0 26px; }
+  .step-card + .step-card { page-break-before: always; }
+  img { width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 10px; }
+  code { background: #f8fafc; padding: 2px 4px; border-radius: 4px; }
+  ul { padding-left: 18px; }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <h1>Beginner Black Screen Guide</h1>
+    <p class="meta">Generated: August 07, 2026 09:54:22</p>
+    <p>This quick PDF shows exactly what to do when the app looks black, blank, or partly loaded.</p>
+  </div>
+  <div class="summary">
+    <strong>What this guide helps you do</strong>
+    <ul>
+      <li>Check whether the app is up</li>
+      <li>Separate a server outage from a browser or sign-in problem</li>
+      <li>Send a useful screenshot for support</li>
+    </ul>
+  </div>
+<h1>Beginner Guide: What To Do When The App Looks Black Or Blank</h1>
+<p><strong>Document status:</strong> Verified August 7, 2026.</p>
+<p>Use this guide when the portal is black, blank, partly loaded, or missing its normal buttons.</p>
+<h2>Before You Start</h2>
+<ul>
+<li>Keep the problem page open if possible.</li>
+<li>Note the time and the phone/computer you are using.</li>
+<li>Do not include passwords, recovery keys, authenticator codes, or temporary credentials in screenshots.</li>
+</ul>
+<h2>Step 1: Reopen The Main App Page</h2>
+<p>Open:</p>
+<p><code>https://itotexpress.com/palzivalerts</code></p>
+<p>If the normal launcher appears, choose the correct role and sign in again.</p>
+<p>If you see <code>New portal update available</code>, select <code>Reload now</code>.</p>
+<h2>Step 2: Check The Public Health Page</h2>
+<p>Open:</p>
+<p><code>https://itotexpress.com/api/health</code></p>
+<p>This is the public server-alive check. It should show a short response containing:</p>
+<p><code>&quot;ok&quot;: true</code></p>
+<h2>Step 3: Use The Result</h2>
+<ul>
+<li>If the health page shows <code>&quot;ok&quot;: true</code>, the server is responding and the problem may be a stale app tab, browser cache, sign-in state, or client-side error.</li>
+<li>If the health page does not load, the public service, tunnel, DNS, network, or host may be unavailable.</li>
+<li>If only one role page fails, write down the exact role URL.</li>
+</ul>
+<h2>Step 4: Send A Safe Support Report</h2>
+<p>Take one screenshot of the problem page or public health page. Send it with:</p>
+<ul>
+<li>The time the problem happened</li>
+<li>The device and browser</li>
+<li>The exact page you opened</li>
+<li>Whether the public health page showed <code>&quot;ok&quot;: true</code></li>
+<li>What you expected to see</li>
+</ul>
+<p>Do not send a screenshot containing a typed password or authenticator code.</p>
+<h2>Step 5: Protected Diagnostics Are For Systems Or IT</h2>
+<p>The detailed diagnostics route is:</p>
+<p><code>https://itotexpress.com/api/health/diagnostics</code></p>
+<p>It requires an authorized Systems or IT session. An employee or signed-out browser may receive <code>Unauthorized</code>; that is expected and does not mean the server is down.</p>
+<p>Systems or IT can use the protected result to review recent client errors such as <code>blank-screen</code>, <code>runtime-error</code>, or <code>unhandled-rejection</code> before escalating.</p>
+<h2>Quick Meaning Guide</h2>
+<ul>
+<li>Main page works after <code>Reload now</code>: stale cached app assets were likely replaced.</li>
+<li>Public health works but the portal is blank: browser/client-side or sign-in-state problem.</li>
+<li>Public health fails publicly but works on the host: tunnel, DNS, firewall, or public path problem.</li>
+<li>Public and local health both fail: app process or host problem.</li>
+<li>Protected diagnostics says <code>Unauthorized</code>: sign in as Systems or IT before using that route.</li>
+</ul>
+<h2>Safe Reminder</h2>
+<p>The public health result is safe to use for the first check. Detailed diagnostics are restricted because they contain operational information.</p>
+<div class='step-sections'>  <section class="step-card">
+    <h2>Step 1</h2>
+    <p>Open the normal app page first and confirm the usual launcher buttons are visible.</p>
+    <img src="screenshots/01-main-page.png" alt="Step 1" />
+  </section>  <section class="step-card">
+    <h2>Step 2</h2>
+    <p>Open the public health address and look for &quot;ok&quot;: true. The written guide explains what to report next.</p>
+    <img src="screenshots/02-health-page.png" alt="Step 2" />
+  </section></div>
+</body></html>

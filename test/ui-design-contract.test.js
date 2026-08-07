@@ -1540,13 +1540,23 @@ test("client app keeps employee weather and alert setup surfaces wired", async (
   assert.match(app, /data-weather-form/);
 });
 
+test("HR employee directory hides the no-match state while results remain visible", async () => {
+  const css = await loadStylesheet();
+  const hiddenEmptyStateBody = getLastSelectorBody(
+    css,
+    ".page-shell.hr-shell.hr-shell-users .employee-directory-empty[hidden]"
+  );
+
+  assert.equal(getDeclarationValue(hiddenEmptyStateBody, "display"), "none !important");
+});
+
 test("HR and IT account directories expose confirmed destructive deletion controls", async () => {
   const [app, css] = await Promise.all([
     loadClientApp(),
     loadStylesheet()
   ]);
   const employeeRenderer = app.match(
-    /function renderEmployeeDirectoryRow\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
+    /function renderEmployeeDirectoryCard\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
   )?.[0] || "";
   const adminRenderer = app.match(
     /function renderAdminDirectoryRow\(adminUser, scope = "hr"\) \{[\s\S]*?\n\}\n\nfunction renderAdminDirectoryTable/

@@ -56,9 +56,31 @@ test("manual screenshots capture full mobile pages in public and authenticated m
   const manualBuilder = await readProjectFile("scripts/build-user-manual-pdf.ps1");
   const fullPageCaptureCount = (manualBuilder.match(/--full-page/g) || []).length;
 
-  assert.ok(fullPageCaptureCount >= 3);
+  assert.ok(fullPageCaptureCount >= 2);
   assert.match(
     manualBuilder,
-    /npx playwright screenshot --device="iPhone 13" --full-page --wait-for-timeout=1200 \$r\.url \$out/
+    /npx playwright screenshot --browser="chromium" --channel="chrome" --viewport-size="390,844" --full-page --wait-for-timeout=1200 --load-storage \$storagePath \$route\.url \$outputPath/
   );
+  assert.match(
+    manualBuilder,
+    /npx playwright screenshot --browser="chromium" --channel="chrome" --viewport-size="390,844" --full-page --wait-for-timeout=1200 \$route\.url \$outputPath/
+  );
+});
+
+test("generated manual HTML contains no whitespace-only artifact lines", async () => {
+  const artifactPaths = [
+    "docs/manual-artifacts/Communications_And_Alert_Center_User_Manual.html",
+    "docs/manual-artifacts/Communications_And_Alert_Center_Quick_Start.html",
+    "docs/manual-artifacts/black-screen-guide/Beginner_Black_Screen_Guide.html"
+  ];
+
+  for (const artifactPath of artifactPaths) {
+    const html = await readProjectFile(artifactPath);
+    const whitespaceOnlyLines = html
+      .split(/\r?\n/)
+      .map((line, index) => ({ line, lineNumber: index + 1 }))
+      .filter(({ line }) => /^[ \t]+$/.test(line));
+
+    assert.deepEqual(whitespaceOnlyLines, [], `${artifactPath} contains whitespace-only lines.`);
+  }
 });

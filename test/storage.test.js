@@ -217,3 +217,37 @@ test("file-backed store seeds runtime data from a separate tracked seed file", a
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("file-backed store preserves malformed board data instead of replacing it with seed data", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-malformed-"));
+  const dataFile = path.join(tempDir, "board.json");
+  const malformedBoard = '{"posts":[\n';
+  const store = createBoardStore({ dataFile });
+
+  try {
+    await writeFile(dataFile, malformedBoard, "utf8");
+
+    await assert.rejects(store.init(), SyntaxError);
+    assert.equal(await readFile(dataFile, "utf8"), malformedBoard);
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("file-backed store rejects a non-object board without replacing it with seed data", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-invalid-shape-"));
+  const dataFile = path.join(tempDir, "board.json");
+  const invalidBoard = "null\n";
+  const store = createBoardStore({ dataFile });
+
+  try {
+    await writeFile(dataFile, invalidBoard, "utf8");
+
+    await assert.rejects(store.init(), TypeError);
+    assert.equal(await readFile(dataFile, "utf8"), invalidBoard);
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
