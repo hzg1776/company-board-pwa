@@ -998,7 +998,7 @@ Confirm the diff contains no runtime JSON, credentials, unrelated formatting, ac
 - The manual build manifest matched all 11 source/artifact hashes. The 16-page full manual and 4-page Quick Start PDFs were rendered and visually inspected with no clipping, overlap, blank-page, or credential-material defect.
 - The `origin/main...HEAD` review found one missing planned protected-composite regression assertion. Commit `ec3b5d1` added it; the focused test, full store suite, and final complete suite passed afterward.
 - The UI plan was intentionally strengthened with executable client-helper tests and a compact notice override discovered during responsive visual QA.
-- Remaining work is limited to pull-request merge, production backup/restart, and live post-release verification.
+- The pre-merge record above is complete; the post-release record below captures the pull-request merge, production recovery point, restart, and live verification.
 
 - [x] **Step 4: Record completed tasks and final verification evidence**
 
@@ -1007,7 +1007,7 @@ git add docs/superpowers/plans/2026-08-07-employee-self-password.md
 git commit -m "docs: record employee password verification"
 ```
 
-- [ ] **Step 5: Push, open a ready pull request, and merge after checks pass**
+- [x] **Step 5: Push, open a ready pull request, and merge after checks pass**
 
 ```powershell
 git push -u origin codex/employee-self-password
@@ -1019,7 +1019,7 @@ git fetch origin
 
 Confirm `origin/main` contains the pull-request merge commit before production promotion.
 
-- [ ] **Step 6: Prepare the production recovery point**
+- [x] **Step 6: Prepare the production recovery point**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot 'C:\ProgramData\Palziv\runtime'
@@ -1027,7 +1027,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\backup-data.ps1 -RuntimeRoot 
 
 Record the resulting backup path and confirm it is outside the Git worktree.
 
-- [ ] **Step 7: Restart the actual production listener from merged `main`**
+- [x] **Step 7: Restart the actual production listener from merged `main`**
 
 Resolve the process listening on port `3116`, confirm its command line is Project-A `server.js`, stop only that verified process, and restart with:
 
@@ -1037,7 +1037,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows-startup.ps1 -SkipClou
 
 Use the merged `main` worktree and keep `C:\ProgramData\Palziv\runtime` as the runtime root. Do not touch the separate Cloudflare connector when its health is good.
 
-- [ ] **Step 8: Verify live production behavior and security**
+- [x] **Step 8: Verify live production behavior and security**
 
 Confirm:
 
@@ -1045,9 +1045,20 @@ Confirm:
 - Public `/api/health/diagnostics` returns `401` without privileged credentials.
 - The production PID command line points at the merged `main` `server.js`.
 - `/palzivalerts/employee` serves the new asset version.
-- A controlled employee account can open the form, reject a wrong current password, change successfully, remain signed in on the current device, and lose a second session.
-- The employee's notification enrollment remains present.
-- An HR-linked controlled account accepts the new password on HR after its old HR session is revoked.
+- A signed-in employee can open the deployed form, and the endpoint remains session-protected. Use the pre-merge isolated controlled runtime for wrong-current rejection, successful mutation, current-session retention, second-session revocation, notification preservation, and HR-linked credential mutation unless a dedicated disposable production account is explicitly authorized.
 - The live employee route has no release-blocking console errors at mobile and desktop widths.
 
 Do not use or print production passwords in command output, logs, screenshots, or chat.
+
+#### Post-Release Verification Record - August 7, 2026
+
+- Ready pull request [#10](https://github.com/hzg1776/company-board-pwa/pull/10) merged to `main` as merge commit `2dd5accf9c74d5f57793f71702e1b74a8d8f1aa0`; local `main` and `origin/main` matched before promotion.
+- Fresh recovery point: `C:\ProgramData\Palziv\runtime\backups\company-board-backup-20260807-113658.zip`, SHA-256 `AA11403A938D77960A2DBE0553027A102159EC86A757DAC2A8CC953FED94BE08`; the archive contained six valid entries and remained outside the Git worktree.
+- Production restarted on port `3116` as PID `6896`, created at `2026-08-07T11:38:52-04:00`, with command line `C:\Program Files\nodejs\node.exe C:\Users\admin\Documents\Codex\Project-A\server.js`.
+- `CompanyBoardPWA Startup`, `CompanyBoardPWA Startup Recovery`, and `CompanyBoardPWA Startup Tunnel Watchdog` were enabled and `Ready`, all targeting the root Project-A checkout and the existing ProgramData runtime.
+- Local and public `/api/health` returned `200`; public `/api/health/diagnostics` returned `401`; public `/palzivalerts/employee` returned `200`; the unauthenticated password-change POST returned `401`.
+- The served `app.js` exactly matched the merged template after the server's expected `__ASSET_VERSION__` rendering, contained the password panel, endpoint, and success copy, and the served `styles.css` exactly matched the merged file.
+- A live signed-in employee feed displayed the open password panel with three labeled password fields, correct `current-password`/`new-password` autocomplete values, a visible save action, no horizontal overflow, and no Chrome console warnings or errors. No production password was entered or changed.
+- Anonymous mobile previews at 390px, 393px, and 320px rendered without failed requests or overflow. Direct WebKit and Chromium page loads had zero console warnings, zero CSP violations, and the external stylesheet loaded normally; the single WebKit message recorded by the matrix was reproduced only during Playwright's temporary screenshot stylesheet injection and was not an application error.
+- `board-app.out.log` and `board-app.err.log` remained empty after restart, while the watchdog resumed minute-by-minute `Public health ok` entries.
+- The production credential mutation was intentionally not repeated against real account data. Its complete wrong-current, success, session-revocation, notification-preservation, and HR-linked behavior remains covered by the isolated authenticated browser flow and passing automated suites recorded above.
