@@ -185,18 +185,12 @@ export function normalizeDataShape(data) {
 }
 
 async function readFileSnapshot(dataFile, seedFile) {
+  let raw;
+
   try {
-    const raw = await readRuntimeTextFile(dataFile);
-    const data = normalizeDataShape(JSON.parse(raw));
-    const normalizedRaw = `${JSON.stringify(data, null, 2)}\n`;
-
-    if (normalizedRaw !== raw) {
-      await writeRuntimeJsonFileAtomic(dataFile, data);
-    }
-
-    return data;
+    raw = await readRuntimeTextFile(dataFile);
   } catch (error) {
-    if (isUnsafeRuntimePathError(error)) {
+    if (isUnsafeRuntimePathError(error) || error?.code !== "ENOENT") {
       throw error;
     }
 
@@ -204,6 +198,20 @@ async function readFileSnapshot(dataFile, seedFile) {
     await writeRuntimeJsonFileAtomic(dataFile, seed);
     return seed;
   }
+
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TypeError("Stored board data must be a JSON object.");
+  }
+
+  const data = normalizeDataShape(parsed);
+  const normalizedRaw = `${JSON.stringify(data, null, 2)}\n`;
+
+  if (normalizedRaw !== raw) {
+    await writeRuntimeJsonFileAtomic(dataFile, data);
+  }
+
+  return data;
 }
 
 export function createBoardStore({ dataFile, seedFile } = {}) {
