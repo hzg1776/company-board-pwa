@@ -1,6 +1,6 @@
 # Communications and Alert Center User Manual
 
-**Document status:** Verified against the release-candidate application source on August 7, 2026 (revision `deae9f1`).
+**Document status:** Verified against the release-candidate application source on August 7, 2026 (revision `3ef50a1`).
 
 ## 1. Purpose
 
@@ -57,9 +57,17 @@ Legacy routes such as `/employee`, `/hr`, `/webmaster`, and `/it` redirect to th
 3. Enter the employee password.
 4. Select `Sign In`.
 
-Employees do not currently have a self-service password-change screen. HR must reset an employee password when a change is required.
+### 3.2 Employee Password Change
 
-### 3.2 Admin Sign-In
+1. Sign in to `/palzivalerts/employee` with the current username and password.
+2. Scroll below the updates feed and open `Change Password`.
+3. Enter the current password.
+4. Enter the new password twice. It must contain at least 10 characters and must differ from the current password.
+5. Select `Save New Password`.
+
+The current device remains signed in and the employee's other sessions are signed out. Notification enrollment remains attached to its existing devices. Employees who also have HR access must sign in to HR again with the new password.
+
+### 3.3 Admin Sign-In
 
 1. Open the HR, Systems, or IT route.
 2. Enter the named admin username and password.
@@ -68,7 +76,7 @@ Employees do not currently have a self-service password-change screen. HR must r
 
 The header shows the signed-in admin identity. Confirm it before changing accounts, publishing, or performing recovery work.
 
-### 3.3 First-Run Admin Setup
+### 3.4 First-Run Admin Setup
 
 For a new deployment:
 
@@ -83,7 +91,7 @@ For a new deployment:
 
 Systems first-run setup remains blocked until HR is authorized.
 
-### 3.4 Admin Invitation Links
+### 3.5 Admin Invitation Links
 
 If an authorized operator provides an admin invitation URL:
 
@@ -95,7 +103,7 @@ If an authorized operator provides an admin invitation URL:
 
 If the link is invalid or expired, request a new authorized setup path. Do not forward invitation URLs.
 
-### 3.5 Multi-Factor Authentication
+### 3.6 Multi-Factor Authentication
 
 When MFA setup is required:
 
@@ -106,7 +114,7 @@ When MFA setup is required:
 
 When MFA is already enrolled, enter the current 6-digit code after password sign-in. IT can control the application-level admin MFA requirement when the server configuration allows it.
 
-### 3.6 New Portal Update Banner
+### 3.7 New Portal Update Banner
 
 If the page shows `New portal update available`, select `Reload now`. The reload clears stale service-worker assets and opens the current portal build.
 
@@ -118,6 +126,7 @@ If the page shows `New portal update available`, select `Reload now`. The reload
 - See the signed-in employee name
 - See current weather and its refresh age
 - Read active company updates assigned to them
+- Change their own local account password while signed in
 - Sign up the current device for alerts when supported
 - Install the portal on a phone home screen
 - Sign out
@@ -166,7 +175,22 @@ For iPhone:
 
 If the setup panel offers `Unenroll`, it removes the current device. If that control is not visible after setup is complete, remove the site's notification permission or ask HR or Systems to unenroll the device.
 
-### 4.5 Sign Out
+### 4.5 Change Your Password
+
+1. Scroll below the updates feed.
+2. Open `Change Password`.
+3. Enter the current password.
+4. Enter a different new password of at least 10 characters.
+5. Enter the new password again under `Confirm New Password`.
+6. Select `Save New Password`.
+
+When `Require password reset on first use` is selected, the employee's `Change Password` section opens automatically after sign-in. The news feed remains visible.
+
+After a successful change, the current device stays signed in and the employee's other signed-in sessions end. Existing notification enrollment stays attached to its devices. An employee who also has HR access must sign in to HR again with the new password.
+
+If the employee does not know the current password or cannot sign in, HR must reset it from `Employee Accounts` and deliver the replacement through an approved secure channel.
+
+### 4.6 Sign Out
 
 Select `Sign Out` at the bottom of the employee screen. Always sign out on a shared device.
 
@@ -232,7 +256,7 @@ An employee can belong to more than one group.
 4. Select any active messaging groups.
 5. Select `Create Account`.
 
-The interface records `Require password reset on first use`, but the current employee portal does not enforce a self-service password-change step. HR remains responsible for securely setting or resetting the password.
+When `Require password reset on first use` is selected, the employee's `Change Password` section opens automatically after sign-in. The news feed remains visible. The employee must know the temporary password to replace it. If the employee cannot sign in or does not know the current password, HR must reset it from `Employee Accounts` and deliver the replacement through an approved secure channel.
 
 ### 5.7 Batch Import Employees
 
@@ -392,7 +416,8 @@ Keep at least two active IT accounts and test both before an emergency occurs.
 
 - Confirm the employee is using `/palzivalerts/employee`.
 - Confirm the account is active and the username is correct.
-- Have HR reset the password if needed.
+- If the employee is already signed in, have them open `Change Password` and replace the temporary or known password.
+- If the employee cannot sign in or does not know the current password, have HR reset it from `Employee Accounts` and deliver the replacement through an approved secure channel.
 - Confirm the employee belongs to the required messaging groups.
 - Confirm browser notification permission and device enrollment when alerts are expected.
 - On iPhone, confirm the portal was opened from its Home Screen icon.
@@ -427,7 +452,8 @@ Keep at least two active IT accounts and test both before an emergency occurs.
 
 - Verify the direct employee URL, username, and password.
 - Confirm the employee account is active.
-- Ask HR to reset the employee password when needed.
+- If the employee is already signed in, have them open `Change Password` and replace the temporary or known password.
+- If the employee cannot sign in or does not know the current password, ask HR to reset it from `Employee Accounts` and deliver the replacement through an approved secure channel.
 
 ### 9.2 Admin Cannot Sign In
 
