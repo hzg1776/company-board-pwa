@@ -1250,6 +1250,20 @@ async function requireBoardReadAccess(req, res) {
   return null;
 }
 
+async function requireEmployeeMutationAccess(req, res) {
+  if (!requireSameOrigin(req, res)) {
+    return null;
+  }
+
+  const access = await securityStore.checkEmployeeAccess(req);
+  if (!access.authorized) {
+    sendError(res, 401, "Employee sign-in required.");
+    return null;
+  }
+
+  return access;
+}
+
 async function requireHrMutationAccess(req, res) {
   if (!requireSameOrigin(req, res)) {
     return null;
@@ -2545,6 +2559,20 @@ async function handleApi(req, res, url) {
           secure: isSecureRequest(req)
         })
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/employee/password") {
+      if (!(await requireEmployeeMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.changeEmployeePassword(req, {
+        currentPassword: body.currentPassword,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
       return;
     }
 
