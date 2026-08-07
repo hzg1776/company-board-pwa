@@ -1,0 +1,305 @@
+import { createHash } from "node:crypto";
+import {
+  lstat,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile
+} from "node:fs/promises";
+import path from "node:path";
+
+export const TWO_PHASE_ROOT_NAME = "Project-A-Migration-Two-Phase";
+export const TWO_PHASE_PHASE_ID = "project-a-two-phase-v1";
+export const TWO_PHASE_MANIFEST_PATH = "CHECKSUMS/TWO-PHASE.sha256";
+export const TWO_PHASE_MODES = Object.freeze([
+  "outbound",
+  "staged-return",
+  "cutover-ready",
+  "cutover-return"
+]);
+
+const ROOT_CHILDREN = Object.freeze([
+  "1-STAGE-DEBIAN.sh",
+  "2-CUTOVER-DEBIAN.sh",
+  "BUNDLE.json",
+  "CHECKSUMS",
+  "FINAL-ENCRYPTED",
+  "FROM-DEBIAN",
+  "PAYLOAD",
+  "README-FIRST.txt",
+  "ROLLBACK-WINDOWS.ps1"
+]);
+const MUTABLE_DIRECTORIES = new Set(["FINAL-ENCRYPTED", "FROM-DEBIAN"]);
+const SHA256_LINE = /^([a-f0-9]{64})  ([A-Za-z0-9._/-]+)$/;
+const FAT32_MAX_FILE_BYTES = 0xffffffff;
+
+function digest(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function toPosix(root, candidate) {
+  const relative = path.relative(root, candidate).split(path.sep).join("/");
+  if (!relative || relative === "." || relative.startsWith("../") || path.posix.isAbsolute(relative)) {
+    throw new Error(`Path escapes the two-phase bundle: ${candidate}`);
+  }
+  return relative;
+}
+
+async function requireDirectory(candidate, label) {
+  const metadata = await lstat(candidate);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error(`${label} must be a real directory`);
+  }
+  return metadata;
+}
+
+async function snapshotTree(bundleRoot) {
+  const root = path.resolve(bundleRoot);
+  await requireDirectory(root, "Two-phase bundle root");
+  const entries = [];
+
+  async function walk(directory) {
+    const children = await readdir(directory);
+    children.sort();
+    for (const name of children) {
+      const candidate = path.join(directory, name);
+      const relative = toPosix(root, candidate);
+      const metadata = await lstat(candidate);
+      if (metadata.isSymbolicLink()) {
+        throw new Error(`Symbolic link or junction is not allowed: ${relative}`);
+      }
+      if (metadata.isDirectory()) {
+        entries.push({ path: relative, type: "directory", size: 0 });
+        await walk(candidate);
+        continue;
+      }
+      if (!metadata.isFile()) {
+        throw new Error(`Unsupported filesystem entry: ${relative}`);
+      }
+      if (metadata.size > FAT32_MAX_FILE_BYTES) {
+        throw new Error(`File exceeds the FAT32 limit: ${relative}`);
+      }
+      entries.push({ path: relative, type: "file", size: metadata.size });
+    }
+  }
+
+  await walk(root);
+  return entries;
+}
+
+function isMutablePath(relativePath) {
+  const first = relativePath.split("/", 1)[0];
+  return MUTABLE_DIRECTORIES.has(first);
+}
+
+async function inboundFiles(bundleRoot) {
+  const entries = await snapshotTree(bundleRoot);
+  return entries
+    .filter((entry) => entry.type === "file")
+    .map((entry) => entry.path)
+    .filter((entry) => entry !== TWO_PHASE_MANIFEST_PATH && !isMutablePath(entry))
+    .sort();
+}
+
+async function requireExactRootChildren(bundleRoot) {
+  const children = (await readdir(bundleRoot)).sort();
+  if (JSON.stringify(children) !== JSON.stringify([...ROOT_CHILDREN].sort())) {
+    throw new Error(`Unexpected two-phase root tree: ${children.join(", ")}`);
+  }
+  for (const directory of ["CHECKSUMS", "PAYLOAD", "FINAL-ENCRYPTED", "FROM-DEBIAN"]) {
+    await requireDirectory(path.join(bundleRoot, directory), directory);
+  }
+  await requireDirectory(path.join(bundleRoot, "PAYLOAD", "release"), "PAYLOAD/release");
+}
+
+async function requireEmptyDirectory(directory, label) {
+  if ((await readdir(directory)).length !== 0) {
+    throw new Error(`${label} must be empty in outbound mode`);
+  }
+}
+
+async function requireExactDirectoryFiles(directory, expected, label) {
+  const entries = (await readdir(directory)).sort();
+  const wanted = [...expected].sort();
+  if (JSON.stringify(entries) !== JSON.stringify(wanted)) {
+    throw new Error(`${label} has an unexpected tree: ${entries.join(", ")}`);
+  }
+}
+
+async function requireChecksums(directory, manifestName, expectedFiles) {
+  const raw = await readFile(path.join(directory, manifestName), "utf8");
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  const actualNames = [];
+  for (const line of lines) {
+    const match = /^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$/.exec(line);
+    if (!match) throw new Error(`Invalid checksum line in ${manifestName}`);
+    const fileName = match[2];
+    actualNames.push(fileName);
+    if (digest(await readFile(path.join(directory, fileName))) !== match[1]) {
+      throw new Error(`Checksum mismatch for ${fileName}`);
+    }
+  }
+  actualNames.sort();
+  const wanted = [...expectedFiles].sort();
+  if (JSON.stringify(actualNames) !== JSON.stringify(wanted)) {
+    throw new Error(`${manifestName} does not cover the exact expected files`);
+  }
+}
+
+async function verifyStageReturn(bundleRoot, includeCutover) {
+  const returnRoot = path.join(bundleRoot, "FROM-DEBIAN");
+  const expected = ["STAGE-SUCCESS.json", "STAGE-SUCCESS.sha256", "age-recipient.txt"];
+  if (includeCutover) expected.push("CUTOVER-SUCCESS.json", "CUTOVER-SUCCESS.sha256");
+  await requireExactDirectoryFiles(returnRoot, expected, "FROM-DEBIAN");
+  await requireChecksums(returnRoot, "STAGE-SUCCESS.sha256", ["STAGE-SUCCESS.json", "age-recipient.txt"]);
+  const recipient = await readFile(path.join(returnRoot, "age-recipient.txt"), "utf8");
+  if (!/^age1[ac-hj-np-z02-9]{58}\r?\n$/.test(recipient)) throw new Error("Invalid age recipient");
+  const receipt = JSON.parse(await readFile(path.join(returnRoot, "STAGE-SUCCESS.json"), "utf8"));
+  if (receipt.schemaVersion !== 1 || receipt.phaseId !== TWO_PHASE_PHASE_ID || receipt.classification !== "staged" ||
+      receipt.cloudflared !== "disabled-inactive" || !/^[a-f0-9]{40}$/.test(receipt.releaseSha)) {
+    throw new Error("Invalid stage receipt");
+  }
+  let cutoverReceipt = null;
+  if (includeCutover) {
+    await requireChecksums(returnRoot, "CUTOVER-SUCCESS.sha256", ["CUTOVER-SUCCESS.json"]);
+    cutoverReceipt = JSON.parse(await readFile(path.join(returnRoot, "CUTOVER-SUCCESS.json"), "utf8"));
+    if (cutoverReceipt.schemaVersion !== 1 || cutoverReceipt.phaseId !== TWO_PHASE_PHASE_ID ||
+        cutoverReceipt.classification !== "cutover-complete" || cutoverReceipt.cloudflared !== "active") {
+      throw new Error("Invalid cutover receipt");
+    }
+  }
+  return { receipt, cutoverReceipt };
+}
+
+async function verifyFinalEncrypted(bundleRoot) {
+  const finalRoot = path.join(bundleRoot, "FINAL-ENCRYPTED");
+  const encrypted = [
+    "cloudflared-config.age",
+    "cloudflared-credential.age",
+    "production-env.age",
+    "runtime.tar.gz.age"
+  ];
+  await requireExactDirectoryFiles(
+    finalRoot,
+    [...encrypted, "CUTOVER-AUTHORIZATION.json", "FINAL-ENCRYPTED.sha256"],
+    "FINAL-ENCRYPTED"
+  );
+  await requireChecksums(finalRoot, "FINAL-ENCRYPTED.sha256", encrypted);
+  const authorization = JSON.parse(await readFile(path.join(finalRoot, "CUTOVER-AUTHORIZATION.json"), "utf8"));
+  if (authorization.schemaVersion !== 1 || authorization.phaseId !== TWO_PHASE_PHASE_ID ||
+      authorization.classification !== "cutover-authorized" ||
+      !/^[a-f0-9]{64}$/.test(authorization.stageReceiptSha256) ||
+      !/^[a-f0-9]{64}$/.test(authorization.ageRecipientSha256) ||
+      !/^[a-f0-9]{64}$/.test(authorization.runtimeArchivePlaintextSha256)) {
+    throw new Error("Invalid cutover authorization");
+  }
+  const stageReceipt = await readFile(path.join(bundleRoot, "FROM-DEBIAN", "STAGE-SUCCESS.json"));
+  const recipient = await readFile(path.join(bundleRoot, "FROM-DEBIAN", "age-recipient.txt"));
+  if (authorization.stageReceiptSha256 !== digest(stageReceipt) || authorization.ageRecipientSha256 !== digest(recipient)) {
+    throw new Error("Cutover authorization does not match the staged Debian host");
+  }
+  return authorization;
+}
+
+async function readBundleMetadata(bundleRoot) {
+  const raw = await readFile(path.join(bundleRoot, "BUNDLE.json"), "utf8");
+  const parsed = JSON.parse(raw);
+  const keys = Object.keys(parsed).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(["phaseId", "releaseSha", "schemaVersion"])) {
+    throw new Error("BUNDLE.json has unexpected fields");
+  }
+  if (parsed.schemaVersion !== 1 || parsed.phaseId !== TWO_PHASE_PHASE_ID || !/^[a-f0-9]{40}$/.test(parsed.releaseSha)) {
+    throw new Error("BUNDLE.json is invalid");
+  }
+  return parsed;
+}
+
+export async function writeTwoPhaseManifest({ bundleRoot }) {
+  const root = path.resolve(bundleRoot);
+  if (path.basename(root) !== TWO_PHASE_ROOT_NAME) {
+    throw new Error(`Bundle root must be named ${TWO_PHASE_ROOT_NAME}`);
+  }
+  const files = await inboundFiles(root);
+  const lines = [];
+  for (const relativePath of files) {
+    const contents = await readFile(path.join(root, ...relativePath.split("/")));
+    lines.push(`${digest(contents)}  ${relativePath}`);
+  }
+  const manifestPath = path.join(root, ...TWO_PHASE_MANIFEST_PATH.split("/"));
+  const partialPath = `${manifestPath}.partial`;
+  await rm(partialPath, { force: true });
+  try {
+    await writeFile(partialPath, `${lines.join("\n")}\n`, { flag: "wx" });
+    await rename(partialPath, manifestPath);
+  } finally {
+    await rm(partialPath, { force: true });
+  }
+  return files;
+}
+
+async function verifyManifest(bundleRoot) {
+  const manifestPath = path.join(bundleRoot, ...TWO_PHASE_MANIFEST_PATH.split("/"));
+  const raw = await readFile(manifestPath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  const expectedPaths = await inboundFiles(bundleRoot);
+  const seen = new Set();
+  const actualPaths = [];
+
+  for (const line of lines) {
+    const match = SHA256_LINE.exec(line);
+    if (!match) throw new Error("Invalid two-phase manifest line");
+    const relativePath = match[2];
+    if (seen.has(relativePath)) throw new Error(`Duplicate manifest path: ${relativePath}`);
+    seen.add(relativePath);
+    actualPaths.push(relativePath);
+    const contents = await readFile(path.join(bundleRoot, ...relativePath.split("/")));
+    if (digest(contents) !== match[1]) {
+      throw new Error(`Checksum mismatch for ${relativePath}`);
+    }
+  }
+  actualPaths.sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    throw new Error("Manifest entries do not match the inbound tree");
+  }
+  return expectedPaths;
+}
+
+export async function verifyTwoPhaseUsb({ bundleRoot, mode }) {
+  if (!TWO_PHASE_MODES.includes(mode)) {
+    throw new Error("Mode must be outbound, staged-return, cutover-ready, or cutover-return");
+  }
+  const root = path.resolve(bundleRoot);
+  if (path.basename(root) !== TWO_PHASE_ROOT_NAME) {
+    throw new Error(`Bundle root must be named ${TWO_PHASE_ROOT_NAME}`);
+  }
+  await requireExactRootChildren(root);
+  await snapshotTree(root);
+  await readBundleMetadata(root);
+  const files = await verifyManifest(root);
+
+  let stageReceipt = null;
+  let cutoverReceipt = null;
+  if (mode === "outbound") {
+    await requireEmptyDirectory(path.join(root, "FROM-DEBIAN"), "FROM-DEBIAN");
+    await requireEmptyDirectory(path.join(root, "FINAL-ENCRYPTED"), "FINAL-ENCRYPTED");
+  } else if (mode === "staged-return") {
+    ({ receipt: stageReceipt } = await verifyStageReturn(root, false));
+    await requireEmptyDirectory(path.join(root, "FINAL-ENCRYPTED"), "FINAL-ENCRYPTED");
+  } else if (mode === "cutover-ready") {
+    ({ receipt: stageReceipt } = await verifyStageReturn(root, false));
+    await verifyFinalEncrypted(root);
+  } else {
+    ({ receipt: stageReceipt, cutoverReceipt } = await verifyStageReturn(root, true));
+    await verifyFinalEncrypted(root);
+  }
+
+  return {
+    ok: true,
+    phaseId: TWO_PHASE_PHASE_ID,
+    mode,
+    inboundFiles: files.length,
+    stageReceipt,
+    cutoverReceipt
+  };
+}

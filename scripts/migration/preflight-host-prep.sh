@@ -1370,7 +1370,7 @@ host_prep_publish_token() {
   ) 2>/dev/null || return 1
   [[ -f "$HOST_PREP_TEMP_TOKEN" && ! -L "$HOST_PREP_TEMP_TOKEN" ]] || return 1
   /usr/bin/chmod 0600 -- "$HOST_PREP_TEMP_TOKEN" 2>/dev/null || return 1
-  host_prep_observe jq -n \
+  host_prep_observe jq -c -n \
     --arg phase_id "$HOST_PREP_PHASE_ID" \
     --arg manifest_fingerprint "$fingerprint" \
     --arg stage_root "$HOST_PREP_STAGE" \
