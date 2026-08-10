@@ -18,7 +18,7 @@ import {
 } from "./two-phase-usb-lib.mjs";
 
 const execFile = promisify(execFileCallback);
-const EXCLUDED = /^(?:\.agents|\.git|\.github|\.worktrees|node_modules|local-secrets|runtime|backups|test|docs\/superpowers|docs\/manual-artifacts|scripts\/migration|scripts\/proxmox)(?:\/|$)|^(?:analytics|board|push|security)\.json$/;
+const EXCLUDED = /^(?:\.agents|\.git|\.github|\.worktrees|node_modules|local-secrets|runtime|backups|test|docs\/superpowers|docs\/manual-artifacts|scripts\/appliance|scripts\/migration|scripts\/proxmox)(?:\/|$)|^(?:analytics|board|push|security)\.json$/;
 
 async function trackedFiles(repositoryRoot, releaseSha) {
   const { stdout } = await execFile("git", ["-C", repositoryRoot, "ls-tree", "-r", "-z", "--name-only", releaseSha], { encoding: "buffer" });

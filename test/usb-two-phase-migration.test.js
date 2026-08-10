@@ -132,6 +132,7 @@ test("two-phase builder publishes a verified no-clobber bundle", async () => {
     for (const [relativePath, contents] of new Map([
       ["package.json", '{"name":"fixture"}\n'],
       ["server.js", "process.exit(0);\n"],
+      ["scripts/appliance/ignored-build-tool.sh", "#!/usr/bin/env bash\nexit 0\n"],
       ["scripts/migration/1-STAGE-DEBIAN.sh", "#!/usr/bin/env bash\nexit 0\n"],
       ["scripts/migration/2-CUTOVER-DEBIAN.sh", "#!/usr/bin/env bash\nexit 0\n"],
       ["scripts/migration/ROLLBACK-WINDOWS.ps1", "exit 0\n"],
@@ -152,6 +153,10 @@ test("two-phase builder publishes a verified no-clobber bundle", async () => {
     assert.equal(summary.mode, "outbound");
     const finalRoot = path.join(destination, TWO_PHASE_ROOT_NAME);
     assert.equal((await readFile(path.join(finalRoot, "PAYLOAD", "release", "server.js"), "utf8")), "process.exit(0);\n");
+    await assert.rejects(
+      readFile(path.join(finalRoot, "PAYLOAD", "release", "scripts", "appliance", "ignored-build-tool.sh")),
+      (error) => error.code === "ENOENT"
+    );
     await assert.rejects(
       buildTwoPhaseUsb({ repositoryRoot: repository, destinationRoot: destination }),
       /destination already exists/i
