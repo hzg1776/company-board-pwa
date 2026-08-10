@@ -1,0 +1,15 @@
+[Unit]
+Description=Check local Palziv application and public Cloudflare delivery
+After=network-online.target palziv.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=palziv
+Group=palziv
+EnvironmentFile=/etc/palziv/palziv.env
+ExecStart=/opt/node/bin/node /opt/palziv/current/scripts/linux/health-check.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

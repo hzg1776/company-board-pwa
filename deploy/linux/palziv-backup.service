@@ -1,0 +1,11 @@
+[Unit]
+Description=Create a consistent Palziv runtime backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/palziv-run-backup
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

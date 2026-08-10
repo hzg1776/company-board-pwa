@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Palziv runtime backup
+
+[Timer]
+OnCalendar=*-*-* 02:45:00 America/New_York
+Persistent=true
+RandomizedDelaySec=0
+Unit=palziv-backup.service
+
+[Install]
+WantedBy=timers.target

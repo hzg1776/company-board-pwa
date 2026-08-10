@@ -1,0 +1,9 @@
+tunnel: REPLACE_WITH_TUNNEL_ID
+credentials-file: /etc/cloudflared/REPLACE_WITH_TUNNEL_ID.json
+
+ingress:
+  - hostname: itotexpress.com
+    service: http://127.0.0.1:3116
+  - hostname: www.itotexpress.com
+    service: http://127.0.0.1:3116
+  - service: http_status:404

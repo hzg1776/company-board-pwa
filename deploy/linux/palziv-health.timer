@@ -1,0 +1,11 @@
+[Unit]
+Description=Monitor Palziv local and public health
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=palziv-health.service
+
+[Install]
+WantedBy=timers.target
