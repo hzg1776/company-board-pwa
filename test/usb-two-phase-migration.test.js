@@ -175,6 +175,7 @@ test("two-phase Debian scripts preserve the stage-before-cutover boundary", asyn
   assert.match(stage, /systemctl disable --now cloudflared\.service/);
   assert.match(stage, /classification:\"staged\"/);
   assert.doesNotMatch(stage, /\baddgroup\b/);
+  assert.match(stage, /systemctl enable --now palziv\.service[\s\S]*for attempt in \{1\.\.15\}[\s\S]*\/api\/health[\s\S]*for route in/);
   assert.ok(cutover.indexOf('for route in "${LOCAL_ROUTES[@]}"') < cutover.indexOf("systemctl enable --now cloudflared.service"));
   assert.match(cutover, /classification:\"cutover-complete\"/);
   assert.match(windowsPrep, /Explicit cutover authorization is required/);

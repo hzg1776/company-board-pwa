@@ -99,6 +99,16 @@ fi
 
 systemctl disable --now cloudflared.service
 systemctl enable --now palziv.service
+for attempt in {1..15}; do
+  if curl --fail --silent --show-error --max-time 3 "$LOCAL_ORIGIN/api/health" >/dev/null; then
+    break
+  fi
+  if (( attempt == 15 )); then
+    printf '%s\n' 'Project-A did not become healthy after initial start.' >&2
+    exit 1
+  fi
+  sleep 1
+done
 for route in "${LOCAL_ROUTES[@]}"; do
   curl --fail --silent --show-error --max-time 15 "$LOCAL_ORIGIN$route" >/dev/null
 done
