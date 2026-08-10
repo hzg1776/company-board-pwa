@@ -16,6 +16,8 @@ ARCHIVE="node-${NODE_VERSION}-linux-x64.tar.xz"
 ARCHIVE_SHA256="55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
 BASE_URL="https://nodejs.org/dist/${NODE_VERSION}"
 VERSION_DIR="${ARCHIVE%.tar.xz}"
+NODE_BINARY="/opt/node/bin/node"
+NPM_CLI="/opt/node/lib/node_modules/npm/bin/npm-cli.js"
 
 TMP_ROOT="$(mktemp -d /var/tmp/palziv-node24.XXXXXX)"
 cleanup() {
@@ -37,5 +39,5 @@ if [[ ! -d "/opt/$VERSION_DIR" ]]; then
   tar -xJf "$TMP_ROOT/$ARCHIVE" -C /opt
 fi
 ln -sfn "/opt/$VERSION_DIR" /opt/node
-/opt/node/bin/node --version
-/opt/node/bin/npm --version
+"$NODE_BINARY" --version
+"$NODE_BINARY" "$NPM_CLI" --version

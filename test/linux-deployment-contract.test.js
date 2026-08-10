@@ -124,6 +124,9 @@ test("Cloudflare, host bootstrap, and Proxmox artifacts enforce the approved arc
   assert.match(nodeInstaller, /55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742/);
   assert.doesNotMatch(nodeInstaller, /latest-v24\.x/);
   assert.match(nodeInstaller, /sha256sum --check/);
+  assert.match(nodeInstaller, /NPM_CLI="\/opt\/node\/lib\/node_modules\/npm\/bin\/npm-cli\.js"/);
+  assert.match(nodeInstaller, /"\$NODE_BINARY" "\$NPM_CLI" --version/);
+  assert.doesNotMatch(nodeInstaller, /\/opt\/node\/bin\/npm\s+--version/);
   assert.match(hostPrep, /qemu-guest-agent/);
   assert.match(hostPrep, /unattended-upgrades/);
   assert.match(hostPrep, /systemd-timesyncd/);
@@ -132,7 +135,9 @@ test("Cloudflare, host bootstrap, and Proxmox artifacts enforce the approved arc
   assert.match(hostPrep, /useradd --system --gid cloudflared/);
   assert.doesNotMatch(hostPrep, /\baddgroup\b/);
   assert.match(hostPrep, /\/etc\/cloudflared/);
-  assert.match(releaseDeploy, /npm ci --omit=dev/);
+  assert.match(releaseDeploy, /NPM_CLI="\/opt\/node\/lib\/node_modules\/npm\/bin\/npm-cli\.js"/);
+  assert.match(releaseDeploy, /"\$NODE_BINARY" "\$NPM_CLI" ci --omit=dev/);
+  assert.doesNotMatch(releaseDeploy, /\/opt\/node\/bin\/npm\s+ci/);
   assert.match(releaseDeploy, /--exclude='local-secrets'/);
   assert.match(releaseDeploy, /--exclude='runtime'/);
   assert.match(releaseDeploy, /if \[\[ -d "\$RELEASE_DIR" \]\]/);

@@ -10,6 +10,8 @@ SOURCE_ROOT="${1:-$(pwd)}"
 RELEASE_SHA="${2:-$(git -C "$SOURCE_ROOT" rev-parse HEAD)}"
 RELEASE_DIR="/opt/palziv/releases/$RELEASE_SHA"
 NEXT_LINK="/opt/palziv/current.next"
+NODE_BINARY="/opt/node/bin/node"
+NPM_CLI="/opt/node/lib/node_modules/npm/bin/npm-cli.js"
 
 if [[ -d "$RELEASE_DIR" ]]; then
   if [[ -L "$RELEASE_DIR" ]]; then
@@ -34,7 +36,7 @@ rsync -a --delete \
 
 (
   cd "$RELEASE_DIR"
-  /opt/node/bin/npm ci --omit=dev
+  "$NODE_BINARY" "$NPM_CLI" ci --omit=dev
 )
 
 chown -R root:palziv "$RELEASE_DIR"
