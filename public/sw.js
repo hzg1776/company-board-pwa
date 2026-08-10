@@ -4,11 +4,15 @@ importScripts(`/sw-routing.js?v=${encodeURIComponent(ASSET_VERSION)}`);
 
 const SHELL_ASSETS = [
   "/index.html",
+  "/palzivalerts/employee",
+  "/palzivalerts/hr",
   "/styles.css?v=__ASSET_VERSION__",
   "/app.js?v=__ASSET_VERSION__",
+  "/app-routing.js?v=__ASSET_VERSION__",
   "/sw-routing.js?v=__ASSET_VERSION__",
   "/device-setup.js?v=__ASSET_VERSION__",
   "/manifest.webmanifest",
+  "/manifest-hr.webmanifest",
   "/assets/logo.svg?v=__ASSET_VERSION__",
   "/assets/palziv-logo-transparent.png?v=20260625b",
   "/assets/palziv-wordmark.png?v=__ASSET_VERSION__"
@@ -138,9 +142,15 @@ self.addEventListener("fetch", (event) => {
   if (event.request.mode === "navigate" || event.request.destination === "document") {
     event.respondWith(
       fetch(event.request, { cache: "no-store" }).catch(async () => {
+        const routing = self.__palzivSwRouting || {};
+        const shellPath = typeof routing.offlineShellPath === "function"
+          ? routing.offlineShellPath(url.pathname)
+          : "/palzivalerts/employee";
+
         return (
-          (await caches.match("/index.html")) ||
-          (await caches.match(event.request))
+          (await caches.match(shellPath)) ||
+          (await caches.match(event.request)) ||
+          (await caches.match("/index.html"))
         );
       })
     );
@@ -161,4 +171,3 @@ self.addEventListener("fetch", (event) => {
       .catch(() => caches.match(event.request))
   );
 });
-

@@ -3,6 +3,10 @@ import {
   resolveDeviceSetupAction,
   resolveDeviceSetupSecondaryAction
 } from "./device-setup.js?v=__ASSET_VERSION__";
+import {
+  requiresDocumentProfileReload,
+  requiresInstallProfileReload
+} from "./app-routing.js?v=__ASSET_VERSION__";
 
 const DEFAULT_SITE_CONFIG = {
   name: "Communications and Alert Center",
@@ -275,7 +279,8 @@ const state = {
   },
   employeeDirectory: {
     loaded: false,
-    employees: []
+    employees: [],
+    messageGroups: []
   },
   employeeBatchUpload: {
     busy: false,
@@ -988,6 +993,51 @@ Copying this into Codex should give it enough context to trace the site health a
     `;
   }
 
+function formatAdminIdentity(user = {}) {
+  const displayName = String(user.displayName || "").trim();
+  const username = String(user.username || "").trim();
+
+  if (displayName && username && displayName.toLowerCase() !== username.toLowerCase()) {
+    return `${displayName} (${username})`;
+  }
+
+  return displayName || username;
+}
+
+function renderAdminSessionIdentity(scope) {
+  const identity = formatAdminIdentity(state.access?.[scope]?.user || {});
+
+  if (!identity) return "";
+
+  return `<span class="admin-session-row"><span class="sync-pill admin-session-pill">${icon("users")} Signed in as <strong>${escapeHtml(identity)}</strong></span></span>`;
+}
+
+function formatEmployeeIdentity(employee = {}) {
+  return String(employee.name || employee.username || "").trim();
+}
+
+function employeePasswordPanelState(employee = {}) {
+  const visible = String(employee.identityProvider || "local").trim().toLowerCase() === "local";
+  return {
+    visible,
+    open: visible && employee.passwordResetRequired === true
+  };
+}
+
+function employeePasswordChangeValidation(data = {}) {
+  return String(data.password || "") === String(data.confirmPassword || "")
+    ? ""
+    : "New passwords do not match.";
+}
+
+function renderEmployeeSessionIdentity() {
+  const identity = formatEmployeeIdentity(state.access.employee.employee || {});
+
+  if (!identity) return "";
+
+  return `<span class="sync-pill employee-session-pill"><strong>${escapeHtml(identity)}</strong></span>`;
+}
+
 function renderAuthFrame({
   title,
   error = "",
@@ -1252,6 +1302,8 @@ function csrfTokenForPath(pathname) {
     route === "/api/webmaster/setup" ||
     route === "/api/admin-users" ||
     route.startsWith("/api/admin-users/") ||
+    route === "/api/message-groups" ||
+    route.startsWith("/api/message-groups/") ||
     route === "/api/employees" ||
     route.startsWith("/api/employees/") ||
     route === "/api/posts" ||
@@ -1356,7 +1408,7 @@ async function requestJson(path, options = {}) {
 }
 
 function parseAssetVersionFromHtml(html) {
-  const match = String(html || "").match(/assetVersion":"([^"]+)"/);
+  const match = String(html || "").match(/\/app\.js\?v=([a-zA-Z0-9._-]+)/);
   return match ? String(match[1] || "").trim() : "";
 }
 
@@ -1399,17 +1451,25 @@ async function checkForAppUpdate() {
 async function reloadForAppUpdate() {
   try {
     if ("serviceWorker" in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map((registration) => registration.update().catch(() => {})));
+      void navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) =>
+          Promise.all(registrations.map((registration) => registration.update().catch(() => {})))
+        )
+        .catch(() => {});
     }
 
     if ("caches" in window) {
-      const keys = await caches.keys();
-      await Promise.all(
-        keys
-          .filter((key) => String(key || "").startsWith("palziv-portal-v"))
-          .map((key) => caches.delete(key).catch(() => false))
-      );
+      void caches
+        .keys()
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => String(key || "").startsWith("palziv-portal-v"))
+              .map((key) => caches.delete(key).catch(() => false))
+          )
+        )
+        .catch(() => {});
     }
   } catch {
     // Ignore update cleanup failures and fall through to reload.
@@ -1503,12 +1563,14 @@ async function loadEmployeeDirectory() {
     const result = await requestJson("/api/employees");
     state.employeeDirectory = {
       loaded: true,
-      employees: Array.isArray(result.employees) ? result.employees : []
+      employees: Array.isArray(result.employees) ? result.employees : [],
+      messageGroups: Array.isArray(result.messageGroups) ? result.messageGroups : []
     };
   } catch {
     state.employeeDirectory = {
       loaded: true,
-      employees: []
+      employees: [],
+      messageGroups: []
     };
   }
 
@@ -1559,7 +1621,8 @@ async function refreshAdminData() {
     });
     state.employeeDirectory = {
       loaded: false,
-      employees: []
+      employees: [],
+      messageGroups: []
     };
     state.securityEvents = {
       loaded: false,
@@ -3047,15 +3110,19 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
   const needsVerify = access.mfaRequired && access.mfaMode === "verify";
   const needsSetup = access.mfaRequired && access.mfaMode === "setup";
   const showEnrollment = Boolean(setup.details);
+  const collapsible = normalizedRoute === "hr";
+  const headingTag = collapsible ? "summary" : "div";
   return `
     <section class="panel-card settings-credential-card">
-      <div class="panel-title panel-title-wide">
+      ${collapsible ? '<details class="hr-section-collapse" open>' : ""}
+      <${headingTag} class="${collapsible ? "hr-section-collapse-summary " : ""}panel-title panel-title-wide">
         <div>
           <p class="eyebrow">${icon("shield")} Multi-factor authentication</p>
           <h3>${escapeHtml(roleLabel)} Google Authenticator</h3>
         </div>
         <span class="admin-table-chip ${mfa.status === "enabled" ? "is-positive" : mfa.status === "grace" ? "is-info" : "is-muted"}">${escapeHtml(mfa.status === "enabled" ? "Enabled" : mfa.status === "grace" ? "Grace" : "Required")}</span>
-      </div>
+      </${headingTag}>
+      ${collapsible ? '<div class="hr-section-collapse-body">' : ""}
       ${showEnrollment ? `
         <div class="auth-recovery-stack">
           <div class="invite-summary">
@@ -3085,6 +3152,7 @@ function renderAdminMfaPanel(route = "hr", { compact = false } = {}) {
           <button class="button" type="submit"${setup.busy ? " disabled" : ""}>${escapeHtml(setup.busy ? "Preparing..." : compact ? "Set Up Google Authenticator" : "Generate Google Authenticator QR")}</button>
         </form>
       `}
+      ${collapsible ? "</div></details>" : ""}
     </section>
   `;
 }
@@ -3210,64 +3278,255 @@ function renderAdminAuthGate(route) {
   });
 }
 
-function renderEmployeeDirectoryRow(employee) {
+function messageGroups() {
+  const groups = Array.isArray(state.employeeDirectory?.messageGroups) ? state.employeeDirectory.messageGroups : [];
+
+  return groups
+    .filter((group) => group && group.id)
+    .slice()
+    .sort((first, second) => String(first.name || "").localeCompare(String(second.name || "")));
+}
+
+function activeMessageGroups() {
+  return messageGroups().filter((group) => group.active !== false);
+}
+
+function renderMessageGroupSelector({ selectedIds = [], preserveInactive = false } = {}) {
+  const selected = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id)));
+  const activeGroups = activeMessageGroups();
+  const inactiveAssignedGroups = preserveInactive
+    ? messageGroups().filter((group) => group.active === false && selected.has(String(group.id)))
+    : [];
+
+  return `
+    <fieldset class="admin-role-picker message-group-selector field-span-2">
+      <legend>Messaging groups</legend>
+      <div class="admin-role-editor">
+        ${
+          activeGroups.length || inactiveAssignedGroups.length
+            ? activeGroups
+                .map(
+                  (group) => `
+                    <label class="checkbox-row">
+                      <input name="groupIds" type="checkbox" value="${escapeHtml(group.id)}"${selected.has(String(group.id)) ? " checked" : ""}>
+                      <span>${escapeHtml(group.name)}</span>
+                    </label>
+                  `
+                )
+                .join("") + inactiveAssignedGroups
+                .map(
+                  (group) => `
+                    <label class="checkbox-row">
+                      <input name="groupIds" type="checkbox" value="${escapeHtml(group.id)}" checked>
+                      <span>${escapeHtml(group.name)} (Inactive)</span>
+                    </label>
+                  `
+                )
+                .join("")
+            : '<span class="admin-table-secondary">No active messaging groups available.</span>'
+        }
+      </div>
+    </fieldset>
+  `;
+}
+
+function renderMessageGroupManagementRow(group) {
+  const active = group.active !== false;
+
   return `
     <tr>
       <td>
-        <div class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</div>
+        <div class="admin-table-primary">${escapeHtml(group.name)}</div>
+        <span class="admin-table-chip ${active ? "is-positive" : "is-muted"}">${active ? "Active" : "Inactive"}</span>
       </td>
       <td>
-        <div class="admin-table-primary">@${escapeHtml(employee.username)}</div>
-        <div class="admin-table-secondary">${escapeHtml(employee.passwordResetRequired ? "Password reset required" : "Password ready")}</div>
-      </td>
-      <td>
-        <span class="admin-table-chip ${employee.active ? "is-positive" : "is-muted"}">${escapeHtml(employee.active ? "Active" : "Disabled")}</span>
-        <div class="admin-table-secondary">${escapeHtml(employee.hrAdmin ? "HR access enabled" : "Employee access only")}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(String(employee.activeSessions || 0))}</div>
-        <div class="admin-table-secondary">${escapeHtml(employee.lastLoginAt ? `Last Login ${formatDate(employee.lastLoginAt)}` : "No Login Yet")}</div>
-      </td>
-      <td>
-        <div class="admin-table-primary">${escapeHtml(String(employee.authorizedDevices || 0))}</div>
-        <div class="admin-table-secondary">${escapeHtml(`${employee.devices || 0} Total Enrolled`)}</div>
-        <form class="employee-device-inline-form" data-unenroll-employee-devices-form>
-          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <button class="ghost-button" type="submit"${employee.devices ? "" : " disabled"}>
-            ${icon("delete")} Unenroll
-          </button>
+        <form class="admin-table-inline-form employee-password-inline-form" data-rename-message-group-form aria-label="Rename ${escapeHtml(group.name)}">
+          <input type="hidden" name="groupId" value="${escapeHtml(group.id)}">
+          <label class="field">
+            <span>Group name</span>
+            <input name="name" value="${escapeHtml(group.name)}" maxlength="80" required>
+          </label>
+          <button class="ghost-button" type="submit">Save name</button>
         </form>
       </td>
       <td>
-        <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
-          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-          <input name="password" type="password" minlength="10" required autocomplete="new-password">
-          <button class="ghost-button" type="submit">${icon("lock")} Reset</button>
+        <form data-message-group-status-form>
+          <input type="hidden" name="groupId" value="${escapeHtml(group.id)}">
+          <input type="hidden" name="active" value="${active ? "false" : "true"}">
+          <button class="ghost-button" type="submit">${active ? `${icon("alert")} Deactivate` : `${icon("check")} Reactivate`}</button>
         </form>
-      </td>
-      <td>
-        <div class="admin-table-actions">
-          <form data-employee-access-form>
-            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <input type="hidden" name="active" value="${employee.active ? "false" : "true"}">
-            <button class="ghost-button" type="submit">${employee.active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}</button>
-          </form>
-          <form data-revoke-employee-sessions-form>
-            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <button class="ghost-button" type="submit">${icon("refresh")} Sign Out Sessions</button>
-          </form>
-          <form data-add-employee-hr-group-form>
-            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <button class="ghost-button" type="submit"${employee.hrAdmin || !employee.active ? " disabled" : ""}>${icon("users")} Add to HR</button>
-          </form>
-          <form data-delete-employee-form>
-            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
-            <input type="hidden" name="employeeName" value="${escapeHtml(employee.name || employee.username)}">
-            <button class="ghost-button danger" type="submit">${icon("delete")} Delete Account</button>
-          </form>
-        </div>
       </td>
     </tr>
+  `;
+}
+
+function renderMessageGroupManagementPanel() {
+  const groups = messageGroups();
+  const activeCount = groups.filter((group) => group.active !== false).length;
+
+  return `
+    <section class="panel-card employee-access-card" aria-labelledby="message-groups-heading">
+      <details class="hr-section-collapse" open>
+        <summary class="hr-section-collapse-summary employee-access-head">
+          <div>
+            <h3 id="message-groups-heading">Messaging Groups</h3>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${activeCount} Active`)}</span>
+        </summary>
+        <div class="hr-section-collapse-body">
+
+          <form class="admin-create-grid" data-create-message-group-form>
+            <label class="field">
+              <span>New group name</span>
+              <input name="name" maxlength="80" required>
+            </label>
+            <div class="admin-create-actions">
+              <button class="button" type="submit">${icon("users")} Create Group</button>
+            </div>
+          </form>
+
+          ${
+            groups.length
+              ? `
+                <div class="admin-table-wrap">
+                  <table class="admin-table message-group-table">
+                    <thead>
+                      <tr>
+                        <th>Group</th>
+                        <th>Rename</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>${groups.map((group) => renderMessageGroupManagementRow(group)).join("")}</tbody>
+                  </table>
+                </div>
+              `
+              : '<div class="empty-state">No messaging groups yet.</div>'
+          }
+        </div>
+      </details>
+    </section>
+  `;
+}
+
+function employeeMatchesDirectoryFilters(employee, filters = {}) {
+  const search = String(filters.search || "").trim().toLowerCase();
+  const status = String(filters.status || "all").trim().toLowerCase();
+  const groupId = String(filters.groupId || "all").trim();
+  const active = Boolean(employee?.active);
+  const groupIds = Array.isArray(employee?.groupIds) ? employee.groupIds.map((id) => String(id)) : [];
+  const matchesSearch = !search || [employee?.name, employee?.username]
+    .some((value) => String(value || "").toLowerCase().includes(search));
+  const matchesStatus = status === "all"
+    || (status === "active" && active)
+    || (status === "disabled" && !active);
+  const matchesGroup = !groupId || groupId === "all" || groupIds.includes(groupId);
+
+  return matchesSearch && matchesStatus && matchesGroup;
+}
+
+function renderEmployeeDirectoryCard(employee) {
+  const active = Boolean(employee.active);
+  const activeSessions = Number(employee.activeSessions || 0);
+  const enrolledDevices = Number(employee.devices || 0);
+  const groupIds = (Array.isArray(employee.groupIds) ? employee.groupIds : []).map((id) => String(id));
+
+  return `
+    <details
+      class="employee-directory-card"
+      data-employee-directory-entry
+      data-employee-name="${escapeHtml(employee.name || "")}"
+      data-employee-username="${escapeHtml(employee.username || "")}"
+      data-employee-active="${active ? "true" : "false"}"
+      data-employee-group-ids="${escapeHtml(JSON.stringify(groupIds))}"
+    >
+      <summary class="employee-directory-summary">
+        <span class="employee-directory-identity">
+          <span class="admin-table-primary">${escapeHtml(employee.name || employee.username)}</span>
+          <span class="admin-table-secondary">@${escapeHtml(employee.username)}</span>
+        </span>
+        <span class="employee-directory-status">
+          <span class="admin-table-chip ${active ? "is-positive" : "is-muted"}">${escapeHtml(active ? "Active" : "Disabled")}</span>
+          <span class="employee-directory-status-copy">${escapeHtml(employee.hrAdmin ? "HR access enabled" : "Employee access only")}</span>
+        </span>
+        <span class="employee-directory-summary-meta">
+          <span class="employee-directory-metric">
+            <strong>${escapeHtml(String(activeSessions))}</strong>
+            <span>${escapeHtml(activeSessions === 1 ? "Active session" : "Active sessions")}</span>
+          </span>
+          <span class="employee-directory-metric">
+            <strong>${escapeHtml(String(enrolledDevices))}</strong>
+            <span>${escapeHtml(enrolledDevices === 1 ? "Enrolled device" : "Enrolled devices")}</span>
+          </span>
+        </span>
+      </summary>
+
+      <div class="employee-directory-card-body">
+        <section class="employee-directory-management">
+          <h4>Messaging groups</h4>
+          <form class="admin-table-inline-form" data-employee-groups-form>
+            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+            ${renderMessageGroupSelector({ selectedIds: employee.groupIds, preserveInactive: true })}
+            <button class="ghost-button" type="submit">Save groups</button>
+          </form>
+        </section>
+
+        <section class="employee-directory-management">
+          <h4>Reset password</h4>
+          <div class="employee-directory-status-copy">${escapeHtml(employee.passwordResetRequired ? "Password reset required" : "Password ready")}</div>
+          <form class="admin-table-inline-form employee-password-inline-form" data-reset-employee-password-form>
+            <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+            <label class="field">
+              <span>New temporary password</span>
+              <input name="password" type="password" minlength="10" required autocomplete="new-password">
+            </label>
+            <button class="ghost-button" type="submit">${icon("lock")} Reset</button>
+          </form>
+        </section>
+
+        <section class="employee-directory-management">
+          <h4>Devices and sessions</h4>
+          <div class="employee-directory-status-copy">
+            ${escapeHtml(`${employee.authorizedDevices || 0} Authorized · ${employee.devices || 0} Total Enrolled`)}
+          </div>
+          <div class="employee-directory-status-copy">
+            ${escapeHtml(employee.lastLoginAt ? `Last Login ${formatDate(employee.lastLoginAt)}` : "No Login Yet")}
+          </div>
+          <div class="employee-directory-actions">
+            <form class="employee-device-inline-form" data-unenroll-employee-devices-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <button class="ghost-button" type="submit"${employee.devices ? "" : " disabled"}>
+                ${icon("delete")} Unenroll
+              </button>
+            </form>
+            <form data-revoke-employee-sessions-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <button class="ghost-button" type="submit">${icon("refresh")} Sign Out Sessions</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="employee-directory-management">
+          <h4>Account access</h4>
+          <div class="employee-directory-actions">
+            <form data-employee-access-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <input type="hidden" name="active" value="${active ? "false" : "true"}">
+              <button class="ghost-button" type="submit">${active ? `${icon("alert")} Disable Access` : `${icon("check")} Enable Access`}</button>
+            </form>
+            <form data-add-employee-hr-group-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <button class="ghost-button" type="submit"${employee.hrAdmin || !active ? " disabled" : ""}>${icon("users")} Add to HR</button>
+            </form>
+            <form data-delete-employee-form>
+              <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+              <input type="hidden" name="employeeName" value="${escapeHtml(employee.name || employee.username)}">
+              <button class="ghost-button danger" type="submit">${icon("delete")} Delete Account</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    </details>
   `;
 }
 
@@ -3466,6 +3725,8 @@ function renderAdminAccountsPanel(scope = "hr") {
   const adminUsers = Array.isArray(readAdminDirectory(normalizedScope).adminUsers) ? readAdminDirectory(normalizedScope).adminUsers : [];
   const title = normalizedScope === "it" ? "Admin Accounts" : normalizedScope === "webmaster" ? "System Ops Admin Accounts" : "HR Admin Accounts";
   const countLabel = normalizedScope === "it" ? "Admin" : normalizedScope === "webmaster" ? "System Ops Admin" : "HR Admin";
+  const collapsible = normalizedScope === "hr";
+  const headingTag = collapsible ? "summary" : "div";
   const roleControl = normalizedScope === "it"
     ? `
         <div class="field">
@@ -3504,12 +3765,14 @@ function renderAdminAccountsPanel(scope = "hr") {
 
   return `
     <section class="panel-card employee-access-card">
-      <div class="employee-access-head">
+      ${collapsible ? '<details class="hr-section-collapse" open>' : ""}
+      <${headingTag} class="${collapsible ? "hr-section-collapse-summary " : ""}employee-access-head">
         <div>
           <h3>${escapeHtml(title)}</h3>
         </div>
         <span class="sync-pill">${escapeHtml(`${adminUsers.length} ${countLabel}${adminUsers.length === 1 ? "" : "s"}`)}</span>
-      </div>
+      </${headingTag}>
+      ${collapsible ? '<div class="hr-section-collapse-body">' : ""}
 
       <form class="employee-create-form admin-create-grid" data-create-admin-form data-admin-scope="${escapeHtml(normalizedScope)}">
         <label class="field">
@@ -3531,52 +3794,128 @@ function renderAdminAccountsPanel(scope = "hr") {
       </form>
 
       ${renderAdminDirectoryTable(adminUsers, normalizedScope)}
+      ${collapsible ? "</div></details>" : ""}
     </section>
   `;
 }
 
-function renderEmployeeDirectoryTable(employees) {
-  if (!employees.length) {
-    return '<div class="empty-state">No Employee Accounts Yet.</div>';
-  }
-
+function renderEmployeeDirectoryList(employees) {
   return `
-    <div class="admin-table-wrap">
-      <table class="admin-table admin-table-employees">
-        <thead>
-          <tr>
-            <th>Employee</th>
-            <th>Username</th>
-            <th>Status</th>
-            <th>Sessions</th>
-            <th>Devices</th>
-            <th>Reset Password</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${employees.map((employee) => renderEmployeeDirectoryRow(employee)).join("")}
-        </tbody>
-      </table>
+    <div class="employee-directory-list" id="employee-directory-list">
+      ${employees.map((employee) => renderEmployeeDirectoryCard(employee)).join("")}
+    </div>
+    ${employees.length ? "" : '<div class="empty-state">No Employee Accounts Yet.</div>'}
+    <div class="empty-state employee-directory-empty" data-employee-directory-empty hidden>
+      No employees match the current filters.
     </div>
   `;
 }
 
 function renderEmployeeDirectoryPanel() {
   const employees = Array.isArray(state.employeeDirectory.employees) ? state.employeeDirectory.employees : [];
+  const groups = messageGroups();
 
   return `
-    <section class="panel-card employee-access-card">
-      <div class="employee-access-head">
-        <div>
-          <h3>Employee Accounts</h3>
-        </div>
-        <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
-      </div>
+    <section class="panel-card employee-access-card" data-employee-directory>
+      <details class="hr-section-collapse" open>
+        <summary class="hr-section-collapse-summary employee-access-head">
+          <div>
+            <h3>Employee Accounts</h3>
+          </div>
+          <span class="sync-pill">${escapeHtml(`${employees.length} Account${employees.length === 1 ? "" : "s"}`)}</span>
+        </summary>
+        <div class="hr-section-collapse-body">
 
-      ${renderEmployeeDirectoryTable(employees)}
+          <div class="employee-directory-toolbar" role="search" aria-label="Filter employee accounts">
+            <label class="field employee-directory-search">
+              <span>Search employees</span>
+              <input
+                type="search"
+                autocomplete="off"
+                aria-controls="employee-directory-list"
+                data-employee-directory-search
+              >
+            </label>
+            <label class="field employee-directory-status">
+              <span>Status</span>
+              <select aria-controls="employee-directory-list" data-employee-directory-status>
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label class="field employee-directory-group">
+              <span>Messaging group</span>
+              <select aria-controls="employee-directory-list" data-employee-directory-group>
+                <option value="all">All Groups</option>
+                ${groups
+                  .map(
+                    (group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(`${group.name}${group.active === false ? " (Inactive)" : ""}`)}</option>`
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <p class="employee-directory-count" data-employee-directory-count aria-live="polite" aria-atomic="true">
+              ${escapeHtml(`Showing ${employees.length} of ${employees.length} employee account${employees.length === 1 ? "" : "s"}.`)}
+            </p>
+          </div>
+
+          ${renderEmployeeDirectoryList(employees)}
+        </div>
+      </details>
     </section>
   `;
+}
+
+function applyEmployeeDirectoryFilters(root = app) {
+  const directory = root?.matches?.("[data-employee-directory]")
+    ? root
+    : root?.querySelector?.("[data-employee-directory]");
+
+  if (!directory) {
+    return;
+  }
+
+  const search = directory.querySelector("[data-employee-directory-search]")?.value || "";
+  const status = directory.querySelector("[data-employee-directory-status]")?.value || "all";
+  const groupId = directory.querySelector("[data-employee-directory-group]")?.value || "all";
+  const entries = Array.from(directory.querySelectorAll("[data-employee-directory-entry]"));
+  let visibleCount = 0;
+
+  entries.forEach((entry) => {
+    let groupIds = [];
+
+    try {
+      const parsedGroupIds = JSON.parse(entry.dataset.employeeGroupIds || "[]");
+      groupIds = Array.isArray(parsedGroupIds) ? parsedGroupIds : [];
+    } catch {
+      groupIds = [];
+    }
+
+    const matches = employeeMatchesDirectoryFilters(
+      {
+        name: entry.dataset.employeeName || "",
+        username: entry.dataset.employeeUsername || "",
+        active: entry.dataset.employeeActive === "true",
+        groupIds
+      },
+      { search, status, groupId }
+    );
+
+    entry.hidden = !matches;
+    if (matches) visibleCount += 1;
+  });
+
+  const resultCount = directory.querySelector("[data-employee-directory-count]");
+  const emptyResult = directory.querySelector("[data-employee-directory-empty]");
+
+  if (resultCount) {
+    resultCount.textContent = `Showing ${visibleCount} of ${entries.length} employee account${entries.length === 1 ? "" : "s"}.`;
+  }
+
+  if (emptyResult) {
+    emptyResult.hidden = entries.length === 0 || visibleCount > 0;
+  }
 }
 
 function renderEmployeeCreatePanel() {
@@ -3597,6 +3936,7 @@ function renderEmployeeCreatePanel() {
             <span>Temporary password</span>
             <input name="password" type="password" minlength="10" required>
           </label>
+          ${renderMessageGroupSelector()}
           <label class="checkbox-row field-span-2">
             <input name="passwordResetRequired" type="checkbox" checked>
             <span>Require password reset on first use</span>
@@ -3699,6 +4039,44 @@ function renderEmployeeBatchUploadPanel() {
   `;
 }
 
+function renderEmployeePasswordPanel() {
+  const panel = employeePasswordPanelState(state.access.employee.employee || {});
+
+  if (!panel.visible) return "";
+
+  return `
+    <section class="panel-card employee-password-card" aria-label="Employee account password">
+      <details class="settings-collapse" ${panel.open ? "open" : ""}>
+        <summary class="ghost-button settings-collapse-toggle">${icon("lock")} Change Password</summary>
+        <div class="employee-password-card-body">
+          ${panel.open
+            ? '<p class="notice-card employee-password-notice">Change the temporary password assigned to this account.</p>'
+            : ""}
+          <form class="auth-form" data-employee-password-form>
+            <div class="composer-grid employee-password-grid">
+              <label class="field field-span-2">
+                <span>Current Password</span>
+                <input name="currentPassword" type="password" minlength="10" required autocomplete="current-password">
+              </label>
+              <label class="field">
+                <span>New Password</span>
+                <input name="password" type="password" minlength="10" required autocomplete="new-password">
+              </label>
+              <label class="field">
+                <span>Confirm New Password</span>
+                <input name="confirmPassword" type="password" minlength="10" required autocomplete="new-password">
+              </label>
+            </div>
+            <div class="auth-form-actions">
+              <button class="button" type="submit">${icon("lock")} Save New Password</button>
+            </div>
+          </form>
+        </div>
+      </details>
+    </section>
+  `;
+}
+
 function renderEmployee() {
   const notices = visiblePosts();
   const setup = buildEmployeeSetupState();
@@ -3711,6 +4089,7 @@ function renderEmployee() {
               <img class="employee-brand-banner-logo" src="/assets/palziv-logo-transparent.png?v=20260625b" alt="${escapeHtml(APP_TITLE)}" loading="eager" decoding="async">
               <div class="employee-brand-banner-copy">
                 <p class="employee-brand-banner-kicker">Announcements &amp; Alerts</p>
+                ${renderEmployeeSessionIdentity()}
               </div>
               ${renderEmployeeWeatherCard()}
             </div>
@@ -3730,6 +4109,8 @@ function renderEmployee() {
           }
         </div>
       </section>
+
+      ${renderEmployeePasswordPanel()}
 
       <section class="employee-signout-floor" aria-label="Sign out">
         <button class="ghost-button employee-signout-button employee-footer-signout" type="button" data-employee-logout>Sign Out</button>
@@ -3794,6 +4175,45 @@ function hrFeedPosts() {
   return notices;
 }
 
+function renderPostAudienceControls() {
+  const groups = activeMessageGroups();
+
+  return `
+    <fieldset class="admin-role-picker field-span-2">
+      <legend>Audience</legend>
+      <div class="admin-role-editor">
+        <label class="checkbox-row">
+          <input name="audienceMode" type="radio" value="all" checked data-post-audience-mode>
+          <span>All Employees</span>
+        </label>
+        <label class="checkbox-row">
+          <input name="audienceMode" type="radio" value="groups" data-post-audience-mode${groups.length ? "" : " disabled"}>
+          <span>Selected groups</span>
+        </label>
+      </div>
+    </fieldset>
+    <fieldset class="admin-role-picker field-span-2" data-post-audience-groups disabled hidden>
+      <legend>Messaging groups</legend>
+      <div class="admin-role-editor">
+        ${
+          groups.length
+            ? groups
+                .map(
+                  (group) => `
+                    <label class="checkbox-row">
+                      <input name="audienceGroupIds" type="checkbox" value="${escapeHtml(group.id)}">
+                      <span>${escapeHtml(group.name)}</span>
+                    </label>
+                  `
+                )
+                .join("")
+            : '<span class="admin-table-secondary">Create an active messaging group before targeting an announcement.</span>'
+        }
+      </div>
+    </fieldset>
+  `;
+}
+
 function renderHrFeedPanel() {
   const notices = hrFeedPosts();
 
@@ -3801,82 +4221,80 @@ function renderHrFeedPanel() {
     <section class="panel-stack">
       <section class="admin-workspace hr-feed-workspace" aria-label="HR feed control center">
         <section class="tool-panel composer-panel panel-card" aria-label="Publish update">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("megaphone")} Publish update</p>
-              <h3>New announcement</h3>
+          <details class="hr-section-collapse" open>
+            <summary class="hr-section-collapse-summary panel-title panel-title-wide">
+              <div>
+                <p class="eyebrow">${icon("megaphone")} Publish update</p>
+                <h3>New announcement</h3>
+              </div>
+            </summary>
+            <div class="hr-section-collapse-body">
+              <form data-post-form>
+                <div class="composer-grid">
+                  <label class="field field-span-2">
+                    <span>Title</span>
+                    <input name="title" maxlength="90" required>
+                  </label>
+                  <label class="field field-span-2">
+                    <span>Message</span>
+                    <textarea name="body" maxlength="700" required></textarea>
+                  </label>
+                  <label class="field">
+                    <span>Category</span>
+                    <select name="type">
+                      <option>News</option>
+                      <option>Weather</option>
+                      <option>Shift</option>
+                      <option>Safety</option>
+                      <option value="HR">HR</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Priority</span>
+                    <select name="priority">
+                      <option>Normal</option>
+                      <option>Important</option>
+                      <option>Urgent</option>
+                    </select>
+                  </label>
+                  ${renderPostAudienceControls()}
+                  <label class="field">
+                    <span>Retention</span>
+                    <select name="alertRetention">
+                      <option value="24h">24 Hours</option>
+                      <option value="168h">7 Days</option>
+                      <option value="720h" selected>30 Days</option>
+                      <option value="manual">Manual Only</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-actions">
+                  <button class="button" type="submit">${icon("send")} Publish update</button>
+                </div>
+              </form>
             </div>
-          </div>
-          <form data-post-form>
-            <div class="composer-grid">
-              <label class="field field-span-2">
-                <span>Title</span>
-                <input name="title" maxlength="90" required>
-              </label>
-              <label class="field field-span-2">
-                <span>Message</span>
-                <textarea name="body" maxlength="700" required></textarea>
-              </label>
-              <label class="field">
-                <span>Category</span>
-                <select name="type">
-                  <option>News</option>
-                  <option>Weather</option>
-                  <option>Shift</option>
-                  <option>Safety</option>
-                  <option value="HR">HR</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Priority</span>
-                <select name="priority">
-                  <option>Normal</option>
-                  <option>Important</option>
-                  <option>Urgent</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Audience</span>
-                <select name="audience">
-                  <option>All Employees</option>
-                  <option>Operations</option>
-                  <option>Office Staff</option>
-                  <option>Warehouse</option>
-                  <option>Leadership</option>
-                  <option value="HR">HR</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Retention</span>
-                <select name="alertRetention">
-                  <option value="24h">24 Hours</option>
-                  <option value="168h">7 Days</option>
-                  <option value="720h" selected>30 Days</option>
-                  <option value="manual">Manual Only</option>
-                </select>
-              </label>
-            </div>
-            <div class="form-actions">
-              <button class="button" type="submit">${icon("send")} Publish update</button>
-            </div>
-          </form>
+          </details>
         </section>
 
         <section class="feed-shell feed-shell-quiet feed-shell-bare hr-feed-preview" aria-label="Live managed employee feed">
-          <div class="panel-title panel-title-wide">
-            <div>
-              <p class="eyebrow">${icon("board")} Stream</p>
-              <h3>Live employee updates</h3>
+          <details class="hr-section-collapse" open>
+            <summary class="hr-section-collapse-summary panel-title panel-title-wide">
+              <div>
+                <p class="eyebrow">${icon("board")} Stream</p>
+                <h3>Live employee updates</h3>
+              </div>
+              ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
+            </summary>
+            <div class="hr-section-collapse-body">
+              <div class="feed-list feed-list-quiet">
+                ${
+                  notices.length
+                    ? notices.map((post) => renderManagedFeedItem(post)).join("")
+                    : `<div class="empty-state">No updates are live right now.</div>`
+                }
+              </div>
             </div>
-            ${activeHistoryFilter === "Urgent" ? `<span class="sync-pill">Urgent only</span>` : ""}
-          </div>
-          <div class="feed-list feed-list-quiet">
-            ${
-              notices.length
-                ? notices.map((post) => renderManagedFeedItem(post)).join("")
-                : `<div class="empty-state">No updates are live right now.</div>`
-            }
-          </div>
+          </details>
         </section>
       </section>
     </section>
@@ -4080,6 +4498,7 @@ function renderWebmasterSettingsPanel() {
 function renderAdminAccessPanel() {
   return `
     <section class="panel-stack">
+      ${renderMessageGroupManagementPanel()}
       ${renderEmployeeDirectoryPanel()}
       ${renderEmployeeBatchUploadPanel()}
       ${renderEmployeeCreatePanel()}
@@ -4457,6 +4876,7 @@ function renderWebmaster() {
       <header class="page-head">
         ${brandBlock("Systems Command Center")}
         <div class="page-actions">
+          ${renderAdminSessionIdentity("webmaster")}
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
@@ -4652,6 +5072,7 @@ function renderIt() {
       <header class="page-head">
         ${brandBlock("IT Control Center")}
         <div class="page-actions">
+          ${renderAdminSessionIdentity("it")}
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="hr">${icon("users")} HR Console</button>
           <button class="ghost-button" type="button" data-route="webmaster">${icon("monitor")} Systems Console</button>
@@ -4695,10 +5116,11 @@ function renderAdmin() {
     : 0;
 
   return `
-    <main class="page-shell hr-shell">
+    <main class="page-shell hr-shell${activeAdminTab === "share" ? " hr-shell-users" : ""}">
       <header class="page-head">
         ${brandBlock("HR Control Center")}
         <div class="page-actions">
+          ${renderAdminSessionIdentity("hr")}
           <button class="ghost-button" type="button" data-route="launcher">${icon("home")} Launcher</button>
           <button class="ghost-button" type="button" data-route="employee">${icon("news")} Employee Feed</button>
           <button class="ghost-button" type="button" data-refresh>${icon("refresh")} Refresh</button>
@@ -4752,6 +5174,12 @@ function clearMessageSoon() {
 
 async function routeTo(route) {
   const nextPath = routePath(route);
+
+  if (requiresInstallProfileReload(currentRoute(), route)) {
+    window.location.assign(nextPath);
+    return;
+  }
+
   state.authRecovery.hr = false;
   state.authRecovery.it = false;
   state.authRecovery.webmaster = false;
@@ -4780,6 +5208,12 @@ async function routeTo(route) {
 
 async function hydrateRoute() {
   const route = currentRoute();
+
+  const manifestUrl = document.querySelector('link[rel="manifest"]')?.getAttribute("href") || "";
+  if (requiresDocumentProfileReload(manifestUrl, route)) {
+    window.location.replace(routePath(route));
+    return false;
+  }
 
   const canonicalPath = routePath(route);
 
@@ -4935,23 +5369,34 @@ async function handleDeleteAction(id) {
 async function handlePostSubmit(event) {
   event.preventDefault();
   const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
+  const formData = new FormData(form);
+  const data = Object.fromEntries(formData);
+  data.audienceGroupIds = formData.getAll("audienceGroupIds");
+
+  if (data.audienceMode !== "groups") {
+    data.audienceMode = "all";
+    data.audienceGroupIds = [];
+  } else if (!data.audienceGroupIds.length) {
+    const firstGroup = form.querySelector('[name="audienceGroupIds"]');
+    firstGroup?.setCustomValidity("Select at least one messaging group.");
+    firstGroup?.reportValidity();
+    return;
+  }
 
   try {
     const result = await createPost(data);
     form.reset();
-    form.elements.audience.value = "All Employees";
     form.elements.alertRetention.value = "720h";
     if (result.notification?.error) {
       setMessage(`Published, but alert delivery failed: ${result.notification.error}`, "warning");
     } else if (result.post.notifyEmployees) {
       const pushResult = result.notification?.push || result.notification || {};
       const delivered = Number(pushResult.delivered || 0);
-      const total = Number(pushResult.total || 0);
+      const eligible = Number(pushResult.authorized || 0);
       setMessage(
-        total > 0
-          ? `Published and notified ${delivered}/${total} subscribed device${total === 1 ? "" : "s"}.`
-          : "Published. No devices are subscribed for alerts.",
+        eligible > 0
+          ? `Published and notified ${delivered}/${eligible} eligible subscribed device${eligible === 1 ? "" : "s"}.`
+          : "Published. No eligible devices are subscribed for alerts.",
         "success"
       );
     } else {
@@ -4963,6 +5408,27 @@ async function handlePostSubmit(event) {
 
   render();
   clearMessageSoon();
+}
+
+function handlePostAudienceChange(event) {
+  const input = event.target;
+
+  if (!(input instanceof HTMLInputElement)) return;
+  if (!input.matches('[data-post-audience-mode], [name="audienceGroupIds"]')) return;
+
+  const form = input.closest("[data-post-form]");
+  if (!(form instanceof HTMLFormElement)) return;
+
+  const groupsFieldset = form.querySelector("[data-post-audience-groups]");
+  const targeted = form.querySelector('[name="audienceMode"]:checked')?.value === "groups";
+
+  if (groupsFieldset instanceof HTMLFieldSetElement) {
+    groupsFieldset.disabled = !targeted;
+    groupsFieldset.hidden = !targeted;
+  }
+
+  const firstGroup = form.querySelector('[name="audienceGroupIds"]');
+  firstGroup?.setCustomValidity("");
 }
 
 async function handleWeatherSubmit(event) {
@@ -5155,6 +5621,7 @@ async function handleCreateEmployeeSubmit(event) {
   const formData = new FormData(form);
   const data = Object.fromEntries(formData);
   data.passwordResetRequired = formData.get("passwordResetRequired") !== null;
+  data.groupIds = formData.getAll("groupIds");
 
   try {
     await requestJson("/api/employees", {
@@ -5166,6 +5633,68 @@ async function handleCreateEmployeeSubmit(event) {
     setMessage("Employee account created.", "success");
   } catch (error) {
     setMessage(error.message || "Could not create the employee account.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleCreateMessageGroupSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const formData = new FormData(form);
+
+  try {
+    await requestJson("/api/message-groups", {
+      method: "POST",
+      body: JSON.stringify({ name: formData.get("name") })
+    });
+    form.reset();
+    await refreshAdminData();
+    setMessage("Messaging group created.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not create the messaging group.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleRenameMessageGroupSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const groupId = String(formData.get("groupId") || "");
+
+  try {
+    await requestJson(`/api/message-groups/${encodeURIComponent(groupId)}/name`, {
+      method: "POST",
+      body: JSON.stringify({ name: formData.get("name") })
+    });
+    await refreshAdminData();
+    setMessage("Messaging group renamed.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not rename the messaging group.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleMessageGroupStatusSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const groupId = String(formData.get("groupId") || "");
+  const active = String(formData.get("active") || "") === "true";
+
+  try {
+    await requestJson(`/api/message-groups/${encodeURIComponent(groupId)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ active })
+    });
+    await refreshAdminData();
+    setMessage(active ? "Messaging group reactivated." : "Messaging group deactivated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update the messaging group.");
   }
 
   render();
@@ -5645,6 +6174,28 @@ async function handleEmployeeAccessSubmit(event) {
   clearMessageSoon();
 }
 
+async function handleEmployeeGroupsSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const employeeId = String(formData.get("employeeId") || "");
+
+  try {
+    await requestJson(`/api/employees/${encodeURIComponent(employeeId)}/groups`, {
+      method: "POST",
+      body: JSON.stringify({
+        groupIds: formData.getAll("groupIds")
+      })
+    });
+    await refreshAdminData();
+    setMessage("Employee messaging groups updated.", "success");
+  } catch (error) {
+    setMessage(error.message || "Could not update employee messaging groups.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
 async function handleResetEmployeePasswordSubmit(event) {
   event.preventDefault();
   const form = event.target;
@@ -5662,6 +6213,51 @@ async function handleResetEmployeePasswordSubmit(event) {
     setMessage("Employee password reset.", "success");
   } catch (error) {
     setMessage(error.message || "Could not reset the password.");
+  }
+
+  render();
+  clearMessageSoon();
+}
+
+async function handleEmployeePasswordChangeSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const validationError = employeePasswordChangeValidation(data);
+
+  if (validationError) {
+    setMessage(validationError);
+    render();
+    clearMessageSoon();
+    return;
+  }
+
+  const submitButton = form.querySelector('button[type="submit"]');
+  form.setAttribute("aria-busy", "true");
+  if (submitButton) submitButton.disabled = true;
+
+  try {
+    const result = await requestJson("/api/employee/password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: data.currentPassword,
+        password: data.password
+      })
+    });
+    form.reset();
+    state.access.employee = {
+      ...state.access.employee,
+      ...result,
+      error: ""
+    };
+    setMessage(
+      result.hrReauthenticationRequired
+        ? "Password changed. Other devices were signed out. Sign in to HR again with the new password."
+        : "Password changed. Other devices were signed out.",
+      "success"
+    );
+  } catch (error) {
+    setMessage(error.message || "Could not change the password.");
   }
 
   render();
@@ -6185,6 +6781,11 @@ app.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.matches("[data-employee-password-form]")) {
+    await handleEmployeePasswordChangeSubmit(event);
+    return;
+  }
+
   if (event.target.matches("[data-admin-auth-form]")) {
     await handleAdminAuthSubmit(event);
     return;
@@ -6222,6 +6823,21 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-webmaster-reset-hr-password-form]")) {
     await handleWebmasterResetHrPasswordSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-create-message-group-form]")) {
+    await handleCreateMessageGroupSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-rename-message-group-form]")) {
+    await handleRenameMessageGroupSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-message-group-status-form]")) {
+    await handleMessageGroupStatusSubmit(event);
     return;
   }
 
@@ -6272,6 +6888,11 @@ app.addEventListener("submit", async (event) => {
 
   if (event.target.matches("[data-employee-access-form]")) {
     await handleEmployeeAccessSubmit(event);
+    return;
+  }
+
+  if (event.target.matches("[data-employee-groups-form]")) {
+    await handleEmployeeGroupsSubmit(event);
     return;
   }
 
@@ -6338,7 +6959,22 @@ app.addEventListener("submit", async (event) => {
   }
 });
 
+app.addEventListener("input", (event) => {
+  if (!(event.target instanceof HTMLInputElement)) return;
+  if (!event.target.matches("[data-employee-directory-search]")) return;
+
+  applyEmployeeDirectoryFilters();
+});
+
 app.addEventListener("change", async (event) => {
+  if (
+    event.target instanceof HTMLSelectElement
+    && event.target.matches("[data-employee-directory-status], [data-employee-directory-group]")
+  ) {
+    applyEmployeeDirectoryFilters();
+  }
+
+  handlePostAudienceChange(event);
   await handleEmployeeBatchFileChange(event);
 });
 

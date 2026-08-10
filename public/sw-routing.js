@@ -1,6 +1,7 @@
 (function registerServiceWorkerRouting(globalScope) {
   const APP_BASE_PATH = "/palzivalerts";
   const EMPLOYEE_PATH = `${APP_BASE_PATH}/employee`;
+  const HR_PATH = `${APP_BASE_PATH}/hr`;
   const LAUNCHER_PATH = APP_BASE_PATH;
   const APPLE_LAUNCHER_PATH = `${APP_BASE_PATH}/`;
 
@@ -105,8 +106,16 @@
     return candidates.find((client) => sameDocument(client.url, targetHref)) || candidates[0];
   }
 
+  function offlineShellPath(pathname) {
+    const normalizedPath = String(pathname || "").replace(/\/+$/, "") || "/";
+    return normalizedPath === HR_PATH || normalizedPath === "/hr" || normalizedPath === `${APP_BASE_PATH}/admin`
+      ? HR_PATH
+      : EMPLOYEE_PATH;
+  }
+
   globalScope.__palzivSwRouting = {
     normalizePortalUrl,
-    chooseNotificationClient
+    chooseNotificationClient,
+    offlineShellPath
   };
 })(self);

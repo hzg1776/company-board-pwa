@@ -96,6 +96,14 @@ for (const role of roles) {
     throw new Error(`Could not log in as ${role.role}. Status ${response.status}.`);
   }
 
+  const result = await response.json().catch(() => null);
+  if (!result || result.authorized !== true) {
+    const mfaDetail = result?.mfaRequired
+      ? ` MFA still requires ${result.mfaMode === "verify" ? "verification" : "setup"}.`
+      : "";
+    throw new Error(`Login for ${role.role} did not produce a fully authorized session.${mfaDetail}`);
+  }
+
   const setCookies = response.headers.getSetCookie();
   if (!setCookies.length) {
     throw new Error(`No session cookie returned for ${role.role}.`);

@@ -51,3 +51,13 @@ test("service worker routing reuses only relevant app tabs", async () => {
   const webmasterClient = routing.chooseNotificationClient(clients, otherTarget, origin);
   assert.equal(webmasterClient, null);
 });
+
+test("service worker routing keeps the HR install profile during offline navigation", async () => {
+  const routing = await loadRoutingHelpers();
+
+  assert.equal(routing.offlineShellPath("/palzivalerts/hr"), "/palzivalerts/hr");
+  assert.equal(routing.offlineShellPath("/hr"), "/palzivalerts/hr");
+  assert.equal(routing.offlineShellPath("/palzivalerts/employee"), "/palzivalerts/employee");
+  assert.equal(routing.offlineShellPath("/palzivalerts/webmaster"), "/palzivalerts/employee");
+  assert.equal(routing.offlineShellPath("/palzivalerts"), "/palzivalerts/employee");
+});

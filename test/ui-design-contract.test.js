@@ -152,6 +152,66 @@ test("employee masthead omits the alert-count status strip", async () => {
   assert.doesNotMatch(app, /\$\{notices\.length\} live/);
 });
 
+test("employee masthead shows only the signed-in employee name", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const start = app.indexOf("function formatEmployeeIdentity(employee = {})");
+  const end = app.indexOf("\n}\n\nfunction renderEmployeeSessionIdentity", start);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const functionSource = app.slice(start, end + 2);
+  const formatEmployeeIdentity = Function(`${functionSource}; return formatEmployeeIdentity;`)();
+  const escapeHtmlSource = app.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const sessionIdentitySource =
+    app.match(/function renderEmployeeSessionIdentity\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const renderEmployeeSessionIdentity = Function(
+    "state",
+    "icon",
+    `${escapeHtmlSource}\n${functionSource}\n${sessionIdentitySource}\nreturn renderEmployeeSessionIdentity;`
+  )(
+    { access: { employee: { employee: { name: "Test User1", username: "testuser1" } } } },
+    () => '<svg class="icon"></svg>'
+  );
+  const employeeRenderer = app.match(/function renderEmployee\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const titleIndex = employeeRenderer.indexOf("Announcements &amp; Alerts");
+  const identityIndex = employeeRenderer.indexOf("renderEmployeeSessionIdentity()");
+  const weatherIndex = employeeRenderer.indexOf("renderEmployeeWeatherCard()");
+  const identityBody = getLastSelectorBody(
+    css,
+    ".employee-shell .employee-brand-banner .employee-session-pill"
+  );
+  const employeeBannerBody = getLastSelectorBody(css, ".employee-shell .employee-brand-banner");
+  const mobileIdentityBody = getLastSelectorBody(
+    css,
+    ".employee-shell .employee-brand-banner-copy > .employee-session-pill"
+  );
+
+  assert.equal(formatEmployeeIdentity({ name: "Test User1", username: "testuser1" }), "Test User1");
+  assert.equal(formatEmployeeIdentity({ username: "testuser1" }), "testuser1");
+  assert.equal(formatEmployeeIdentity({}), "");
+  assert.equal(
+    renderEmployeeSessionIdentity(),
+    '<span class="sync-pill employee-session-pill"><strong>Test User1</strong></span>'
+  );
+  assert.ok(titleIndex >= 0);
+  assert.ok(identityIndex > titleIndex);
+  assert.ok(weatherIndex > identityIndex);
+  assert.equal(getDeclarationValue(identityBody, "min-width"), "0");
+  assert.equal(getDeclarationValue(identityBody, "position"), "absolute");
+  assert.equal(getDeclarationValue(identityBody, "top"), "14px");
+  assert.equal(getDeclarationValue(identityBody, "right"), "14px");
+  assert.equal(getDeclarationValue(identityBody, "max-width"), "min(260px, calc(50% - 54px))");
+  assert.equal(getDeclarationValue(identityBody, "overflow-wrap"), "anywhere");
+  assert.equal(getDeclarationValue(employeeBannerBody, "position"), "relative");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "position"), "absolute");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "top"), "12px");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "right"), "12px");
+  assert.equal(getDeclarationValue(mobileIdentityBody, "max-width"), "calc(100% - 24px)");
+  assert.equal(getDeclarationValue(employeeBannerBody, "padding-top"), "48px !important");
+});
+
 test("HR users panel exposes JSON and YAML employee batch upload controls", async () => {
   const app = await loadClientApp();
 
@@ -160,6 +220,80 @@ test("HR users panel exposes JSON and YAML employee batch upload controls", asyn
   assert.match(app, /\/api\/employees\/batch/);
   assert.match(app, /data-copy-employee-batch-credentials/);
   assert.doesNotMatch(app, /lgfeller@palzivna\.com/);
+});
+
+test("HR users panel exposes the messaging group lifecycle", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+
+  assert.match(app, /messageGroups:\s*\[\]/);
+  assert.match(app, /messageGroups:\s*Array\.isArray\(result\.messageGroups\)\s*\?\s*result\.messageGroups\s*:\s*\[\]/);
+  assert.match(app, /function renderMessageGroupManagementPanel/);
+  assert.match(app, /data-create-message-group-form/);
+  assert.match(app, /data-rename-message-group-form/);
+  assert.match(app, /data-message-group-status-form/);
+  assert.match(app, /class="admin-table message-group-table"/);
+  assert.match(app, /requestJson\("\/api\/message-groups"/);
+  assert.match(app, /\/api\/message-groups\/\$\{encodeURIComponent\(groupId\)\}\/name/);
+  assert.match(app, /\/api\/message-groups\/\$\{encodeURIComponent\(groupId\)\}\/status/);
+  assert.equal(getLastSelectorDeclarationValue(css, ".message-group-table", "min-width"), "0");
+});
+
+test("messaging group mutations receive the HR CSRF token", async () => {
+  const app = await loadClientApp();
+  const start = app.indexOf("function csrfTokenForPath(pathname)");
+  const end = app.indexOf("\n}\n\nfunction normalizeAdminScope", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const functionSource = app.slice(start, end + 2);
+  const csrfTokenForPath = Function(
+    "state",
+    "window",
+    `${functionSource}; return csrfTokenForPath;`
+  )(
+    {
+      access: {
+        hr: { csrfToken: "hr-token" },
+        it: { csrfToken: "it-token" },
+        webmaster: { csrfToken: "webmaster-token" }
+      }
+    },
+    { location: { origin: "https://itotexpress.com" } }
+  );
+
+  for (const path of [
+    "/api/message-groups",
+    "/api/message-groups/group-1/name",
+    "/api/message-groups/group-1/status"
+  ]) {
+    assert.equal(csrfTokenForPath(path), "hr-token", path);
+  }
+});
+
+test("employee forms submit messaging group assignments as arrays", async () => {
+  const app = await loadClientApp();
+
+  assert.match(app, /function renderMessageGroupSelector/);
+  assert.match(app, /<legend>Messaging groups<\/legend>/);
+  assert.match(app, /name="groupIds"/);
+  assert.match(app, /data-employee-groups-form/);
+  assert.match(app, /\$\{escapeHtml\(group\.name\)\} \(Inactive\)/);
+  assert.match(app, /data\.groupIds\s*=\s*formData\.getAll\("groupIds"\)/);
+  assert.match(app, /groupIds:\s*formData\.getAll\("groupIds"\)/);
+  assert.match(app, /\/api\/employees\/\$\{encodeURIComponent\(employeeId\)\}\/groups/);
+});
+
+test("announcement composer defaults to all employees and submits targeted group arrays", async () => {
+  const app = await loadClientApp();
+
+  assert.match(app, /<legend>Audience<\/legend>/);
+  assert.match(app, /name="audienceMode" type="radio" value="all" checked/);
+  assert.match(app, /name="audienceMode" type="radio" value="groups"/);
+  assert.match(app, /name="audienceGroupIds"/);
+  assert.match(app, /data-post-audience-groups/);
+  assert.match(app, /data\.audienceGroupIds\s*=\s*formData\.getAll\("audienceGroupIds"\)/);
+  assert.match(app, /eligible subscribed device/);
 });
 
 test("IT emergency panel exposes the protected admin MFA policy control", async () => {
@@ -348,6 +482,47 @@ test("admin page header actions render as horizontal pills on desktop", async ()
   assert.equal(getDeclarationValue(actionRowBody, "width"), "100% !important");
   assert.equal(getDeclarationValue(actionButtonBody, "flex"), "0 0 auto");
   assert.equal(getDeclarationValue(actionButtonBody, "border-radius"), "999px !important");
+});
+
+test("admin headers identify the signed-in account", async () => {
+  const app = await loadClientApp();
+  const css = await loadStylesheet();
+  const finalGridLayerStart = css.indexOf("/* Final grid row compaction");
+  const finalGridMobileStart = css.indexOf("@media (max-width: 720px)", finalGridLayerStart);
+  const desktopCss = css.slice(finalGridLayerStart, finalGridMobileStart);
+  const start = app.indexOf("function formatAdminIdentity(user = {})");
+  const end = app.indexOf("\n}\n\nfunction renderAdminSessionIdentity", start);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const functionSource = app.slice(start, end + 2);
+  const formatAdminIdentity = Function(`${functionSource}; return formatAdminIdentity;`)();
+  const identityBody = getLastSelectorBody(
+    desktopCss,
+    ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .admin-session-pill"
+  );
+  const identityRowBody = getLastSelectorBody(
+    desktopCss,
+    ".page-shell:is(.hr-shell, .webmaster-shell, .it-shell) .admin-session-row"
+  );
+
+  assert.equal(
+    formatAdminIdentity({ displayName: "Alex Rivera", username: "alex.rivera" }),
+    "Alex Rivera (alex.rivera)"
+  );
+  assert.equal(formatAdminIdentity({ username: "ops.admin" }), "ops.admin");
+  assert.equal(formatAdminIdentity({ displayName: "Ops", username: "@ops" }), "Ops (@ops)");
+  assert.equal(formatAdminIdentity({}), "");
+  assert.match(app, /renderAdminSessionIdentity\("hr"\)/);
+  assert.match(app, /renderAdminSessionIdentity\("webmaster"\)/);
+  assert.match(app, /renderAdminSessionIdentity\("it"\)/);
+  assert.equal(getDeclarationValue(identityBody, "min-width"), "0");
+  assert.equal(getDeclarationValue(identityBody, "max-width"), "100%");
+  assert.equal(getDeclarationValue(identityBody, "overflow-wrap"), "anywhere");
+  assert.equal(getDeclarationValue(identityRowBody, "display"), "flex");
+  assert.equal(getDeclarationValue(identityRowBody, "flex"), "1 1 100%");
+  assert.equal(getDeclarationValue(identityRowBody, "justify-content"), "center");
 });
 
 test("admin page headers keep logo text under the logo mark", async () => {
@@ -1365,13 +1540,23 @@ test("client app keeps employee weather and alert setup surfaces wired", async (
   assert.match(app, /data-weather-form/);
 });
 
+test("HR employee directory hides the no-match state while results remain visible", async () => {
+  const css = await loadStylesheet();
+  const hiddenEmptyStateBody = getLastSelectorBody(
+    css,
+    ".page-shell.hr-shell.hr-shell-users .employee-directory-empty[hidden]"
+  );
+
+  assert.equal(getDeclarationValue(hiddenEmptyStateBody, "display"), "none !important");
+});
+
 test("HR and IT account directories expose confirmed destructive deletion controls", async () => {
   const [app, css] = await Promise.all([
     loadClientApp(),
     loadStylesheet()
   ]);
   const employeeRenderer = app.match(
-    /function renderEmployeeDirectoryRow\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
+    /function renderEmployeeDirectoryCard\(employee\) \{[\s\S]*?\n\}\n\nfunction adminRoleLabel/
   )?.[0] || "";
   const adminRenderer = app.match(
     /function renderAdminDirectoryRow\(adminUser, scope = "hr"\) \{[\s\S]*?\n\}\n\nfunction renderAdminDirectoryTable/
@@ -1421,4 +1606,38 @@ test("HR and IT account directories expose confirmed destructive deletion contro
   assert.equal(getDeclarationValue(dangerButtonBody, "border-color"), "var(--tone-danger-line) !important");
   assert.equal(getDeclarationValue(adminDeleteFormBody, "padding-right"), "8px");
   assert.equal(getDeclarationValue(adminDeleteButtonBody, "width"), "100%");
+});
+
+test("employee password settings use the shared responsive form contract", async () => {
+  const [app, css] = await Promise.all([
+    loadClientApp(),
+    loadStylesheet()
+  ]);
+  const cardBody = getLastSelectorBody(css, ".employee-password-card");
+  const cardContentBody = getLastSelectorBody(css, ".employee-password-card-body");
+  const toggleBody = getLastSelectorBody(css, ".employee-password-card .settings-collapse-toggle");
+  const noticeBody = getLastSelectorBody(css, ".employee-password-notice");
+
+  assert.match(app, /function renderEmployeePasswordPanel\(\)/);
+  assert.match(app, /data-employee-password-form/);
+  assert.match(app, /name="currentPassword" type="password" minlength="10" required autocomplete="current-password"/);
+  assert.match(app, /name="password" type="password" minlength="10" required autocomplete="new-password"/);
+  assert.match(app, /name="confirmPassword" type="password" minlength="10" required autocomplete="new-password"/);
+  assert.match(app, /Change the temporary password assigned to this account\./);
+  assert.match(app, /Password changed\. Other devices were signed out\./);
+  assert.match(app, /renderEmployeePasswordPanel\(\)[\s\S]*?employee-signout-floor/);
+  assert.match(app, /event\.target\.matches\("\[data-employee-password-form\]"\)/);
+
+  assert.equal(getDeclarationValue(cardBody, "width"), "100%");
+  assert.equal(getDeclarationValue(cardBody, "max-width"), "720px");
+  assert.equal(getDeclarationValue(cardBody, "padding"), "0");
+  assert.equal(getDeclarationValue(cardBody, "overflow"), "hidden");
+  assert.equal(getDeclarationValue(cardContentBody, "display"), "grid");
+  assert.equal(getDeclarationValue(toggleBody, "width"), "100%");
+  assert.equal(getDeclarationValue(noticeBody, "min-height"), "0");
+  assert.equal(getDeclarationValue(noticeBody, "padding"), "12px");
+  assert.match(
+    css,
+    /@media \(max-width: 720px\) \{[\s\S]*?\.employee-password-card \.employee-password-grid[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/
+  );
 });

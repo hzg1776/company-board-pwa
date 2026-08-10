@@ -209,6 +209,12 @@ test("existing employee can be added to HR and use their username for HR login",
     assert.equal(Boolean(hrLogin.authorized), true);
 
     await store.resetEmployeePassword(employeeResult.employee.id, "EmployeePass2!");
+    const staleHrAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${hrLogin.sessionId}`
+      }
+    });
+    assert.equal(staleHrAccess.authorized, false);
     await assert.rejects(
       store.authenticateAdmin({
         username: "alex.rivera",
@@ -224,6 +230,35 @@ test("existing employee can be added to HR and use their username for HR login",
       userAgent: "test"
     });
     assert.equal(Boolean(updatedHrLogin.authorized), true);
+
+    const employeeLogin = await store.authenticateEmployee({
+      username: "alex.rivera",
+      password: "EmployeePass2!",
+      userAgent: "employee-self-change"
+    });
+    const selfChange = await store.changeEmployeePassword({
+      headers: {
+        cookie: `palziv_employee_auth=${employeeLogin.sessionId}`
+      }
+    }, {
+      currentPassword: "EmployeePass2!",
+      password: "EmployeePass3!",
+      userAgent: "employee-self-change",
+      clientIp: "198.51.100.22"
+    });
+    assert.equal(selfChange.hrReauthenticationRequired, true);
+    const staleUpdatedHrAccess = await store.checkHrAccess({
+      headers: {
+        cookie: `palziv_hr_auth=${updatedHrLogin.sessionId}`
+      }
+    });
+    assert.equal(staleUpdatedHrAccess.authorized, false);
+    const hrAfterSelfChange = await store.authenticateAdmin({
+      username: "alex.rivera",
+      password: "EmployeePass3!",
+      userAgent: "hr-after-self-change"
+    });
+    assert.equal(hrAfterSelfChange.authorized, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -286,10 +321,39 @@ test("employee password reset does not alter protected composite admin credentia
     assert.equal(unchangedAdmin?.passwordSalt, protectedAdmin.passwordSalt);
     assert.equal(unchangedAdmin?.passwordHash, protectedAdmin.passwordHash);
 
+    const employeeLogin = await store.authenticateEmployee({
+      username: "protected.ops",
+      password: "EmployeePass2!",
+      userAgent: "employee-self-change"
+    });
+    await store.changeEmployeePassword({
+      headers: {
+        cookie: `palziv_employee_auth=${employeeLogin.sessionId}`
+      }
+    }, {
+      currentPassword: "EmployeePass2!",
+      password: "EmployeePass3!",
+      userAgent: "employee-self-change"
+    });
+    const stateAfterSelfChange = await store.readSecurityState();
+    const protectedAfterSelfChange = stateAfterSelfChange.adminUsers.find(
+      (adminUser) => adminUser.id === protectedAdmin.id
+    );
+    assert.equal(protectedAfterSelfChange?.passwordSalt, protectedAdmin.passwordSalt);
+    assert.equal(protectedAfterSelfChange?.passwordHash, protectedAdmin.passwordHash);
+
     await assert.rejects(
       store.authenticateAdmin({
         username: "protected.ops",
         password: "EmployeePass2!",
+        userAgent: "test"
+      }),
+      /Invalid username or password\./
+    );
+    await assert.rejects(
+      store.authenticateAdmin({
+        username: "protected.ops",
+        password: "EmployeePass3!",
         userAgent: "test"
       }),
       /Invalid username or password\./
@@ -326,6 +390,197 @@ test("employee password reset clears the password reset required status", async 
 
     const employees = await store.listEmployees();
     assert.equal(Boolean(employees[0]?.passwordResetRequired), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee password change preserves only the active employee session", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-self-password-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      passwordResetRequired: true
+    });
+    await store.createEmployeeAccount({
+      name: "John Smith",
+      username: "john.smith",
+      password: "EmployeePass3!"
+    });
+
+    const activeLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "active"
+    });
+    const otherLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!",
+      userAgent: "other"
+    });
+    const unrelatedLogin = await store.authenticateEmployee({
+      username: "john.smith",
+      password: "EmployeePass3!",
+      userAgent: "unrelated"
+    });
+
+    const changed = await store.changeEmployeePassword({
+      headers: {
+        cookie: `palziv_employee_auth=${activeLogin.sessionId}`
+      }
+    }, {
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!",
+      userAgent: "active",
+      clientIp: "198.51.100.20"
+    });
+
+    assert.equal(changed.authorized, true);
+    assert.equal(changed.employee.username, "maria.lopez");
+    assert.equal(changed.employee.passwordResetRequired, false);
+    assert.equal(changed.hrReauthenticationRequired, false);
+
+    const activeAccess = await store.checkEmployeeAccess({
+      headers: { cookie: `palziv_employee_auth=${activeLogin.sessionId}` }
+    });
+    const otherAccess = await store.checkEmployeeAccess({
+      headers: { cookie: `palziv_employee_auth=${otherLogin.sessionId}` }
+    });
+    const unrelatedAccess = await store.checkEmployeeAccess({
+      headers: { cookie: `palziv_employee_auth=${unrelatedLogin.sessionId}` }
+    });
+    assert.equal(activeAccess.authorized, true);
+    assert.equal(otherAccess.authorized, false);
+    assert.equal(unrelatedAccess.authorized, true);
+
+    await assert.rejects(
+      store.authenticateEmployee({
+        username: "maria.lopez",
+        password: "EmployeePass1!"
+      }),
+      /Invalid username or password\./
+    );
+    const newLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass2!"
+    });
+    assert.equal(newLogin.authorized, true);
+
+    const state = await store.readSecurityState();
+    assert.equal(state.securityEvents.some((event) => (
+      event.type === "employee_password_changed" &&
+      event.accountKey === "maria.lopez" &&
+      event.outcome === "success"
+    )), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee password change rejects an incorrect current password", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-self-password-current-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const login = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+
+    await assert.rejects(
+      store.changeEmployeePassword({
+        headers: { cookie: `palziv_employee_auth=${login.sessionId}` }
+      }, {
+        currentPassword: "WrongPassword1!",
+        password: "EmployeePass2!",
+        clientIp: "198.51.100.21"
+      }),
+      /Current password is incorrect\./
+    );
+
+    const originalLogin = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    assert.equal(originalLogin.authorized, true);
+    const state = await store.readSecurityState();
+    assert.equal(state.securityEvents.some((event) => (
+      event.type === "employee_password_change_failed" &&
+      event.accountKey === "maria.lopez" &&
+      event.outcome === "failure" &&
+      event.detail === "invalid-current-password"
+    )), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("employee password change enforces local password policy", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-security-employee-self-password-policy-"));
+  const dataFile = path.join(tempDir, "security.json");
+
+  try {
+    const store = createSecurityStore({ dataFile });
+    await store.init();
+    const created = await store.createEmployeeAccount({
+      name: "Maria Lopez",
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const login = await store.authenticateEmployee({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    });
+    const req = {
+      headers: { cookie: `palziv_employee_auth=${login.sessionId}` }
+    };
+
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "",
+        password: "EmployeePass2!"
+      }),
+      /Current password is required\./
+    );
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "EmployeePass1!",
+        password: "short"
+      }),
+      /Password must be at least 10 characters\./
+    );
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "EmployeePass1!",
+        password: "EmployeePass1!"
+      }),
+      /Choose a new password\./
+    );
+
+    await store.updateData((data) => {
+      const employee = data.employees.find((entry) => entry.id === created.employee.id);
+      employee.identityProvider = "saml";
+    });
+    await assert.rejects(
+      store.changeEmployeePassword(req, {
+        currentPassword: "EmployeePass1!",
+        password: "EmployeePass2!"
+      }),
+      /This password is externally managed\./
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1679,4 +1934,297 @@ test("HR and IT admin deletion enforce role boundaries and preserve same-usernam
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("security state normalizes message groups and exposes deduplicated employee group ids", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const createdEmployee = await store.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+
+  await store.updateData((data) => {
+    data.messageGroups = [
+      {
+        id: "operations",
+        name: "  Operations  ",
+        active: false,
+        createdAt: "2026-08-01T10:00:00.000Z",
+        updatedAt: "2026-08-02T10:00:00.000Z",
+        deactivatedAt: "2026-08-02T10:00:00.000Z"
+      },
+      {
+        id: "dispatch",
+        name: "Dispatch"
+      }
+    ];
+    const employee = data.employees.find((entry) => entry.id === createdEmployee.employee.id);
+    employee.groupIds = ["operations", "operations", "", "dispatch"];
+  });
+
+  const state = await store.readSecurityState();
+  assert.deepEqual(state.messageGroups[0], {
+    id: "operations",
+    name: "Operations",
+    active: false,
+    createdAt: "2026-08-01T10:00:00.000Z",
+    updatedAt: "2026-08-02T10:00:00.000Z",
+    deactivatedAt: "2026-08-02T10:00:00.000Z"
+  });
+  assert.equal(state.messageGroups[1].id, "dispatch");
+  assert.equal(state.messageGroups[1].active, true);
+  assert.equal(Boolean(state.messageGroups[1].createdAt), true);
+  assert.equal(state.messageGroups[1].deactivatedAt, "");
+  assert.deepEqual(state.employees[0].groupIds, ["operations", "dispatch"]);
+
+  const listedEmployees = await store.listEmployees();
+  assert.deepEqual(listedEmployees[0].groupIds, ["operations", "dispatch"]);
+
+  const login = await store.authenticateEmployee({
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    userAgent: "test"
+  });
+  assert.deepEqual(login.employee.groupIds, ["operations", "dispatch"]);
+
+  const access = await store.checkEmployeeAccess({
+    headers: {
+      cookie: `palziv_employee_auth=${login.sessionId}`
+    }
+  });
+  assert.deepEqual(access.employee.groupIds, ["operations", "dispatch"]);
+});
+
+test("message group creation rejects blank and duplicate names case-insensitively", async () => {
+  const store = createSecurityStore();
+  await store.init();
+
+  await assert.rejects(
+    store.createMessageGroup({ name: "   " }),
+    /Message group name is required\./
+  );
+
+  const created = await store.createMessageGroup({ name: "  Operations  " });
+  assert.equal(Boolean(created.group.id), true);
+  assert.equal(created.group.name, "Operations");
+  assert.equal(created.group.active, true);
+  assert.equal(Boolean(created.group.createdAt), true);
+  assert.equal(Boolean(created.group.updatedAt), true);
+  assert.equal(created.group.deactivatedAt, "");
+
+  await assert.rejects(
+    store.createMessageGroup({ name: "operations" }),
+    /A message group with that name already exists\./
+  );
+
+  const groups = await store.listMessageGroups();
+  assert.deepEqual(groups, [created.group]);
+});
+
+test("employee creation assigns active message groups atomically", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const operations = await store.createMessageGroup({ name: "Operations" });
+
+  const created = await store.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    groupIds: [operations.group.id, operations.group.id]
+  });
+  assert.deepEqual(created.employee.groupIds, [operations.group.id]);
+
+  await store.setMessageGroupActive(operations.group.id, false);
+  await assert.rejects(
+    store.createEmployeeAccount({
+      name: "John Smith",
+      username: "john.smith",
+      password: "EmployeePass2!",
+      groupIds: [operations.group.id]
+    }),
+    /Only active message groups can be assigned to a new employee\./
+  );
+  await assert.rejects(
+    store.createEmployeeAccount({
+      name: "Alex Rivera",
+      username: "alex.rivera",
+      password: "EmployeePass3!",
+      groupIds: ["missing-group"]
+    }),
+    /Message group not found: missing-group\./
+  );
+
+  assert.deepEqual(
+    (await store.listEmployees()).map((employee) => employee.username),
+    ["maria.lopez"]
+  );
+});
+
+test("message audience resolution validates groups and snapshots eligible active employees", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const operations = await store.createMessageGroup({ name: "Operations" });
+  const maria = await store.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    groupIds: [operations.group.id]
+  });
+  const john = await store.createEmployeeAccount({
+    name: "John Smith",
+    username: "john.smith",
+    password: "EmployeePass2!"
+  });
+
+  const targeted = await store.resolveMessageAudience([operations.group.id]);
+  assert.deepEqual(targeted.groups, [operations.group]);
+  assert.deepEqual(targeted.employeeIds, [maria.employee.id]);
+
+  await store.setEmployeeActive(john.employee.id, false);
+  const everyone = await store.resolveMessageAudience([]);
+  assert.deepEqual(everyone.groups, []);
+  assert.deepEqual(everyone.employeeIds, [maria.employee.id]);
+
+  await store.setMessageGroupActive(operations.group.id, false);
+  await assert.rejects(
+    store.resolveMessageAudience([operations.group.id]),
+    /One or more selected message groups are unavailable\./
+  );
+  await assert.rejects(
+    store.resolveMessageAudience(["missing-group"]),
+    /One or more selected message groups are unavailable\./
+  );
+});
+
+test("renaming a message group preserves its permanent identity and unique name", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const operations = await store.createMessageGroup({ name: "Operations" });
+  await store.createMessageGroup({ name: "Dispatch" });
+
+  const renamed = await store.renameMessageGroup(operations.group.id, " Field Operations ");
+  assert.equal(renamed.group.id, operations.group.id);
+  assert.equal(renamed.group.createdAt, operations.group.createdAt);
+  assert.equal(renamed.group.name, "Field Operations");
+
+  await assert.rejects(
+    store.renameMessageGroup(operations.group.id, "DISPATCH"),
+    /A message group with that name already exists\./
+  );
+  await assert.rejects(
+    store.renameMessageGroup(operations.group.id, "  "),
+    /Message group name is required\./
+  );
+  await assert.rejects(
+    store.renameMessageGroup("missing-group", "Missing"),
+    /Message group not found\./
+  );
+});
+
+test("deactivating a message group records lifecycle state without removing memberships", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const employee = await store.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  const createdGroup = await store.createMessageGroup({ name: "Operations" });
+  await store.setEmployeeGroups(employee.employee.id, [createdGroup.group.id]);
+
+  const deactivated = await store.setMessageGroupActive(createdGroup.group.id, false);
+  assert.equal(deactivated.group.id, createdGroup.group.id);
+  assert.equal(deactivated.group.createdAt, createdGroup.group.createdAt);
+  assert.equal(deactivated.group.active, false);
+  assert.equal(Boolean(deactivated.group.deactivatedAt), true);
+  assert.deepEqual((await store.listEmployees())[0].groupIds, [createdGroup.group.id]);
+
+  const reactivated = await store.setMessageGroupActive(createdGroup.group.id, true);
+  assert.equal(reactivated.group.id, createdGroup.group.id);
+  assert.equal(reactivated.group.active, true);
+  assert.equal(reactivated.group.deactivatedAt, "");
+
+  await assert.rejects(
+    store.setMessageGroupActive("missing-group", false),
+    /Message group not found\./
+  );
+});
+
+test("employee group assignment deduplicates ids and rejects groups unavailable for new membership", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const employee = await store.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  const operations = await store.createMessageGroup({ name: "Operations" });
+  const dispatch = await store.createMessageGroup({ name: "Dispatch" });
+
+  const assigned = await store.setEmployeeGroups(employee.employee.id, [
+    operations.group.id,
+    dispatch.group.id,
+    operations.group.id
+  ]);
+  assert.deepEqual(assigned.employee.groupIds, [operations.group.id, dispatch.group.id]);
+
+  await store.setMessageGroupActive(dispatch.group.id, false);
+  const preserved = await store.setEmployeeGroups(employee.employee.id, [
+    dispatch.group.id,
+    dispatch.group.id,
+    operations.group.id
+  ]);
+  assert.deepEqual(preserved.employee.groupIds, [dispatch.group.id, operations.group.id]);
+
+  await store.setEmployeeGroups(employee.employee.id, [operations.group.id]);
+  await assert.rejects(
+    store.setEmployeeGroups(employee.employee.id, [operations.group.id, dispatch.group.id]),
+    /Only active message groups can be newly assigned\./
+  );
+  await assert.rejects(
+    store.setEmployeeGroups(employee.employee.id, [operations.group.id, "missing-group"]),
+    /Message group not found: missing-group\./
+  );
+  await assert.rejects(
+    store.setEmployeeGroups("missing-employee", [operations.group.id]),
+    /Employee not found\./
+  );
+
+  const unchanged = (await store.listEmployees()).find((entry) => entry.id === employee.employee.id);
+  assert.deepEqual(unchanged.groupIds, [operations.group.id]);
+});
+
+test("message group mutations append concise HR security events", async () => {
+  const store = createSecurityStore();
+  await store.init();
+  const employee = await store.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  const created = await store.createMessageGroup({ name: "Operations" });
+  await store.setEmployeeGroups(employee.employee.id, [created.group.id]);
+  await store.renameMessageGroup(created.group.id, "Field Operations");
+  await store.setMessageGroupActive(created.group.id, false);
+
+  const { events } = await store.listSecurityEvents();
+  const groupEvents = events.filter((event) => (
+    event.type.startsWith("message_group_") || event.type === "employee_message_groups_updated"
+  ));
+  assert.deepEqual(
+    groupEvents.map((event) => event.type),
+    [
+      "message_group_status_changed",
+      "message_group_renamed",
+      "employee_message_groups_updated",
+      "message_group_created"
+    ]
+  );
+  assert.equal(groupEvents.every((event) => event.actor === "hr" && event.outcome === "success"), true);
+  assert.equal(groupEvents[0].accountKey, created.group.id);
+  assert.equal(groupEvents[0].detail, "inactive");
+  assert.equal(groupEvents[2].employeeId, employee.employee.id);
+  assert.equal(groupEvents[2].detail, "1 group");
 });

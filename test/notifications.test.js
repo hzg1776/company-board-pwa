@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +10,37 @@ import {
   createNotificationHub,
   normalizeNotificationState
 } from "../notifications.js";
+
+const require = createRequire(import.meta.url);
+const webpush = require("web-push");
+
+function createEmployeeSubscription(endpointSuffix, employeeId, overrides = {}) {
+  return {
+    endpoint: `https://fcm.googleapis.com/fcm/send/${endpointSuffix}`,
+    expirationTime: null,
+    keys: {
+      p256dh: `public-key-${endpointSuffix}`,
+      auth: `auth-key-${endpointSuffix}`
+    },
+    deviceId: `device-${endpointSuffix}`,
+    employeeId,
+    employeeName: employeeId ? `Employee ${employeeId}` : "",
+    username: employeeId ? `user-${employeeId}` : "",
+    authorized: true,
+    browser: "Chrome",
+    platform: "Windows",
+    userAgent: "Mozilla/5.0",
+    ...overrides
+  };
+}
+
+async function seedSubscriptions(hub, subscriptions) {
+  const snapshot = await hub.readData();
+  await hub.writeData({
+    ...snapshot,
+    subscriptions
+  });
+}
 
 test("buildNotificationPayload prepares a safe notification payload", () => {
   const payload = buildNotificationPayload({
@@ -221,6 +253,145 @@ test("createNotificationHub rejects untrusted push endpoints", async () => {
       }),
       /Invalid push subscription\./
     );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("broadcast delivers only to authorized subscriptions for targeted employees", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-targeted-"));
+  const dataFile = path.join(tempDir, "push.json");
+  const hub = createNotificationHub({ dataFile });
+  const deliveredEndpoints = [];
+
+  t.mock.method(webpush, "sendNotification", async (subscription) => {
+    deliveredEndpoints.push(subscription.endpoint);
+  });
+
+  try {
+    await hub.init();
+    await seedSubscriptions(hub, [
+      createEmployeeSubscription("alpha-laptop", "employee-alpha"),
+      createEmployeeSubscription("alpha-phone", "employee-alpha"),
+      createEmployeeSubscription("beta-laptop", "employee-beta"),
+      createEmployeeSubscription("alpha-disabled", "employee-alpha", { authorized: false }),
+      createEmployeeSubscription("anonymous-device", "")
+    ]);
+
+    const result = await hub.broadcast(
+      {
+        id: "targeted-alert",
+        title: "Targeted alert",
+        body: "Open the employee board for details."
+      },
+      { employeeIds: ["employee-alpha", "employee-alpha"] }
+    );
+
+    assert.deepEqual(deliveredEndpoints, [
+      "https://fcm.googleapis.com/fcm/send/alpha-laptop",
+      "https://fcm.googleapis.com/fcm/send/alpha-phone"
+    ]);
+    assert.deepEqual(result, {
+      total: 5,
+      authorized: 2,
+      delivered: 2,
+      failed: 0,
+      skipped: 3,
+      removed: 0
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("broadcast skips every subscription for an empty employee target list", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-no-targets-"));
+  const dataFile = path.join(tempDir, "push.json");
+  const hub = createNotificationHub({ dataFile });
+  const deliveredEndpoints = [];
+
+  t.mock.method(webpush, "sendNotification", async (subscription) => {
+    deliveredEndpoints.push(subscription.endpoint);
+  });
+
+  try {
+    await hub.init();
+    await seedSubscriptions(hub, [
+      createEmployeeSubscription("alpha-laptop", "employee-alpha"),
+      createEmployeeSubscription("beta-laptop", "employee-beta"),
+      createEmployeeSubscription("anonymous-device", "")
+    ]);
+
+    const result = await hub.broadcast(
+      {
+        id: "empty-target-alert",
+        title: "No-target alert",
+        body: "This alert should not be delivered."
+      },
+      { employeeIds: [] }
+    );
+
+    assert.deepEqual(deliveredEndpoints, []);
+    assert.deepEqual(result, {
+      total: 3,
+      authorized: 0,
+      delivered: 0,
+      failed: 0,
+      skipped: 3,
+      removed: 0
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("broadcast keeps all-authorized delivery when employee targets are omitted or null", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-push-broadcast-all-"));
+  const dataFile = path.join(tempDir, "push.json");
+  const hub = createNotificationHub({ dataFile });
+  const deliveredEndpoints = [];
+
+  t.mock.method(webpush, "sendNotification", async (subscription) => {
+    deliveredEndpoints.push(subscription.endpoint);
+  });
+
+  try {
+    await hub.init();
+    await seedSubscriptions(hub, [
+      createEmployeeSubscription("alpha-laptop", "employee-alpha"),
+      createEmployeeSubscription("beta-laptop", "employee-beta"),
+      createEmployeeSubscription("anonymous-device", "")
+    ]);
+
+    const omittedResult = await hub.broadcast({
+      id: "broadcast-all-omitted",
+      title: "All employees",
+      body: "This alert should reach every authorized subscription."
+    });
+    const nullResult = await hub.broadcast(
+      {
+        id: "broadcast-all-null",
+        title: "All employees",
+        body: "This alert should reach every authorized subscription."
+      },
+      { employeeIds: null }
+    );
+
+    assert.deepEqual(deliveredEndpoints, [
+      "https://fcm.googleapis.com/fcm/send/alpha-laptop",
+      "https://fcm.googleapis.com/fcm/send/beta-laptop",
+      "https://fcm.googleapis.com/fcm/send/alpha-laptop",
+      "https://fcm.googleapis.com/fcm/send/beta-laptop"
+    ]);
+    assert.deepEqual(omittedResult, {
+      total: 3,
+      authorized: 2,
+      delivered: 2,
+      failed: 0,
+      skipped: 1,
+      removed: 0
+    });
+    assert.deepEqual(nullResult, omittedResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

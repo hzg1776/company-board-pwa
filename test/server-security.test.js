@@ -528,6 +528,173 @@ test("server protects board reads and revokes disabled employees", async (t) => 
   assert.equal(removedPushRoute.status, 404);
 });
 
+test("signed-in employee can change only their own password", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-employee-self-password-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  const maria = await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!",
+    passwordResetRequired: true
+  });
+  await provisionStore.createEmployeeAccount({
+    name: "John Smith",
+    username: "john.smith",
+    password: "EmployeePass3!"
+  });
+  await writeFile(path.join(tempDir, "push.json"), `${JSON.stringify({
+    subscriptions: [
+      {
+        endpoint: "https://fcm.googleapis.com/fcm/send/maria-self-password",
+        expirationTime: null,
+        keys: {
+          p256dh: "sample-public-key",
+          auth: "sample-auth-key"
+        },
+        deviceId: "maria-phone",
+        employeeId: maria.employee.id,
+        employeeName: maria.employee.name,
+        username: maria.employee.username,
+        authorized: true
+      }
+    ]
+  }, null, 2)}\n`, "utf8");
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port);
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const login = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(login.status, 200);
+  const cookie = readSetCookie(login);
+
+  const anonymous = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(anonymous.status, 401);
+
+  const crossSite = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: "https://attacker.example",
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(crossSite.status, 403);
+
+  const wrongCurrent = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      currentPassword: "WrongPassword1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(wrongCurrent.status, 400);
+  assert.match((await wrongCurrent.json()).error, /Current password is incorrect\./);
+
+  const pushBefore = JSON.parse(await readFile(path.join(tempDir, "push.json"), "utf8"));
+  const changed = await fetch(`${server.baseUrl}/api/employee/password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl,
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      currentPassword: "EmployeePass1!",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(changed.status, 200);
+  const changedBody = await changed.json();
+  assert.equal(changedBody.authorized, true);
+  assert.equal(changedBody.employee.username, "maria.lopez");
+  assert.equal(changedBody.employee.passwordResetRequired, false);
+  assert.equal(changedBody.hrReauthenticationRequired, false);
+  assert.equal("password" in changedBody, false);
+  assert.equal("passwordHash" in changedBody.employee, false);
+  const pushAfter = JSON.parse(await readFile(path.join(tempDir, "push.json"), "utf8"));
+  assert.deepEqual(pushAfter, pushBefore);
+
+  const currentSession = await fetch(`${server.baseUrl}/api/employee/check`, {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(currentSession.status, 200);
+  assert.equal((await currentSession.json()).authorized, true);
+
+  const oldLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(oldLogin.status, 400);
+
+  const newLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(newLogin.status, 200);
+
+  const johnLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "john.smith",
+      password: "EmployeePass3!"
+    })
+  });
+  assert.equal(johnLogin.status, 200);
+});
+
 test("HR can unenroll all devices for one employee", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-unenroll-"));
   const securityFile = path.join(tempDir, "security.json");
@@ -954,6 +1121,258 @@ employees:
   assert.equal(employeesResponse.status, 200);
   const employeesBody = await employeesResponse.json();
   assert.deepEqual(employeesBody.employees, []);
+});
+
+test("HR manages messaging groups and employees only receive posts for their groups", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-message-groups-"));
+  const securityFile = path.join(tempDir, "security.json");
+  const provisionStore = createSecurityStore({ dataFile: securityFile });
+  await provisionStore.init();
+  await provisionStore.setupAdminAccess({
+    username: "hr.owner",
+    password: "ManagerSecret1!",
+    userAgent: "test"
+  });
+  const maria = await provisionStore.createEmployeeAccount({
+    name: "Maria Lopez",
+    username: "maria.lopez",
+    password: "EmployeePass1!"
+  });
+  const john = await provisionStore.createEmployeeAccount({
+    name: "John Smith",
+    username: "john.smith",
+    password: "EmployeePass2!"
+  });
+
+  const port = await findFreePort();
+  const server = await startServer(tempDir, port, {
+    ADMIN_MFA_ENABLED: "false"
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const hrLogin = await fetch(`${server.baseUrl}/api/hr/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "hr.owner",
+      password: "ManagerSecret1!"
+    })
+  });
+  assert.equal(hrLogin.status, 200);
+  const hrAccess = await hrLogin.json();
+  const hrCookie = readSetCookie(hrLogin);
+  const hrHeaders = {
+    "Content-Type": "application/json",
+    Origin: server.baseUrl,
+    Cookie: hrCookie,
+    "X-CSRF-Token": hrAccess.csrfToken
+  };
+
+  const createWarehouse = await fetch(`${server.baseUrl}/api/message-groups`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ name: "Warehouse" })
+  });
+  assert.equal(createWarehouse.status, 201);
+  const warehouse = (await createWarehouse.json()).group;
+
+  const createLeadership = await fetch(`${server.baseUrl}/api/message-groups`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ name: "Leadership" })
+  });
+  assert.equal(createLeadership.status, 201);
+  const leadership = (await createLeadership.json()).group;
+
+  const malformedGroupStatus = await fetch(`${server.baseUrl}/api/message-groups/${encodeURIComponent(leadership.id)}/status`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ active: "false" })
+  });
+  assert.equal(malformedGroupStatus.status, 400);
+
+  const renameWarehouse = await fetch(`${server.baseUrl}/api/message-groups/${encodeURIComponent(warehouse.id)}/name`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ name: "Distribution" })
+  });
+  assert.equal(renameWarehouse.status, 200);
+  assert.equal((await renameWarehouse.json()).group.name, "Distribution");
+
+  const assignMaria = await fetch(`${server.baseUrl}/api/employees/${encodeURIComponent(maria.employee.id)}/groups`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ groupIds: [warehouse.id, leadership.id] })
+  });
+  assert.equal(assignMaria.status, 200);
+  assert.deepEqual((await assignMaria.json()).employee.groupIds, [warehouse.id, leadership.id]);
+
+  const assignJohn = await fetch(`${server.baseUrl}/api/employees/${encodeURIComponent(john.employee.id)}/groups`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ groupIds: [leadership.id] })
+  });
+  assert.equal(assignJohn.status, 200);
+
+  const employeesResponse = await fetch(`${server.baseUrl}/api/employees`, {
+    headers: { Cookie: hrCookie }
+  });
+  assert.equal(employeesResponse.status, 200);
+  const employeeDirectory = await employeesResponse.json();
+  assert.deepEqual(
+    employeeDirectory.messageGroups.map((group) => group.name).sort(),
+    ["Distribution", "Leadership"]
+  );
+
+  const mariaLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "maria.lopez",
+      password: "EmployeePass1!"
+    })
+  });
+  assert.equal(mariaLogin.status, 200);
+  const mariaCookie = readSetCookie(mariaLogin);
+
+  const johnLogin = await fetch(`${server.baseUrl}/api/employee/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: server.baseUrl
+    },
+    body: JSON.stringify({
+      username: "john.smith",
+      password: "EmployeePass2!"
+    })
+  });
+  assert.equal(johnLogin.status, 200);
+  const johnCookie = readSetCookie(johnLogin);
+
+  const distributionPostResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({
+      title: "Distribution schedule",
+      body: "The distribution schedule changed.",
+      type: "Shift",
+      priority: "Important",
+      audienceMode: "groups",
+      audienceGroupIds: [warehouse.id],
+      alertRetention: "24h"
+    })
+  });
+  assert.equal(distributionPostResponse.status, 201);
+  const distributionPost = (await distributionPostResponse.json()).post;
+  assert.deepEqual(distributionPost.audienceGroupIds, [warehouse.id]);
+  assert.equal(distributionPost.audience, "Distribution");
+
+  const leadershipPostResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({
+      title: "Leadership meeting",
+      body: "Leadership meets at 3:00 PM.",
+      type: "News",
+      priority: "Normal",
+      audienceMode: "groups",
+      audienceGroupIds: [leadership.id],
+      alertRetention: "24h"
+    })
+  });
+  assert.equal(leadershipPostResponse.status, 201);
+
+  const allPostResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({
+      title: "Company update",
+      body: "This update is for everyone.",
+      type: "News",
+      priority: "Normal",
+      audienceMode: "all",
+      audienceGroupIds: [],
+      alertRetention: "24h"
+    })
+  });
+  assert.equal(allPostResponse.status, 201);
+
+  const invalidAudienceMode = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({
+      title: "Invalid audience mode",
+      body: "This must not fail open to all employees.",
+      audienceMode: "group",
+      audienceGroupIds: [warehouse.id]
+    })
+  });
+  assert.equal(invalidAudienceMode.status, 400);
+
+  const contradictoryAllAudience = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({
+      title: "Contradictory audience",
+      body: "All employees cannot also carry selected group ids.",
+      audienceMode: "all",
+      audienceGroupIds: [warehouse.id]
+    })
+  });
+  assert.equal(contradictoryAllAudience.status, 400);
+
+  const mariaPostsResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    headers: { Cookie: mariaCookie }
+  });
+  assert.equal(mariaPostsResponse.status, 200);
+  const mariaPosts = (await mariaPostsResponse.json()).posts;
+  assert.deepEqual(
+    mariaPosts
+      .map((post) => post.title)
+      .filter((title) => ["Company update", "Leadership meeting", "Distribution schedule"].includes(title)),
+    ["Company update", "Leadership meeting", "Distribution schedule"]
+  );
+
+  const johnPostsResponse = await fetch(`${server.baseUrl}/api/posts`, {
+    headers: { Cookie: johnCookie }
+  });
+  assert.equal(johnPostsResponse.status, 200);
+  const johnPosts = (await johnPostsResponse.json()).posts;
+  const johnTitles = johnPosts.map((post) => post.title);
+  assert.equal(johnTitles.includes("Company update"), true);
+  assert.equal(johnTitles.includes("Leadership meeting"), true);
+  assert.equal(johnTitles.includes("Distribution schedule"), false);
+
+  const deactivateWarehouse = await fetch(`${server.baseUrl}/api/message-groups/${encodeURIComponent(warehouse.id)}/status`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({ active: false })
+  });
+  assert.equal(deactivateWarehouse.status, 200);
+
+  const inactiveGroupPost = await fetch(`${server.baseUrl}/api/posts`, {
+    method: "POST",
+    headers: hrHeaders,
+    body: JSON.stringify({
+      title: "Should not publish",
+      body: "Inactive groups cannot receive new messages.",
+      type: "News",
+      priority: "Normal",
+      audienceMode: "groups",
+      audienceGroupIds: [warehouse.id]
+    })
+  });
+  assert.equal(inactiveGroupPost.status, 400);
 });
 
 test("server scopes the HR admin API to HR-only admin accounts", async (t) => {
@@ -2391,7 +2810,7 @@ test("client app does not ship static explanatory copy across the live screens",
   }
 });
 
-test("manifest shortcuts do not expose privileged routes directly", async (t) => {
+test("role-specific install manifests keep employee and HR launch targets separate", async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "palziv-server-manifest-gateway-"));
   const port = await findFreePort();
   const server = await startServer(tempDir, port);
@@ -2401,20 +2820,50 @@ test("manifest shortcuts do not expose privileged routes directly", async (t) =>
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  const response = await fetch(`${server.baseUrl}/manifest.webmanifest`);
-  assert.equal(response.status, 200);
+  const [employeePageResponse, hrPageResponse] = await Promise.all([
+    fetch(`${server.baseUrl}/palzivalerts/employee`),
+    fetch(`${server.baseUrl}/palzivalerts/hr`)
+  ]);
+  assert.equal(employeePageResponse.status, 200);
+  assert.equal(hrPageResponse.status, 200);
 
-  const manifest = await response.json();
-  const shortcutUrls = Array.isArray(manifest.shortcuts)
-    ? manifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
+  const [employeeHtml, hrHtml] = await Promise.all([
+    employeePageResponse.text(),
+    hrPageResponse.text()
+  ]);
+  assert.match(employeeHtml, /<link rel="manifest" href="\/manifest\.webmanifest">/);
+  assert.doesNotMatch(employeeHtml, /manifest-hr\.webmanifest/);
+  assert.match(hrHtml, /<link rel="manifest" href="\/manifest-hr\.webmanifest">/);
+  assert.match(hrHtml, /<meta name="apple-mobile-web-app-title" content="Alert Center HR">/);
+
+  const [employeeManifestResponse, hrManifestResponse] = await Promise.all([
+    fetch(`${server.baseUrl}/manifest.webmanifest`),
+    fetch(`${server.baseUrl}/manifest-hr.webmanifest`)
+  ]);
+  assert.equal(employeeManifestResponse.status, 200);
+  assert.equal(hrManifestResponse.status, 200);
+
+  const [employeeManifest, hrManifest] = await Promise.all([
+    employeeManifestResponse.json(),
+    hrManifestResponse.json()
+  ]);
+  const employeeShortcutUrls = Array.isArray(employeeManifest.shortcuts)
+    ? employeeManifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
+    : [];
+  const hrShortcutUrls = Array.isArray(hrManifest.shortcuts)
+    ? hrManifest.shortcuts.map((shortcut) => String(shortcut?.url || ""))
     : [];
 
-  assert.equal(manifest.start_url, "/palzivalerts/employee");
-  assert.equal(shortcutUrls.includes("/palzivalerts"), false);
-  assert.ok(shortcutUrls.includes("/palzivalerts/employee"));
-  assert.equal(shortcutUrls.includes("/palzivalerts/hr"), false);
-  assert.equal(shortcutUrls.includes("/palzivalerts/webmaster"), false);
-  assert.equal(shortcutUrls.includes("/palzivalerts/it"), false);
+  assert.equal(employeeManifest.id, "/palzivalerts/employee");
+  assert.equal(employeeManifest.start_url, "/palzivalerts/employee");
+  assert.equal(employeeManifest.scope, "/palzivalerts/");
+  assert.deepEqual(employeeShortcutUrls, ["/palzivalerts/employee"]);
+
+  assert.equal(hrManifest.id, "/palzivalerts/hr");
+  assert.equal(hrManifest.start_url, "/palzivalerts/hr");
+  assert.equal(hrManifest.scope, "/palzivalerts/");
+  assert.equal(hrManifest.short_name, "Alert Center HR");
+  assert.deepEqual(hrShortcutUrls, ["/palzivalerts/hr"]);
 });
 
 test("legacy owner cookie alias no longer authorizes IT access", async (t) => {
@@ -2803,6 +3252,8 @@ test("service worker ships versioned shell assets for client cache busting", asy
 
   assert.match(text, /\/device-setup\.js\?v=/i);
   assert.match(text, /\/assets\/palziv-wordmark\.png\?v=/i);
+  assert.match(text, /["']\/palzivalerts\/employee["']/i);
+  assert.match(text, /["']\/palzivalerts\/hr["']/i);
 });
 
 test("app module versions the device setup dependency with the current asset version", async (t) => {
@@ -2869,6 +3320,7 @@ test("device setup changes rotate the generated asset version", async (t) => {
   await mkdir(publicDir, { recursive: true });
   await writeFile(path.join(publicDir, "index.html"), '<script type="module" src="/app.js?v=__ASSET_VERSION__"></script>\n', "utf8");
   await writeFile(path.join(publicDir, "app.js"), 'import "./device-setup.js?v=__ASSET_VERSION__";\n', "utf8");
+  await writeFile(path.join(publicDir, "app-routing.js"), "export const version = 1;\n", "utf8");
   await writeFile(path.join(publicDir, "styles.css"), "body {}\n", "utf8");
   await writeFile(path.join(publicDir, "sw.js"), "self.__version = '__ASSET_VERSION__';\n", "utf8");
   await writeFile(path.join(publicDir, "sw-routing.js"), "self.__routing = true;\n", "utf8");

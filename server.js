@@ -35,6 +35,8 @@ const APP_SCRIPT_TEMPLATE_PATH = path.join(PUBLIC_DIR, "app.js");
 const SERVICE_WORKER_TEMPLATE_PATH = path.join(PUBLIC_DIR, "sw.js");
 const SERVICE_WORKER_ROUTING_PATH = path.join(PUBLIC_DIR, "sw-routing.js");
 const APP_BASE_PATH = "/palzivalerts";
+const EMPLOYEE_MANIFEST_PATH = "/manifest.webmanifest";
+const HR_MANIFEST_PATH = "/manifest-hr.webmanifest";
 const RUNTIME_DATA_DIR = process.env.RUNTIME_DATA_DIR ? path.resolve(process.env.RUNTIME_DATA_DIR) : "";
 const CONFIGURED_ASSET_VERSION = String(process.env.ASSET_VERSION || "")
   .replace(/[^a-zA-Z0-9._-]/g, "")
@@ -122,6 +124,7 @@ function parseBoolean(value) {
 const siteConfig = readSiteConfig();
 const ASSET_VERSION_PATHS = [
   APP_SCRIPT_TEMPLATE_PATH,
+  path.join(PUBLIC_DIR, "app-routing.js"),
   path.join(PUBLIC_DIR, "device-setup.js"),
   path.join(PUBLIC_DIR, "styles.css"),
   INDEX_HTML_TEMPLATE_PATH,
@@ -736,13 +739,30 @@ async function resolveAssetVersion() {
   }
 }
 
-async function renderIndexHtml() {
+function installProfileForPath(pathname = "") {
+  if (pathname === appPath("hr")) {
+    return {
+      manifestUrl: HR_MANIFEST_PATH,
+      mobileAppTitle: `${siteConfig.shortName} HR`
+    };
+  }
+
+  return {
+    manifestUrl: EMPLOYEE_MANIFEST_PATH,
+    mobileAppTitle: siteConfig.shortName
+  };
+}
+
+async function renderIndexHtml(pathname = "") {
   const assetVersion = await resolveAssetVersion();
   const indexHtmlTemplate = await readFile(INDEX_HTML_TEMPLATE_PATH, "utf8");
+  const installProfile = installProfileForPath(pathname);
 
   return indexHtmlTemplate
     .replaceAll("__SITE_NAME__", escapeHtml(displayBrandName(siteConfig)))
     .replaceAll("__SITE_SHORT_NAME__", escapeHtml(siteConfig.shortName))
+    .replaceAll("__MOBILE_APP_TITLE__", escapeHtml(installProfile.mobileAppTitle))
+    .replaceAll("__MANIFEST_URL__", escapeHtml(installProfile.manifestUrl))
     .replaceAll("__SITE_SUBTITLE__", escapeHtml(siteConfig.subtitle))
     .replaceAll("__SITE_DESCRIPTION__", escapeHtml(siteConfig.description))
     .replaceAll("__SITE_THEME_COLOR__", escapeHtml(siteConfig.themeColor))
@@ -801,13 +821,13 @@ async function buildHealthDiagnostics() {
   };
 }
 
-async function sendIndexHtml(res) {
+async function sendIndexHtml(res, pathname = "") {
   res.writeHead(200, {
     ...SECURITY_HEADERS,
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store"
   });
-  res.end(await renderIndexHtml());
+  res.end(await renderIndexHtml(pathname));
 }
 
 async function sendServiceWorker(res) {
@@ -837,19 +857,28 @@ async function sendAppScript(res) {
   res.end(await renderAppScript());
 }
 
-function sendManifest(res) {
+function sendManifest(res, profile = "employee") {
   const icon = {
-      src: "/assets/palziv-logo-transparent.png?v=20260617c",
+    src: "/assets/palziv-logo-transparent.png?v=20260617c",
     sizes: "1054x1055",
     type: "image/png",
     purpose: "any maskable"
   };
+  const isHr = profile === "hr";
+  const route = isHr ? "hr" : "employee";
+  const routeUrl = appPath(route);
+  const routeName = isHr ? "HR Portal" : "Employee Portal";
+  const routeShortName = isHr ? "HR" : "Employee";
+  const routeDescription = isHr
+    ? "Open the HR administration portal"
+    : "Open the employee login and feed";
 
   const manifest = {
-    name: displayBrandName(siteConfig),
-    short_name: siteConfig.shortName,
-    description: siteConfig.description,
-    start_url: appPath("employee"),
+    id: routeUrl,
+    name: isHr ? `${displayBrandName(siteConfig)} HR` : displayBrandName(siteConfig),
+    short_name: isHr ? `${siteConfig.shortName} HR` : siteConfig.shortName,
+    description: isHr ? `${displayBrandName(siteConfig)} HR administration portal.` : siteConfig.description,
+    start_url: routeUrl,
     scope: `${APP_BASE_PATH}/`,
     display: "standalone",
     background_color: siteConfig.backgroundColor,
@@ -857,10 +886,10 @@ function sendManifest(res) {
     orientation: "portrait-primary",
     shortcuts: [
       {
-        name: "Employee Portal",
-        short_name: "Employee",
-        description: "Open the employee login and feed",
-        url: appPath("employee"),
+        name: routeName,
+        short_name: routeShortName,
+        description: routeDescription,
+        url: routeUrl,
         icons: [icon]
       }
     ],
@@ -1222,6 +1251,20 @@ async function requireBoardReadAccess(req, res) {
   return null;
 }
 
+async function requireEmployeeMutationAccess(req, res) {
+  if (!requireSameOrigin(req, res)) {
+    return null;
+  }
+
+  const access = await securityStore.checkEmployeeAccess(req);
+  if (!access.authorized) {
+    sendError(res, 401, "Employee sign-in required.");
+    return null;
+  }
+
+  return access;
+}
+
 async function requireHrMutationAccess(req, res) {
   if (!requireSameOrigin(req, res)) {
     return null;
@@ -1453,6 +1496,12 @@ function parseBooleanish(value) {
   return value === true || value === "true" || value === "on" || value === 1 || value === "1";
 }
 
+function cleanTextList(values, maxLength = 80) {
+  if (!Array.isArray(values)) return [];
+
+  return [...new Set(values.map((value) => cleanText(value, maxLength)).filter(Boolean))];
+}
+
 function isValidExpiry(value) {
   if (value === "") return true;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -1479,12 +1528,40 @@ async function readJsonBody(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function normalizePost(input) {
+function normalizePostAudience(input = {}) {
+  const audienceMode = Object.prototype.hasOwnProperty.call(input, "audienceMode")
+    ? cleanText(input.audienceMode, 20).toLowerCase()
+    : "all";
+
+  if (audienceMode !== "all" && audienceMode !== "groups") {
+    throw new Error("Audience mode must be all or groups.");
+  }
+
+  if (input.audienceGroupIds !== undefined && !Array.isArray(input.audienceGroupIds)) {
+    throw new Error("Audience group ids must be an array.");
+  }
+
+  const audienceGroupIds = cleanTextList(input.audienceGroupIds);
+  if (audienceMode === "groups" && !audienceGroupIds.length) {
+    throw new Error("Select at least one active message group.");
+  }
+  if (audienceMode === "all" && audienceGroupIds.length) {
+    throw new Error("All-employee posts cannot include message group ids.");
+  }
+
+  return { audienceMode, audienceGroupIds };
+}
+
+function normalizePost(input, audienceResolution = {}) {
   const type = allowedTypes.has(input.type) ? input.type : "News";
   const priority = allowedPriorities.has(input.priority) ? input.priority : "Normal";
   const title = cleanText(input.title, 90);
   const body = cleanLongText(input.body, 700);
-  const audience = cleanText(input.audience || "All employees", 80);
+  const { audienceGroupIds } = normalizePostAudience(input);
+  const selectedGroups = Array.isArray(audienceResolution.groups) ? audienceResolution.groups : [];
+  const audience = audienceGroupIds.length
+    ? selectedGroups.map((group) => group.name).join(", ").slice(0, 80)
+    : "All employees";
   const expiresAt = cleanText(input.expiresAt, 10);
   const deliveryTarget = "both";
   const notifyEmployees = true;
@@ -1495,6 +1572,9 @@ function normalizePost(input) {
   if (!title) throw new Error("Title is required.");
   if (!body) throw new Error("Message is required.");
   if (!isValidExpiry(expiresAt)) throw new Error("Expiration date must use YYYY-MM-DD.");
+  if (selectedGroups.length !== audienceGroupIds.length) {
+    throw new Error("One or more selected message groups are unavailable.");
+  }
 
   return {
     id: crypto.randomUUID(),
@@ -1506,6 +1586,7 @@ function normalizePost(input) {
     title,
     body,
     audience,
+    audienceGroupIds,
     author: "HR",
     createdAt: nowIso(),
     expiresAt
@@ -1522,8 +1603,30 @@ function acknowledgementsForPost(data, postId) {
     .sort((a, b) => new Date(b.acknowledgedAt) - new Date(a.acknowledgedAt));
 }
 
-function postVisibleToEmployees(post = {}) {
-  return String(post.deliveryTarget || "feed") !== "alert";
+function postVisibleToEmployee(post = {}, employee = {}) {
+  if (String(post.deliveryTarget || "feed") === "alert") {
+    return false;
+  }
+
+  const targetGroupIds = cleanTextList(post.audienceGroupIds);
+  if (!targetGroupIds.length) {
+    return true;
+  }
+
+  const employeeGroupIds = new Set(cleanTextList(employee.groupIds));
+  return targetGroupIds.some((groupId) => employeeGroupIds.has(groupId));
+}
+
+function employeesForPost(post = {}, employees = []) {
+  const targetGroupIds = cleanTextList(post.audienceGroupIds);
+  const activeEmployees = employees.filter((employee) => employee.active !== false);
+
+  if (!targetGroupIds.length) {
+    return activeEmployees;
+  }
+
+  const targets = new Set(targetGroupIds);
+  return activeEmployees.filter((employee) => cleanTextList(employee.groupIds).some((groupId) => targets.has(groupId)));
 }
 
 function postRequiresAcknowledgement(post = {}) {
@@ -1541,7 +1644,7 @@ function postForAccess(post, { data, access, employees = [] } = {}) {
     };
   }
 
-  const activeEmployees = employees.filter((employee) => employee.active !== false);
+  const activeEmployees = employeesForPost(post, employees);
   const acknowledgedEmployeeIds = new Set(acknowledgements.map((entry) => entry.employeeId));
   const pendingAcknowledgements = activeEmployees
     .filter((employee) => !acknowledgedEmployeeIds.has(employee.id))
@@ -2460,6 +2563,20 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/employee/password") {
+      if (!(await requireEmployeeMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.changeEmployeePassword(req, {
+        currentPassword: body.currentPassword,
+        password: body.password,
+        userAgent: req.headers["user-agent"],
+        clientIp: requestClientIp(req)
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/employee/logout") {
       if (!requireSameOrigin(req, res)) return;
 
@@ -2635,12 +2752,47 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/message-groups") {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const body = await readJsonBody(req);
+      const result = await securityStore.createMessageGroup({ name: body.name });
+      sendJson(res, 201, result);
+      return;
+    }
+
+    const messageGroupNameMatch = url.pathname.match(/^\/api\/message-groups\/([^/]+)\/name$/);
+    if (req.method === "POST" && messageGroupNameMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const groupId = decodeURIComponent(messageGroupNameMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.renameMessageGroup(groupId, body.name);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    const messageGroupStatusMatch = url.pathname.match(/^\/api\/message-groups\/([^/]+)\/status$/);
+    if (req.method === "POST" && messageGroupStatusMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const groupId = decodeURIComponent(messageGroupStatusMatch[1]);
+      const body = await readJsonBody(req);
+      if (typeof body.active !== "boolean") {
+        throw new Error("Message group status must be a boolean.");
+      }
+      const result = await securityStore.setMessageGroupActive(groupId, body.active);
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/employees") {
       if (!(await requireHrAccess(req, res))) return;
 
-      const [employees, pushData] = await Promise.all([
+      const [employees, pushData, messageGroups] = await Promise.all([
         securityStore.listEmployees(),
-        notificationHub.readData()
+        notificationHub.readData(),
+        securityStore.listMessageGroups()
       ]);
       const devicesByEmployee = new Map();
 
@@ -2660,7 +2812,8 @@ async function handleApi(req, res, url) {
           ...employee,
           devices: devicesByEmployee.get(employee.id)?.devices || 0,
           authorizedDevices: devicesByEmployee.get(employee.id)?.authorizedDevices || 0
-        }))
+        })),
+        messageGroups
       });
       return;
     }
@@ -2724,6 +2877,17 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const employeeMessageGroupsMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/groups$/);
+    if (req.method === "POST" && employeeMessageGroupsMatch) {
+      if (!(await requireHrMutationAccess(req, res))) return;
+
+      const employeeId = decodeURIComponent(employeeMessageGroupsMatch[1]);
+      const body = await readJsonBody(req);
+      const result = await securityStore.setEmployeeGroups(employeeId, body.groupIds);
+      sendJson(res, 200, result);
+      return;
+    }
+
     const employeeSessionsMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/sessions\/revoke$/);
     if (req.method === "POST" && employeeSessionsMatch) {
       if (!(await requireHrMutationAccess(req, res))) return;
@@ -2774,7 +2938,7 @@ async function handleApi(req, res, url) {
         boardAccess.role === "employee" ? Promise.resolve([]) : securityStore.listEmployees()
       ]);
       const visiblePosts = boardAccess.role === "employee"
-        ? data.posts.filter((post) => postVisibleToEmployees(post))
+        ? data.posts.filter((post) => postVisibleToEmployee(post, boardAccess.employee))
         : data.posts;
       sendJson(res, 200, {
         posts: sortedPosts(visiblePosts).map((post) => postForAccess(post, {
@@ -2980,7 +3144,9 @@ async function handleApi(req, res, url) {
       if (!(await requireHrMutationAccess(req, res))) return;
 
       const body = await readJsonBody(req);
-      const post = normalizePost(body);
+      const audienceRequest = normalizePostAudience(body);
+      const audienceResolution = await securityStore.resolveMessageAudience(audienceRequest.audienceGroupIds);
+      const post = normalizePost(body, audienceResolution);
 
       await boardStore.updateData((data) => {
         data.posts.unshift(post);
@@ -2991,7 +3157,9 @@ async function handleApi(req, res, url) {
 
       if (post.notifyEmployees) {
         try {
-          const pushResult = await notificationHub.broadcast(post);
+          const pushResult = await notificationHub.broadcast(post, {
+            employeeIds: audienceResolution.employeeIds
+          });
 
           notification = {
             push: pushResult
@@ -3177,13 +3345,13 @@ const server = http.createServer(async (req, res) => {
     if (nextLocation && url.pathname !== nextLocation) {
       redirectTo(res, nextLocation);
     } else {
-      await sendIndexHtml(res);
+      await sendIndexHtml(res, url.pathname);
     }
     return;
   }
 
   if (req.method === "GET" && (url.pathname === appPath() || url.pathname === appPath("employee") || url.pathname === appPath("hr") || url.pathname === appPath("webmaster") || url.pathname === appPath("it"))) {
-    await sendIndexHtml(res);
+    await sendIndexHtml(res, url.pathname);
     return;
   }
 
@@ -3202,8 +3370,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/manifest.webmanifest") {
-    sendManifest(res);
+  if (req.method === "GET" && url.pathname === EMPLOYEE_MANIFEST_PATH) {
+    sendManifest(res, "employee");
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === HR_MANIFEST_PATH) {
+    sendManifest(res, "hr");
     return;
   }
 

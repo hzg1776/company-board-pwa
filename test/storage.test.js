@@ -59,6 +59,35 @@ test("normalizeDataShape repairs legacy board data", () => {
   assert.equal(normalized.settings, undefined);
 });
 
+test("normalizeDataShape preserves group targets and treats legacy audience labels as unrestricted", () => {
+  const normalized = normalizeDataShape({
+    posts: [
+      {
+        id: "targeted-post",
+        title: "Warehouse update",
+        body: "Only assigned employees should receive this.",
+        audience: "Warehouse",
+        audienceGroupIds: ["group-warehouse", "group-warehouse", "", "group-leadership"],
+        createdAt: "2026-08-06T12:00:00.000Z",
+        expiresAt: ""
+      },
+      {
+        id: "legacy-labeled-post",
+        title: "Legacy operations update",
+        body: "This label was not historically a delivery restriction.",
+        audience: "Operations",
+        createdAt: "2026-08-06T11:00:00.000Z",
+        expiresAt: ""
+      }
+    ],
+    weather: {},
+    acknowledgements: []
+  });
+
+  assert.deepEqual(normalized.posts[0].audienceGroupIds, ["group-warehouse", "group-leadership"]);
+  assert.deepEqual(normalized.posts[1].audienceGroupIds, []);
+});
+
 test("normalizeDataShape preserves valid acknowledgement records", () => {
   const normalized = normalizeDataShape({
     posts: [],
@@ -183,6 +212,40 @@ test("file-backed store seeds runtime data from a separate tracked seed file", a
     assert.deepEqual(seedAfter, trackedSeed);
     assert.equal(runtimeAfter.posts[0].title, "Runtime-only update");
     assert.equal(runtimeAfter.posts[1].title, "Tracked seed message");
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("file-backed store preserves malformed board data instead of replacing it with seed data", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-malformed-"));
+  const dataFile = path.join(tempDir, "board.json");
+  const malformedBoard = '{"posts":[\n';
+  const store = createBoardStore({ dataFile });
+
+  try {
+    await writeFile(dataFile, malformedBoard, "utf8");
+
+    await assert.rejects(store.init(), SyntaxError);
+    assert.equal(await readFile(dataFile, "utf8"), malformedBoard);
+  } finally {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("file-backed store rejects a non-object board without replacing it with seed data", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "company-board-store-invalid-shape-"));
+  const dataFile = path.join(tempDir, "board.json");
+  const invalidBoard = "null\n";
+  const store = createBoardStore({ dataFile });
+
+  try {
+    await writeFile(dataFile, invalidBoard, "utf8");
+
+    await assert.rejects(store.init(), TypeError);
+    assert.equal(await readFile(dataFile, "utf8"), invalidBoard);
   } finally {
     await store.close();
     await rm(tempDir, { recursive: true, force: true });

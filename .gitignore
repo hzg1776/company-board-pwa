@@ -18,3 +18,4 @@ data/security.json
 data/analytics.json
 data/*.tmp
 local-secrets/
+docs/manual-artifacts/screenshots/*-storage.json
