@@ -1,6 +1,54 @@
 # Communications and Alert Center
 
-An installable employee portal with a shared internal launcher at `/palzivalerts`, direct employee login at `/palzivalerts/employee`, HR publishing, systems operations, IT governance, weather, and push alerts.
+An installable employee communications portal that gives staff one place to read workplace updates and lets authorized administrators publish notices and manage access.
+
+**Project focus:** mobile access, role-based workflows, local file-backed storage, and operational documentation. Built with Node.js and browser JavaScript.
+
+## At a glance
+
+| Area | Implementation |
+| --- | --- |
+| Employee experience | Named accounts, an update feed, and home-screen installation |
+| Publishing | HR console for updates and employee account management |
+| Administration | Separate HR, Systems, and IT entry points |
+| Notifications | Push alerts for supported browsers and opted-in devices |
+| Weather | Open-Meteo integration |
+| Storage | Mutable JSON files separated from tracked seed content |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Employee["Employee portal"] --> Server["Node.js server and API"]
+  Admin["HR / Systems / IT consoles"] --> Server
+  Server --> Storage["Local runtime files"]
+  Server --> Weather["Open-Meteo"]
+  Server --> Push["Browser push services"]
+```
+
+## Start a development copy
+
+Requires **Node.js 22 or newer** and npm. From a fresh checkout:
+
+```powershell
+npm ci
+$env:PORT = "3116"
+npm start
+```
+
+Open the [employee portal](http://localhost:3116/palzivalerts/employee) or [internal launcher](http://localhost:3116/palzivalerts). Account setup and role instructions are linked in the [manual index](docs/MANUAL_INDEX.md). Use synthetic data for development.
+
+Run the repository's automated checks with `npm test`. This README update does not assert that those checks have been run against your environment.
+
+## Implementation boundaries
+
+File-backed persistence keeps the storage path simple but leaves backup, recovery, host availability, and capacity planning with the operator. Weather and push notifications depend on external services; push delivery also depends on browser support and device permission.
+
+The repository includes authentication and access-control code, but that alone does not establish a security certification or production-readiness assessment. Start with the [manual index](docs/MANUAL_INDEX.md) before using deployment or recovery instructions.
+
+## Detailed setup and operations
+
+The existing implementation notes and runbook links are retained below.
 
 ## What This Is
 
